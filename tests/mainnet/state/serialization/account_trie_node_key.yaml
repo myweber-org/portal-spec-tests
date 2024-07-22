@@ -1,0 +1,17 @@
+# Test data for the Account Trie Node Key
+
+# Data is extracted from:
+# https://github.com/ethereum/portal-network-specs/blob/638aca50c913a749d0d762264d9a4ac72f1a9966/state-network-test-vectors.md
+
+path:
+  - 8
+  - 6
+  - 7
+  - 9
+  - 14
+  - 8
+  - 14
+  - 13
+node_hash: '0x6225fcc63b22b80301d9f2582014e450e91f9b329b7cc87ad16894722fff5296'
+content_key: '0x20240000006225fcc63b22b80301d9f2582014e450e91f9b329b7cc87ad16894722fff5296008679e8ed'
+content_id: '0xe9d3cd4020b96d4c9222854f541eac0db76335c22bc3d1ea002f0a9ddcad7bf8'

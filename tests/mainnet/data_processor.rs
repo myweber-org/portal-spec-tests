@@ -163,3 +163,153 @@ mod tests {
         assert_eq!(processor.count_records(), 0);
     }
 }
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum DataError {
+    #[error("Invalid data format")]
+    InvalidFormat,
+    #[error("Missing required field: {0}")]
+    MissingField(String),
+    #[error("Validation failed: {0}")]
+    ValidationFailed(String),
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DataRecord {
+    pub id: u64,
+    pub timestamp: i64,
+    pub values: HashMap<String, f64>,
+    pub tags: Vec<String>,
+}
+
+impl DataRecord {
+    pub fn new(id: u64, timestamp: i64) -> Self {
+        Self {
+            id,
+            timestamp,
+            values: HashMap::new(),
+            tags: Vec::new(),
+        }
+    }
+
+    pub fn add_value(&mut self, key: &str, value: f64) {
+        self.values.insert(key.to_string(), value);
+    }
+
+    pub fn add_tag(&mut self, tag: &str) {
+        self.tags.push(tag.to_string());
+    }
+
+    pub fn validate(&self) -> Result<(), DataError> {
+        if self.values.is_empty() {
+            return Err(DataError::ValidationFailed(
+                "Record must contain at least one value".to_string(),
+            ));
+        }
+
+        if self.timestamp < 0 {
+            return Err(DataError::ValidationFailed(
+                "Timestamp cannot be negative".to_string(),
+            ));
+        }
+
+        for (key, value) in &self.values {
+            if key.trim().is_empty() {
+                return Err(DataError::ValidationFailed(
+                    "Value key cannot be empty".to_string(),
+                ));
+            }
+            if !value.is_finite() {
+                return Err(DataError::ValidationFailed(format!(
+                    "Value for '{}' must be finite",
+                    key
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn normalize_values(&mut self) {
+        let sum: f64 = self.values.values().sum();
+        if sum != 0.0 {
+            for value in self.values.values_mut() {
+                *value /= sum;
+            }
+        }
+    }
+}
+
+pub fn process_records(records: &mut [DataRecord]) -> Result<Vec<DataRecord>, DataError> {
+    let mut processed = Vec::with_capacity(records.len());
+
+    for record in records.iter_mut() {
+        record.validate()?;
+        record.normalize_values();
+        processed.push(record.clone());
+    }
+
+    Ok(processed)
+}
+
+pub fn filter_records_by_tag(
+    records: &[DataRecord],
+    required_tag: &str,
+) -> Vec<DataRecord> {
+    records
+        .iter()
+        .filter(|record| record.tags.iter().any(|tag| tag == required_tag))
+        .cloned()
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_record_validation() {
+        let mut record = DataRecord::new(1, 1234567890);
+        record.add_value("temperature", 25.5);
+        record.add_tag("sensor");
+
+        assert!(record.validate().is_ok());
+    }
+
+    #[test]
+    fn test_record_validation_failure() {
+        let record = DataRecord::new(2, -100);
+        assert!(record.validate().is_err());
+    }
+
+    #[test]
+    fn test_normalize_values() {
+        let mut record = DataRecord::new(3, 1234567890);
+        record.add_value("a", 1.0);
+        record.add_value("b", 2.0);
+        record.add_value("c", 3.0);
+
+        record.normalize_values();
+
+        let expected_sum: f64 = record.values.values().sum();
+        assert!((expected_sum - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_filter_by_tag() {
+        let mut record1 = DataRecord::new(1, 100);
+        record1.add_tag("important");
+
+        let mut record2 = DataRecord::new(2, 200);
+        record2.add_tag("normal");
+
+        let records = vec![record1, record2];
+        let filtered = filter_records_by_tag(&records, "important");
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].id, 1);
+    }
+}

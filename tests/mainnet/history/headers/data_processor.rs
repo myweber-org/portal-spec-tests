@@ -102,3 +102,151 @@ mod tests {
         assert!(result.is_err());
     }
 }
+use csv::{ReaderBuilder, WriterBuilder};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::path::Path;
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub category: String,
+}
+
+impl DataRecord {
+    pub fn new(id: u32, name: String, value: f64, category: String) -> Self {
+        Self {
+            id,
+            name,
+            value,
+            category,
+        }
+    }
+
+    pub fn is_valid(&self) -> bool {
+        !self.name.is_empty() && self.value >= 0.0 && !self.category.is_empty()
+    }
+}
+
+pub struct DataProcessor {
+    records: Vec<DataRecord>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        Self { records: Vec::new() }
+    }
+
+    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn Error>> {
+        let mut reader = ReaderBuilder::new().has_headers(true).from_path(path)?;
+        
+        for result in reader.deserialize() {
+            let record: DataRecord = result?;
+            if record.is_valid() {
+                self.records.push(record);
+            }
+        }
+        
+        Ok(())
+    }
+
+    pub fn save_to_csv<P: AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn Error>> {
+        let mut writer = WriterBuilder::new().has_headers(true).from_path(path)?;
+        
+        for record in &self.records {
+            writer.serialize(record)?;
+        }
+        
+        writer.flush()?;
+        Ok(())
+    }
+
+    pub fn add_record(&mut self, record: DataRecord) {
+        if record.is_valid() {
+            self.records.push(record);
+        }
+    }
+
+    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
+        self.records
+            .iter()
+            .filter(|record| record.category == category)
+            .collect()
+    }
+
+    pub fn calculate_average(&self) -> f64 {
+        if self.records.is_empty() {
+            return 0.0;
+        }
+        
+        let sum: f64 = self.records.iter().map(|record| record.value).sum();
+        sum / self.records.len() as f64
+    }
+
+    pub fn get_records(&self) -> &[DataRecord] {
+        &self.records
+    }
+
+    pub fn clear(&mut self) {
+        self.records.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_record_validation() {
+        let valid_record = DataRecord::new(1, "Test".to_string(), 10.5, "A".to_string());
+        assert!(valid_record.is_valid());
+
+        let invalid_record = DataRecord::new(2, "".to_string(), -5.0, "".to_string());
+        assert!(!invalid_record.is_valid());
+    }
+
+    #[test]
+    fn test_data_processor() {
+        let mut processor = DataProcessor::new();
+        
+        let record1 = DataRecord::new(1, "Item1".to_string(), 10.0, "CategoryA".to_string());
+        let record2 = DataRecord::new(2, "Item2".to_string(), 20.0, "CategoryB".to_string());
+        
+        processor.add_record(record1.clone());
+        processor.add_record(record2.clone());
+        
+        assert_eq!(processor.get_records().len(), 2);
+        assert_eq!(processor.calculate_average(), 15.0);
+        
+        let filtered = processor.filter_by_category("CategoryA");
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].name, "Item1");
+    }
+
+    #[test]
+    fn test_csv_operations() -> Result<(), Box<dyn Error>> {
+        let mut processor = DataProcessor::new();
+        
+        let record1 = DataRecord::new(1, "Test1".to_string(), 15.5, "TypeA".to_string());
+        let record2 = DataRecord::new(2, "Test2".to_string(), 25.5, "TypeB".to_string());
+        
+        processor.add_record(record1);
+        processor.add_record(record2);
+        
+        let temp_file = NamedTempFile::new()?;
+        let path = temp_file.path();
+        
+        processor.save_to_csv(path)?;
+        
+        let mut new_processor = DataProcessor::new();
+        new_processor.load_from_csv(path)?;
+        
+        assert_eq!(new_processor.get_records().len(), 2);
+        assert_eq!(new_processor.calculate_average(), 20.5);
+        
+        Ok(())
+    }
+}

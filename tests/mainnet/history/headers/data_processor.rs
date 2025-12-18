@@ -1,111 +1,148 @@
 
-use csv::{Reader, Writer};
-use serde::{Deserialize, Serialize};
-use std::error::Error;
-use std::path::Path;
+use std::collections::HashMap;
 
-#[derive(Debug, Deserialize, Serialize)]
-struct Record {
-    id: u32,
-    name: String,
-    value: f64,
-    active: bool,
+pub struct DataProcessor {
+    cache: HashMap<String, Vec<f64>>,
+    validation_rules: Vec<ValidationRule>,
 }
 
-impl Record {
-    fn is_valid(&self) -> bool {
-        !self.name.is_empty() && self.value >= 0.0
-    }
+pub struct ValidationRule {
+    field_name: String,
+    min_value: f64,
+    max_value: f64,
+    required: bool,
 }
 
-pub fn process_csv(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
-    let path = Path::new(input_path);
-    if !path.exists() {
-        return Err("Input file does not exist".into());
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            cache: HashMap::new(),
+            validation_rules: Vec::new(),
+        }
     }
 
-    let mut reader = Reader::from_path(input_path)?;
-    let mut writer = Writer::from_path(output_path)?;
+    pub fn add_validation_rule(&mut self, rule: ValidationRule) {
+        self.validation_rules.push(rule);
+    }
 
-    let mut valid_count = 0;
-    let mut invalid_count = 0;
+    pub fn process_data(&mut self, dataset: &[HashMap<String, f64>]) -> Result<Vec<ProcessedRecord>, String> {
+        let mut results = Vec::with_capacity(dataset.len());
 
-    for result in reader.deserialize() {
-        let record: Record = result?;
-        
-        if record.is_valid() {
-            writer.serialize(&record)?;
-            valid_count += 1;
+        for (index, record) in dataset.iter().enumerate() {
+            match self.validate_record(record) {
+                Ok(_) => {
+                    let processed = self.transform_record(record);
+                    self.cache.insert(format!("record_{}", index), processed.values.clone());
+                    results.push(processed);
+                }
+                Err(e) => return Err(format!("Validation failed at record {}: {}", index, e)),
+            }
+        }
+
+        Ok(results)
+    }
+
+    fn validate_record(&self, record: &HashMap<String, f64>) -> Result<(), String> {
+        for rule in &self.validation_rules {
+            if let Some(&value) = record.get(&rule.field_name) {
+                if value < rule.min_value || value > rule.max_value {
+                    return Err(format!("Field '{}' value {} out of range [{}, {}]", 
+                        rule.field_name, value, rule.min_value, rule.max_value));
+                }
+            } else if rule.required {
+                return Err(format!("Required field '{}' missing", rule.field_name));
+            }
+        }
+        Ok(())
+    }
+
+    fn transform_record(&self, record: &HashMap<String, f64>) -> ProcessedRecord {
+        let mut values = Vec::new();
+        let mut sum = 0.0;
+
+        for (key, &value) in record {
+            let transformed = match key.as_str() {
+                "temperature" => (value - 32.0) * 5.0 / 9.0,
+                "pressure" => value * 0.01,
+                _ => value,
+            };
+            values.push(transformed);
+            sum += transformed;
+        }
+
+        let average = if !values.is_empty() {
+            sum / values.len() as f64
         } else {
-            invalid_count += 1;
+            0.0
+        };
+
+        ProcessedRecord {
+            values,
+            average,
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
         }
     }
 
-    writer.flush()?;
-    
-    println!("Processing complete:");
-    println!("  Valid records: {}", valid_count);
-    println!("  Invalid records: {}", invalid_count);
-    
-    Ok(())
+    pub fn get_cached_data(&self, key: &str) -> Option<&Vec<f64>> {
+        self.cache.get(key)
+    }
+
+    pub fn clear_cache(&mut self) {
+        self.cache.clear();
+    }
 }
 
-pub fn calculate_average(input_path: &str) -> Result<f64, Box<dyn Error>> {
-    let mut reader = Reader::from_path(input_path)?;
-    let mut total = 0.0;
-    let mut count = 0;
+pub struct ProcessedRecord {
+    pub values: Vec<f64>,
+    pub average: f64,
+    pub timestamp: u64,
+}
 
-    for result in reader.deserialize() {
-        let record: Record = result?;
-        if record.is_valid() {
-            total += record.value;
-            count += 1;
+impl ValidationRule {
+    pub fn new(field_name: String, min_value: f64, max_value: f64, required: bool) -> Self {
+        ValidationRule {
+            field_name,
+            min_value,
+            max_value,
+            required,
         }
     }
-
-    if count == 0 {
-        return Ok(0.0);
-    }
-
-    Ok(total / count as f64)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
 
     #[test]
-    fn test_record_validation() {
-        let valid_record = Record {
-            id: 1,
-            name: "Test".to_string(),
-            value: 10.5,
-            active: true,
-        };
-        assert!(valid_record.is_valid());
-
-        let invalid_record = Record {
-            id: 2,
-            name: "".to_string(),
-            value: -5.0,
-            active: false,
-        };
-        assert!(!invalid_record.is_valid());
+    fn test_data_processing() {
+        let mut processor = DataProcessor::new();
+        processor.add_validation_rule(ValidationRule::new("temperature".to_string(), -50.0, 150.0, true));
+        
+        let mut record = HashMap::new();
+        record.insert("temperature".to_string(), 68.0);
+        record.insert("pressure".to_string(), 1013.25);
+        
+        let dataset = vec![record];
+        let result = processor.process_data(&dataset);
+        
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().len(), 1);
     }
 
     #[test]
-    fn test_process_csv() {
-        let test_input = "test_input.csv";
-        let test_output = "test_output.csv";
+    fn test_validation_failure() {
+        let mut processor = DataProcessor::new();
+        processor.add_validation_rule(ValidationRule::new("temperature".to_string(), 0.0, 100.0, true));
         
-        let content = "id,name,value,active\n1,Alice,100.5,true\n2,Bob,-50.0,false\n3,,75.0,true\n";
-        fs::write(test_input, content).unwrap();
-
-        let result = process_csv(test_input, test_output);
-        assert!(result.is_ok());
-
-        fs::remove_file(test_input).unwrap();
-        fs::remove_file(test_output).unwrap();
+        let mut record = HashMap::new();
+        record.insert("temperature".to_string(), 150.0);
+        
+        let dataset = vec![record];
+        let result = processor.process_data(&dataset);
+        
+        assert!(result.is_err());
     }
 }

@@ -125,3 +125,113 @@ mod tests {
         assert_eq!(processor.filter_by_category("electronics").len(), 1);
     }
 }
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataRecord {
+    pub id: u64,
+    pub value: f64,
+    pub timestamp: i64,
+    pub category: String,
+}
+
+#[derive(Debug, Error)]
+pub enum ProcessingError {
+    #[error("Invalid data value: {0}")]
+    InvalidValue(String),
+    #[error("Missing required field: {0}")]
+    MissingField(String),
+    #[error("Timestamp out of range")]
+    InvalidTimestamp,
+}
+
+pub struct DataProcessor {
+    min_value: f64,
+    max_value: f64,
+}
+
+impl DataProcessor {
+    pub fn new(min_value: f64, max_value: f64) -> Self {
+        Self {
+            min_value,
+            max_value,
+        }
+    }
+
+    pub fn validate_record(&self, record: &DataRecord) -> Result<(), ProcessingError> {
+        if record.value < self.min_value || record.value > self.max_value {
+            return Err(ProcessingError::InvalidValue(
+                format!("Value {} out of range [{}, {}]", record.value, self.min_value, self.max_value)
+            ));
+        }
+
+        if record.timestamp < 0 {
+            return Err(ProcessingError::InvalidTimestamp);
+        }
+
+        if record.category.is_empty() {
+            return Err(ProcessingError::MissingField("category".to_string()));
+        }
+
+        Ok(())
+    }
+
+    pub fn normalize_value(&self, value: f64) -> f64 {
+        (value - self.min_value) / (self.max_value - self.min_value)
+    }
+
+    pub fn process_records(&self, records: Vec<DataRecord>) -> Vec<Result<DataRecord, ProcessingError>> {
+        records
+            .into_iter()
+            .map(|record| {
+                self.validate_record(&record)?;
+                let mut processed = record.clone();
+                processed.value = self.normalize_value(processed.value);
+                Ok(processed)
+            })
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validation_success() {
+        let processor = DataProcessor::new(0.0, 100.0);
+        let record = DataRecord {
+            id: 1,
+            value: 50.0,
+            timestamp: 1625097600,
+            category: "test".to_string(),
+        };
+        
+        assert!(processor.validate_record(&record).is_ok());
+    }
+
+    #[test]
+    fn test_validation_invalid_value() {
+        let processor = DataProcessor::new(0.0, 100.0);
+        let record = DataRecord {
+            id: 1,
+            value: 150.0,
+            timestamp: 1625097600,
+            category: "test".to_string(),
+        };
+        
+        assert!(matches!(
+            processor.validate_record(&record),
+            Err(ProcessingError::InvalidValue(_))
+        ));
+    }
+
+    #[test]
+    fn test_normalization() {
+        let processor = DataProcessor::new(0.0, 100.0);
+        assert_eq!(processor.normalize_value(50.0), 0.5);
+        assert_eq!(processor.normalize_value(0.0), 0.0);
+        assert_eq!(processor.normalize_value(100.0), 1.0);
+    }
+}

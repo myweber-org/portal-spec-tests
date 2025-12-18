@@ -97,4 +97,87 @@ mod tests {
         let (mean, _) = stats.unwrap();
         assert!((mean - 50000.0).abs() < 0.1);
     }
+}use std::error::Error;
+use std::fs::File;
+use std::path::Path;
+
+pub struct DataSet {
+    values: Vec<f64>,
+}
+
+impl DataSet {
+    pub fn from_csv<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn Error>> {
+        let file = File::open(path)?;
+        let mut rdr = csv::Reader::from_reader(file);
+        let mut values = Vec::new();
+
+        for result in rdr.records() {
+            let record = result?;
+            for field in record.iter() {
+                if let Ok(num) = field.parse::<f64>() {
+                    values.push(num);
+                }
+            }
+        }
+
+        Ok(DataSet { values })
+    }
+
+    pub fn mean(&self) -> Option<f64> {
+        if self.values.is_empty() {
+            return None;
+        }
+        let sum: f64 = self.values.iter().sum();
+        Some(sum / self.values.len() as f64)
+    }
+
+    pub fn variance(&self) -> Option<f64> {
+        if self.values.len() < 2 {
+            return None;
+        }
+        let mean = self.mean()?;
+        let sum_sq_diff: f64 = self.values.iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum();
+        Some(sum_sq_diff / (self.values.len() - 1) as f64)
+    }
+
+    pub fn min(&self) -> Option<f64> {
+        self.values.iter().copied().reduce(f64::min)
+    }
+
+    pub fn max(&self) -> Option<f64> {
+        self.values.iter().copied().reduce(f64::max)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_basic_statistics() {
+        let mut tmp_file = NamedTempFile::new().unwrap();
+        write!(tmp_file, "1.0,2.0,3.0\n4.0,5.0,6.0").unwrap();
+        
+        let dataset = DataSet::from_csv(tmp_file.path()).unwrap();
+        assert_eq!(dataset.mean(), Some(3.5));
+        assert_eq!(dataset.variance(), Some(3.5));
+        assert_eq!(dataset.min(), Some(1.0));
+        assert_eq!(dataset.max(), Some(6.0));
+    }
+
+    #[test]
+    fn test_empty_dataset() {
+        let mut tmp_file = NamedTempFile::new().unwrap();
+        write!(tmp_file, "").unwrap();
+        
+        let dataset = DataSet::from_csv(tmp_file.path()).unwrap();
+        assert_eq!(dataset.mean(), None);
+        assert_eq!(dataset.variance(), None);
+        assert_eq!(dataset.min(), None);
+        assert_eq!(dataset.max(), None);
+    }
 }

@@ -334,4 +334,74 @@ mod tests {
         assert_eq!(calculate_average_value(&records), Some(20.0));
         assert_eq!(calculate_average_value(&[]), None);
     }
+}use csv::Reader;
+use serde::Deserialize;
+use std::error::Error;
+
+#[derive(Debug, Deserialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
+}
+
+pub fn process_csv_data(input: &str) -> Result<Vec<Record>, Box<dyn Error>> {
+    let mut reader = Reader::from_reader(input.as_bytes());
+    let mut records = Vec::new();
+
+    for result in reader.deserialize() {
+        let record: Record = result?;
+        if record.value >= 0.0 {
+            records.push(record);
+        }
+    }
+
+    Ok(records)
+}
+
+pub fn calculate_statistics(records: &[Record]) -> (f64, f64, f64) {
+    let count = records.len() as f64;
+    if count == 0.0 {
+        return (0.0, 0.0, 0.0);
+    }
+
+    let sum: f64 = records.iter().map(|r| r.value).sum();
+    let mean = sum / count;
+    
+    let variance: f64 = records.iter()
+        .map(|r| (r.value - mean).powi(2))
+        .sum::<f64>() / count;
+    
+    let std_dev = variance.sqrt();
+    
+    (sum, mean, std_dev)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_process_valid_csv() {
+        let csv_data = "id,name,value,active\n1,Test1,10.5,true\n2,Test2,-3.2,false";
+        let result = process_csv_data(csv_data);
+        assert!(result.is_ok());
+        let records = result.unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].id, 1);
+    }
+
+    #[test]
+    fn test_statistics_calculation() {
+        let records = vec![
+            Record { id: 1, name: "A".to_string(), value: 10.0, active: true },
+            Record { id: 2, name: "B".to_string(), value: 20.0, active: false },
+        ];
+        
+        let (sum, mean, std_dev) = calculate_statistics(&records);
+        assert_eq!(sum, 30.0);
+        assert_eq!(mean, 15.0);
+        assert!((std_dev - 5.0).abs() < 0.0001);
+    }
 }

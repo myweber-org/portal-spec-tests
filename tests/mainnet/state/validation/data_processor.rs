@@ -473,4 +473,56 @@ mod tests {
         assert!((stats.0 - 10.5).abs() < 0.1);
         assert!((stats.1 - 20.3).abs() < 0.1);
     }
+}use csv::{Reader, Writer};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
+}
+
+impl Record {
+    fn validate(&self) -> Result<(), String> {
+        if self.name.is_empty() {
+            return Err("Name cannot be empty".to_string());
+        }
+        if self.value < 0.0 {
+            return Err("Value must be non-negative".to_string());
+        }
+        Ok(())
+    }
+}
+
+fn process_csv(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
+    let input_file = File::open(input_path)?;
+    let mut reader = Reader::from_reader(input_file);
+    
+    let output_file = File::create(output_path)?;
+    let mut writer = Writer::from_writer(output_file);
+
+    for result in reader.deserialize() {
+        let mut record: Record = result?;
+        
+        if let Err(e) = record.validate() {
+            eprintln!("Validation failed for record {}: {}", record.id, e);
+            continue;
+        }
+
+        record.value = record.value * 1.1;
+        writer.serialize(&record)?;
+    }
+
+    writer.flush()?;
+    Ok(())
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    process_csv("input.csv", "output.csv")?;
+    println!("Processing completed successfully");
+    Ok(())
 }

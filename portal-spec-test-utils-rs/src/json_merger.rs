@@ -97,4 +97,34 @@ mod tests {
         let merged = merge_json(&a, &b, &MergeStrategy::CombineArrays);
         assert_eq!(merged.as_array().unwrap().len(), 6);
     }
+}use serde_json::{Value, json};
+use std::fs;
+use std::io;
+use std::path::Path;
+
+pub fn merge_json_files<P: AsRef<Path>>(paths: &[P]) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut merged_array = Vec::new();
+
+    for path in paths {
+        let file_content = fs::read_to_string(path)?;
+        let json_value: Value = serde_json::from_str(&file_content)?;
+        
+        if let Value::Array(arr) = json_value {
+            merged_array.extend(arr);
+        } else {
+            merged_array.push(json_value);
+        }
+    }
+
+    Ok(json!(merged_array))
+}
+
+pub fn merge_and_write<P: AsRef<Path>>(input_paths: &[P], output_path: P) -> io::Result<()> {
+    let merged = merge_json_files(input_paths)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+    
+    let json_string = serde_json::to_string_pretty(&merged)?;
+    fs::write(output_path, json_string)?;
+    
+    Ok(())
 }

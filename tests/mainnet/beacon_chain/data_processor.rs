@@ -134,4 +134,190 @@ mod tests {
         assert_eq!(stats["total_values"], 4.0);
         assert_eq!(stats["mean"], 25.0);
     }
+}use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum ProcessingError {
+    #[error("Invalid input data: {0}")]
+    InvalidInput(String),
+    #[error("Transformation failed: {0}")]
+    TransformationFailed(String),
+    #[error("Validation error: {0}")]
+    ValidationError(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataRecord {
+    pub id: u64,
+    pub timestamp: i64,
+    pub values: HashMap<String, f64>,
+    pub tags: Vec<String>,
+}
+
+impl DataRecord {
+    pub fn validate(&self) -> Result<(), ProcessingError> {
+        if self.id == 0 {
+            return Err(ProcessingError::ValidationError(
+                "ID cannot be zero".to_string(),
+            ));
+        }
+
+        if self.timestamp < 0 {
+            return Err(ProcessingError::ValidationError(
+                "Timestamp cannot be negative".to_string(),
+            ));
+        }
+
+        if self.values.is_empty() {
+            return Err(ProcessingError::ValidationError(
+                "Values cannot be empty".to_string(),
+            ));
+        }
+
+        for (key, value) in &self.values {
+            if key.trim().is_empty() {
+                return Err(ProcessingError::ValidationError(
+                    "Key cannot be empty".to_string(),
+                ));
+            }
+            if !value.is_finite() {
+                return Err(ProcessingError::ValidationError(format!(
+                    "Value for key '{}' must be finite",
+                    key
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn normalize_values(&mut self) -> Result<(), ProcessingError> {
+        let sum: f64 = self.values.values().sum();
+        if sum == 0.0 {
+            return Err(ProcessingError::TransformationFailed(
+                "Cannot normalize zero sum".to_string(),
+            ));
+        }
+
+        for value in self.values.values_mut() {
+            *value /= sum;
+        }
+
+        Ok(())
+    }
+
+    pub fn add_tag(&mut self, tag: String) {
+        if !self.tags.contains(&tag) {
+            self.tags.push(tag);
+        }
+    }
+
+    pub fn remove_tag(&mut self, tag: &str) {
+        self.tags.retain(|t| t != tag);
+    }
+}
+
+pub fn process_records(records: &mut [DataRecord]) -> Result<Vec<DataRecord>, ProcessingError> {
+    let mut processed = Vec::with_capacity(records.len());
+
+    for record in records.iter_mut() {
+        record.validate()?;
+        record.normalize_values()?;
+        record.add_tag("processed".to_string());
+        processed.push(record.clone());
+    }
+
+    Ok(processed)
+}
+
+pub fn filter_by_tag(records: &[DataRecord], tag: &str) -> Vec<DataRecord> {
+    records
+        .iter()
+        .filter(|r| r.tags.contains(&tag.to_string()))
+        .cloned()
+        .collect()
+}
+
+pub fn calculate_statistics(records: &[DataRecord]) -> HashMap<String, (f64, f64, f64)> {
+    let mut stats = HashMap::new();
+
+    for record in records {
+        for (key, value) in &record.values {
+            let entry = stats.entry(key.clone()).or_insert((f64::MAX, f64::MIN, 0.0, 0));
+            entry.0 = entry.0.min(*value);
+            entry.1 = entry.1.max(*value);
+            entry.2 += *value;
+            entry.3 += 1;
+        }
+    }
+
+    stats
+        .into_iter()
+        .map(|(key, (min, max, sum, count))| {
+            let avg = sum / count as f64;
+            (key, (min, max, avg))
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_record_validation() {
+        let mut record = DataRecord {
+            id: 1,
+            timestamp: 1234567890,
+            values: HashMap::from([("temp".to_string(), 25.5)]),
+            tags: vec!["test".to_string()],
+        };
+
+        assert!(record.validate().is_ok());
+
+        record.id = 0;
+        assert!(record.validate().is_err());
+    }
+
+    #[test]
+    fn test_normalize_values() {
+        let mut record = DataRecord {
+            id: 1,
+            timestamp: 1234567890,
+            values: HashMap::from([
+                ("a".to_string(), 10.0),
+                ("b".to_string(), 20.0),
+                ("c".to_string(), 30.0),
+            ]),
+            tags: vec![],
+        };
+
+        record.normalize_values().unwrap();
+        let sum: f64 = record.values.values().sum();
+        assert!((sum - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_process_records() {
+        let mut records = vec![
+            DataRecord {
+                id: 1,
+                timestamp: 1234567890,
+                values: HashMap::from([("x".to_string(), 5.0)]),
+                tags: vec![],
+            },
+            DataRecord {
+                id: 2,
+                timestamp: 1234567891,
+                values: HashMap::from([("y".to_string(), 10.0)]),
+                tags: vec![],
+            },
+        ];
+
+        let processed = process_records(&mut records).unwrap();
+        assert_eq!(processed.len(), 2);
+        assert!(processed[0].tags.contains(&"processed".to_string()));
+    }
 }

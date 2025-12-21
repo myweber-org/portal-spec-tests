@@ -323,3 +323,175 @@ mod tests {
         assert_eq!(column, vec!["30", "25"]);
     }
 }
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug)]
+pub enum DataError {
+    InvalidId,
+    InvalidValue,
+    EmptyName,
+    DuplicateRecord,
+}
+
+impl fmt::Display for DataError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DataError::InvalidId => write!(f, "ID must be greater than 0"),
+            DataError::InvalidValue => write!(f, "Value must be between 0.0 and 1000.0"),
+            DataError::EmptyName => write!(f, "Name cannot be empty"),
+            DataError::DuplicateRecord => write!(f, "Record with this ID already exists"),
+        }
+    }
+}
+
+impl Error for DataError {}
+
+pub struct DataProcessor {
+    records: HashMap<u32, DataRecord>,
+    next_id: u32,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: HashMap::new(),
+            next_id: 1,
+        }
+    }
+
+    pub fn add_record(&mut self, name: String, value: f64, tags: Vec<String>) -> Result<u32, DataError> {
+        if name.trim().is_empty() {
+            return Err(DataError::EmptyName);
+        }
+
+        if !(0.0..=1000.0).contains(&value) {
+            return Err(DataError::InvalidValue);
+        }
+
+        let record = DataRecord {
+            id: self.next_id,
+            name,
+            value,
+            tags,
+        };
+
+        if self.records.contains_key(&record.id) {
+            return Err(DataError::DuplicateRecord);
+        }
+
+        self.records.insert(record.id, record);
+        let inserted_id = self.next_id;
+        self.next_id += 1;
+        Ok(inserted_id)
+    }
+
+    pub fn get_record(&self, id: u32) -> Option<&DataRecord> {
+        self.records.get(&id)
+    }
+
+    pub fn update_value(&mut self, id: u32, new_value: f64) -> Result<(), DataError> {
+        if !(0.0..=1000.0).contains(&new_value) {
+            return Err(DataError::InvalidValue);
+        }
+
+        if let Some(record) = self.records.get_mut(&id) {
+            record.value = new_value;
+            Ok(())
+        } else {
+            Err(DataError::InvalidId)
+        }
+    }
+
+    pub fn filter_by_min_value(&self, min_value: f64) -> Vec<&DataRecord> {
+        self.records
+            .values()
+            .filter(|record| record.value >= min_value)
+            .collect()
+    }
+
+    pub fn calculate_statistics(&self) -> (f64, f64, f64) {
+        let count = self.records.len() as f64;
+        if count == 0.0 {
+            return (0.0, 0.0, 0.0);
+        }
+
+        let sum: f64 = self.records.values().map(|r| r.value).sum();
+        let mean = sum / count;
+
+        let variance: f64 = self.records
+            .values()
+            .map(|r| (r.value - mean).powi(2))
+            .sum::<f64>() / count;
+
+        let std_dev = variance.sqrt();
+
+        (mean, variance, std_dev)
+    }
+
+    pub fn remove_record(&mut self, id: u32) -> Option<DataRecord> {
+        self.records.remove(&id)
+    }
+
+    pub fn record_count(&self) -> usize {
+        self.records.len()
+    }
+
+    pub fn clear(&mut self) {
+        self.records.clear();
+        self.next_id = 1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_add_valid_record() {
+        let mut processor = DataProcessor::new();
+        let result = processor.add_record("Test".to_string(), 50.0, vec!["tag1".to_string()]);
+        assert!(result.is_ok());
+        assert_eq!(processor.record_count(), 1);
+    }
+
+    #[test]
+    fn test_add_invalid_value() {
+        let mut processor = DataProcessor::new();
+        let result = processor.add_record("Test".to_string(), -10.0, vec![]);
+        assert!(matches!(result, Err(DataError::InvalidValue)));
+    }
+
+    #[test]
+    fn test_filter_records() {
+        let mut processor = DataProcessor::new();
+        processor.add_record("A".to_string(), 10.0, vec![]).unwrap();
+        processor.add_record("B".to_string(), 50.0, vec![]).unwrap();
+        processor.add_record("C".to_string(), 100.0, vec![]).unwrap();
+
+        let filtered = processor.filter_by_min_value(50.0);
+        assert_eq!(filtered.len(), 2);
+    }
+
+    #[test]
+    fn test_statistics_calculation() {
+        let mut processor = DataProcessor::new();
+        processor.add_record("A".to_string(), 10.0, vec![]).unwrap();
+        processor.add_record("B".to_string(), 20.0, vec![]).unwrap();
+        processor.add_record("C".to_string(), 30.0, vec![]).unwrap();
+
+        let (mean, variance, std_dev) = processor.calculate_statistics();
+        assert_eq!(mean, 20.0);
+        assert_eq!(variance, 66.66666666666667);
+        assert_eq!(std_dev, 8.16496580927726);
+    }
+}

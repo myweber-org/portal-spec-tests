@@ -263,4 +263,80 @@ mod tests {
         let merged = merge_json_objects(&first, &second, ConflictResolution::MergeArrays).unwrap();
         assert_eq!(merged.get("items").unwrap(), &json!([1, 2, 3, 4]));
     }
+}use serde_json::{Value, json};
+use std::fs::{self, File};
+use std::io::{BufReader, Write};
+use std::path::Path;
+
+pub fn merge_json_files(input_paths: &[&str], output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let mut merged_array = Vec::new();
+
+    for path_str in input_paths {
+        let path = Path::new(path_str);
+        if !path.exists() {
+            eprintln!("Warning: File {} not found, skipping.", path_str);
+            continue;
+        }
+
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let json_value: Value = serde_json::from_reader(reader)?;
+
+        if let Value::Array(arr) = json_value {
+            for item in arr {
+                merged_array.push(item);
+            }
+        } else {
+            merged_array.push(json_value);
+        }
+    }
+
+    let output_file = File::create(output_path)?;
+    let merged_json = json!(merged_array);
+    serde_json::to_writer_pretty(output_file, &merged_json)?;
+
+    Ok(())
+}
+
+pub fn merge_json_directories(dir_path: &str, output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let mut json_files = Vec::new();
+
+    for entry in fs::read_dir(dir_path)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_file() {
+            if let Some(ext) = path.extension() {
+                if ext == "json" {
+                    json_files.push(path.to_string_lossy().to_string());
+                }
+            }
+        }
+    }
+
+    let input_refs: Vec<&str> = json_files.iter().map(|s| s.as_str()).collect();
+    merge_json_files(&input_refs, output_path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_merge_json_files() {
+        let dir = tempdir().unwrap();
+        let file1_path = dir.path().join("a.json");
+        let file2_path = dir.path().join("b.json");
+        let output_path = dir.path().join("merged.json");
+
+        fs::write(&file1_path, r#"[1, 2, 3]"#).unwrap();
+        fs::write(&file2_path, r#"{"key": "value"}"#).unwrap();
+
+        let inputs = [file1_path.to_str().unwrap(), file2_path.to_str().unwrap()];
+        merge_json_files(&inputs, output_path.to_str().unwrap()).unwrap();
+
+        let content = fs::read_to_string(&output_path).unwrap();
+        assert!(content.contains("1") && content.contains("value"));
+    }
 }

@@ -1,34 +1,35 @@
-use aes_gcm::{
-    aead::{Aead, KeyInit, OsRng},
-    Aes256Gcm, Nonce,
-};
+
 use std::fs;
+use std::io::{Read, Write};
+use std::env;
 
-pub fn encrypt_file(input_path: &str, output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let key = Aes256Gcm::generate_key(&mut OsRng);
-    let cipher = Aes256Gcm::new(&key);
-    let nonce = Nonce::from_slice(b"unique_nonce_12");
-
-    let plaintext = fs::read(input_path)?;
-    let ciphertext = cipher.encrypt(nonce, plaintext.as_ref())
-        .map_err(|e| format!("Encryption failed: {}", e))?;
-
-    fs::write(output_path, ciphertext)?;
-    println!("File encrypted successfully. Key: {}", hex::encode(key));
-    Ok(())
+fn xor_encrypt_decrypt(data: &[u8], key: &[u8]) -> Vec<u8> {
+    data.iter()
+        .enumerate()
+        .map(|(i, &byte)| byte ^ key[i % key.len()])
+        .collect()
 }
 
-pub fn decrypt_file(input_path: &str, output_path: &str, key_hex: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let key_bytes = hex::decode(key_hex)?;
-    let key = key_bytes.as_slice().try_into()?;
-    let cipher = Aes256Gcm::new(&key);
-    let nonce = Nonce::from_slice(b"unique_nonce_12");
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<String> = env::args().collect();
+    if args.len() != 4 {
+        eprintln!("Usage: {} <input_file> <output_file> <key>", args[0]);
+        std::process::exit(1);
+    }
 
-    let ciphertext = fs::read(input_path)?;
-    let plaintext = cipher.decrypt(nonce, ciphertext.as_ref())
-        .map_err(|e| format!("Decryption failed: {}", e))?;
+    let input_path = &args[1];
+    let output_path = &args[2];
+    let key = args[3].as_bytes();
 
-    fs::write(output_path, plaintext)?;
-    println!("File decrypted successfully.");
+    let mut input_file = fs::File::open(input_path)?;
+    let mut buffer = Vec::new();
+    input_file.read_to_end(&mut buffer)?;
+
+    let processed_data = xor_encrypt_decrypt(&buffer, key);
+
+    let mut output_file = fs::File::create(output_path)?;
+    output_file.write_all(&processed_data)?;
+
+    println!("Operation completed successfully. Output written to {}", output_path);
     Ok(())
 }

@@ -154,4 +154,145 @@ mod tests {
         
         assert_eq!(count, 3);
     }
+}use chrono::{DateTime, Utc};
+use serde::Deserialize;
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug, Deserialize)]
+struct LogEntry {
+    timestamp: String,
+    level: String,
+    message: String,
+    #[serde(flatten)]
+    extra: HashMap<String, serde_json::Value>,
+}
+
+#[derive(Debug)]
+pub struct LogFilter {
+    min_level: Option<String>,
+    start_time: Option<DateTime<Utc>>,
+    end_time: Option<DateTime<Utc>>,
+}
+
+impl LogFilter {
+    pub fn new() -> Self {
+        LogFilter {
+            min_level: None,
+            start_time: None,
+            end_time: None,
+        }
+    }
+
+    pub fn with_min_level(mut self, level: &str) -> Self {
+        self.min_level = Some(level.to_string());
+        self
+    }
+
+    pub fn with_time_range(mut self, start: DateTime<Utc>, end: DateTime<Utc>) -> Self {
+        self.start_time = Some(start);
+        self.end_time = Some(end);
+        self
+    }
+
+    fn matches(&self, entry: &LogEntry) -> bool {
+        if let Some(ref min_level) = self.min_level {
+            if !self.check_level(&entry.level, min_level) {
+                return false;
+            }
+        }
+
+        if let (Some(start), Some(end)) = (self.start_time, self.end_time) {
+            if let Ok(entry_time) = DateTime::parse_from_rfc3339(&entry.timestamp) {
+                let utc_time = entry_time.with_timezone(&Utc);
+                if utc_time < start || utc_time > end {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    fn check_level(&self, entry_level: &str, min_level: &str) -> bool {
+        let levels = ["trace", "debug", "info", "warn", "error"];
+        let entry_idx = levels.iter().position(|&l| l == entry_level.to_lowercase());
+        let min_idx = levels.iter().position(|&l| l == min_level.to_lowercase());
+
+        match (entry_idx, min_idx) {
+            (Some(e), Some(m)) => e >= m,
+            _ => false,
+        }
+    }
+}
+
+pub struct LogParser {
+    filter: LogFilter,
+}
+
+impl LogParser {
+    pub fn new(filter: LogFilter) -> Self {
+        LogParser { filter }
+    }
+
+    pub fn parse_file<P: AsRef<Path>>(&self, path: P) -> Result<Vec<LogEntry>, Box<dyn std::error::Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut entries = Vec::new();
+
+        for line in reader.lines() {
+            let line = line?;
+            if let Ok(entry) = serde_json::from_str::<LogEntry>(&line) {
+                if self.filter.matches(&entry) {
+                    entries.push(entry);
+                }
+            }
+        }
+
+        Ok(entries)
+    }
+
+    pub fn count_by_level(&self, entries: &[LogEntry]) -> HashMap<String, usize> {
+        let mut counts = HashMap::new();
+        for entry in entries {
+            *counts.entry(entry.level.clone()).or_insert(0) += 1;
+        }
+        counts
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    #[test]
+    fn test_filter_matches() {
+        let filter = LogFilter::new()
+            .with_min_level("info")
+            .with_time_range(
+                Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap(),
+                Utc.with_ymd_and_hms(2024, 12, 31, 23, 59, 59).unwrap(),
+            );
+
+        let entry = LogEntry {
+            timestamp: "2024-06-15T10:30:00Z".to_string(),
+            level: "INFO".to_string(),
+            message: "Test message".to_string(),
+            extra: HashMap::new(),
+        };
+
+        assert!(filter.matches(&entry));
+    }
+
+    #[test]
+    fn test_level_check() {
+        let filter = LogFilter::new();
+        assert!(filter.check_level("ERROR", "INFO"));
+        assert!(!filter.check_level("DEBUG", "INFO"));
+    }
 }

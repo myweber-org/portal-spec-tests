@@ -1,114 +1,117 @@
-
 use aes_gcm::{
     aead::{Aead, KeyInit, OsRng},
-    Aes256Gcm, Key, Nonce
+    Aes256Gcm, Key, Nonce,
 };
-use pbkdf2::{
-    pbkdf2_hmac,
-    Params
+use std::{
+    fs::{self, File},
+    io::{Read, Write},
+    path::Path,
 };
-use sha2::Sha256;
-use std::fs;
-use std::io::{Read, Write};
-use std::path::Path;
 
-const SALT_LENGTH: usize = 16;
-const NONCE_LENGTH: usize = 12;
-const PBKDF2_ITERATIONS: u32 = 100_000;
+const NONCE_SIZE: usize = 12;
 
-pub struct EncryptionResult {
-    pub ciphertext: Vec<u8>,
-    pub salt: [u8; SALT_LENGTH],
-    pub nonce: [u8; NONCE_LENGTH],
-}
-
-pub fn derive_key(password: &str, salt: &[u8]) -> Key<Aes256Gcm> {
-    let mut key = [0u8; 32];
-    let params = Params {
-        rounds: PBKDF2_ITERATIONS,
-        output_length: key.len(),
-    };
+pub fn encrypt_file(input_path: &str, output_path: &str, password: &str) -> Result<(), String> {
+    let key = derive_key(password);
+    let cipher = Aes256Gcm::new(&key);
     
-    pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, params.rounds, &mut key);
-    *Key::<Aes256Gcm>::from_slice(&key)
-}
-
-pub fn encrypt_file(password: &str, input_path: &Path) -> Result<EncryptionResult, String> {
-    let mut file = fs::File::open(input_path)
+    let mut input_file = File::open(input_path)
         .map_err(|e| format!("Failed to open input file: {}", e))?;
     
     let mut plaintext = Vec::new();
-    file.read_to_end(&mut plaintext)
+    input_file.read_to_end(&mut plaintext)
         .map_err(|e| format!("Failed to read input file: {}", e))?;
     
-    let mut salt = [0u8; SALT_LENGTH];
-    OsRng.fill_bytes(&mut salt);
-    
-    let mut nonce_bytes = [0u8; NONCE_LENGTH];
-    OsRng.fill_bytes(&mut nonce_bytes);
-    
-    let key = derive_key(password, &salt);
-    let cipher = Aes256Gcm::new(&key);
-    let nonce = Nonce::from_slice(&nonce_bytes);
-    
-    let ciphertext = cipher.encrypt(nonce, plaintext.as_ref())
+    let nonce = generate_nonce();
+    let ciphertext = cipher.encrypt(&nonce, plaintext.as_ref())
         .map_err(|e| format!("Encryption failed: {}", e))?;
     
-    Ok(EncryptionResult {
-        ciphertext,
-        salt,
-        nonce: nonce_bytes,
-    })
-}
-
-pub fn decrypt_file(password: &str, result: &EncryptionResult) -> Result<Vec<u8>, String> {
-    let key = derive_key(password, &result.salt);
-    let cipher = Aes256Gcm::new(&key);
-    let nonce = Nonce::from_slice(&result.nonce);
-    
-    cipher.decrypt(nonce, result.ciphertext.as_ref())
-        .map_err(|e| format!("Decryption failed: {}", e))
-}
-
-pub fn save_encrypted_data(result: &EncryptionResult, output_path: &Path) -> Result<(), String> {
-    let mut file = fs::File::create(output_path)
+    let mut output_file = File::create(output_path)
         .map_err(|e| format!("Failed to create output file: {}", e))?;
     
-    file.write_all(&result.salt)
-        .map_err(|e| format!("Failed to write salt: {}", e))?;
-    
-    file.write_all(&result.nonce)
+    output_file.write_all(&nonce)
         .map_err(|e| format!("Failed to write nonce: {}", e))?;
-    
-    file.write_all(&result.ciphertext)
+    output_file.write_all(&ciphertext)
         .map_err(|e| format!("Failed to write ciphertext: {}", e))?;
     
     Ok(())
 }
 
-pub fn load_encrypted_data(input_path: &Path) -> Result<EncryptionResult, String> {
-    let mut file = fs::File::open(input_path)
-        .map_err(|e| format!("Failed to open encrypted file: {}", e))?;
+pub fn decrypt_file(input_path: &str, output_path: &str, password: &str) -> Result<(), String> {
+    let key = derive_key(password);
+    let cipher = Aes256Gcm::new(&key);
     
-    let mut data = Vec::new();
-    file.read_to_end(&mut data)
-        .map_err(|e| format!("Failed to read encrypted file: {}", e))?;
+    let mut input_file = File::open(input_path)
+        .map_err(|e| format!("Failed to open input file: {}", e))?;
     
-    if data.len() < SALT_LENGTH + NONCE_LENGTH {
-        return Err("File too short to contain valid encrypted data".to_string());
+    let mut encrypted_data = Vec::new();
+    input_file.read_to_end(&mut encrypted_data)
+        .map_err(|e| format!("Failed to read input file: {}", e))?;
+    
+    if encrypted_data.len() < NONCE_SIZE {
+        return Err("File too short to contain nonce".to_string());
     }
     
-    let salt = data[..SALT_LENGTH].try_into()
-        .map_err(|_| "Failed to extract salt")?;
+    let (nonce_bytes, ciphertext) = encrypted_data.split_at(NONCE_SIZE);
+    let nonce = Nonce::from_slice(nonce_bytes);
     
-    let nonce = data[SALT_LENGTH..SALT_LENGTH + NONCE_LENGTH].try_into()
-        .map_err(|_| "Failed to extract nonce")?;
+    let plaintext = cipher.decrypt(nonce, ciphertext)
+        .map_err(|e| format!("Decryption failed: {}", e))?;
     
-    let ciphertext = data[SALT_LENGTH + NONCE_LENGTH..].to_vec();
+    let mut output_file = File::create(output_path)
+        .map_err(|e| format!("Failed to create output file: {}", e))?;
     
-    Ok(EncryptionResult {
-        ciphertext,
-        salt,
-        nonce,
-    })
+    output_file.write_all(&plaintext)
+        .map_err(|e| format!("Failed to write plaintext: {}", e))?;
+    
+    Ok(())
+}
+
+fn derive_key(password: &str) -> Key<Aes256Gcm> {
+    let mut key_bytes = [0u8; 32];
+    let password_bytes = password.as_bytes();
+    
+    for (i, &byte) in password_bytes.iter().enumerate() {
+        key_bytes[i % 32] ^= byte;
+    }
+    
+    Key::<Aes256Gcm>::from_slice(&key_bytes).clone()
+}
+
+fn generate_nonce() -> Nonce {
+    let mut nonce_bytes = [0u8; NONCE_SIZE];
+    OsRng.fill_bytes(&mut nonce_bytes);
+    Nonce::from_slice(&nonce_bytes).clone()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+    
+    #[test]
+    fn test_encrypt_decrypt() {
+        let original_content = b"Test data for encryption";
+        let password = "secure_password_123";
+        
+        let input_file = NamedTempFile::new().unwrap();
+        let encrypted_file = NamedTempFile::new().unwrap();
+        let decrypted_file = NamedTempFile::new().unwrap();
+        
+        fs::write(input_file.path(), original_content).unwrap();
+        
+        encrypt_file(
+            input_file.path().to_str().unwrap(),
+            encrypted_file.path().to_str().unwrap(),
+            password
+        ).unwrap();
+        
+        decrypt_file(
+            encrypted_file.path().to_str().unwrap(),
+            decrypted_file.path().to_str().unwrap(),
+            password
+        ).unwrap();
+        
+        let decrypted_content = fs::read(decrypted_file.path()).unwrap();
+        assert_eq!(original_content.to_vec(), decrypted_content);
+    }
 }

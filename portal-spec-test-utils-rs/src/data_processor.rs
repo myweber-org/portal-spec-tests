@@ -775,3 +775,107 @@ mod tests {
         assert_eq!(gamma_records.len(), 0);
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+pub struct DataProcessor {
+    delimiter: char,
+    has_header: bool,
+}
+
+impl DataProcessor {
+    pub fn new(delimiter: char, has_header: bool) -> Self {
+        DataProcessor {
+            delimiter,
+            has_header,
+        }
+    }
+
+    pub fn process_file<P: AsRef<Path>>(&self, file_path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        
+        let mut records = Vec::new();
+        let mut lines = reader.lines().enumerate();
+
+        if self.has_header {
+            lines.next();
+        }
+
+        for (line_num, line) in lines {
+            let line = line?;
+            let fields: Vec<String> = line.split(self.delimiter)
+                .map(|s| s.trim().to_string())
+                .collect();
+
+            if fields.iter().any(|f| f.is_empty()) {
+                return Err(format!("Empty field detected at line {}", line_num + 1).into());
+            }
+
+            records.push(fields);
+        }
+
+        if records.is_empty() {
+            return Err("No valid data records found".into());
+        }
+
+        Ok(records)
+    }
+
+    pub fn validate_numeric_fields(&self, records: &[Vec<String>], field_index: usize) -> Result<Vec<f64>, Box<dyn Error>> {
+        let mut numeric_values = Vec::new();
+
+        for (row_num, record) in records.iter().enumerate() {
+            if field_index >= record.len() {
+                return Err(format!("Field index {} out of bounds at row {}", field_index, row_num + 1).into());
+            }
+
+            match record[field_index].parse::<f64>() {
+                Ok(value) => numeric_values.push(value),
+                Err(_) => return Err(format!("Non-numeric value '{}' at row {} field {}", 
+                    record[field_index], row_num + 1, field_index).into()),
+            }
+        }
+
+        Ok(numeric_values)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_process_csv() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,city").unwrap();
+        writeln!(temp_file, "Alice,30,New York").unwrap();
+        writeln!(temp_file, "Bob,25,London").unwrap();
+
+        let processor = DataProcessor::new(',', true);
+        let result = processor.process_file(temp_file.path());
+        
+        assert!(result.is_ok());
+        let records = result.unwrap();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0], vec!["Alice", "30", "New York"]);
+    }
+
+    #[test]
+    fn test_validate_numeric() {
+        let records = vec![
+            vec!["10.5".to_string(), "text".to_string()],
+            vec!["20.0".to_string(), "more".to_string()],
+        ];
+        
+        let processor = DataProcessor::new(',', false);
+        let result = processor.validate_numeric_fields(&records, 0);
+        
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), vec![10.5, 20.0]);
+    }
+}

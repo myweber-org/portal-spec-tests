@@ -1,84 +1,82 @@
 
-use std::error::Error;
-use std::fs::File;
-use std::path::Path;
+use std::collections::HashMap;
 
-pub struct DataSet {
-    values: Vec<f64>,
+pub struct DataProcessor {
+    cache: HashMap<String, Vec<f64>>,
 }
 
-impl DataSet {
+impl DataProcessor {
     pub fn new() -> Self {
-        DataSet { values: Vec::new() }
+        DataProcessor {
+            cache: HashMap::new(),
+        }
     }
 
-    pub fn from_csv<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn Error>> {
-        let file = File::open(path)?;
-        let mut rdr = csv::Reader::from_reader(file);
-        let mut values = Vec::new();
-
-        for result in rdr.records() {
-            let record = result?;
-            for field in record.iter() {
-                if let Ok(num) = field.parse::<f64>() {
-                    values.push(num);
-                }
-            }
+    pub fn process_numeric_data(&mut self, key: &str, data: &[f64]) -> Result<Vec<f64>, String> {
+        if data.is_empty() {
+            return Err("Empty data provided".to_string());
         }
 
-        Ok(DataSet { values })
-    }
-
-    pub fn add_value(&mut self, value: f64) {
-        self.values.push(value);
-    }
-
-    pub fn calculate_mean(&self) -> Option<f64> {
-        if self.values.is_empty() {
-            return None;
+        if let Some(cached) = self.cache.get(key) {
+            return Ok(cached.clone());
         }
-        let sum: f64 = self.values.iter().sum();
-        Some(sum / self.values.len() as f64)
+
+        let validated = self.validate_data(data)?;
+        let transformed = self.transform_data(&validated);
+        
+        self.cache.insert(key.to_string(), transformed.clone());
+        Ok(transformed)
     }
 
-    pub fn calculate_std_dev(&self) -> Option<f64> {
-        if self.values.len() < 2 {
-            return None;
+    fn validate_data(&self, data: &[f64]) -> Result<Vec<f64>, String> {
+        if data.iter().any(|&x| x.is_nan() || x.is_infinite()) {
+            return Err("Invalid numeric values detected".to_string());
         }
-        let mean = self.calculate_mean()?;
-        let variance: f64 = self.values
-            .iter()
-            .map(|&x| (x - mean).powi(2))
-            .sum::<f64>() / (self.values.len() - 1) as f64;
-        Some(variance.sqrt())
+        Ok(data.to_vec())
     }
 
-    pub fn get_summary(&self) -> SummaryStats {
-        SummaryStats {
-            count: self.values.len(),
-            mean: self.calculate_mean(),
-            std_dev: self.calculate_std_dev(),
-            min: self.values.iter().copied().reduce(f64::min),
-            max: self.values.iter().copied().reduce(f64::max),
-        }
+    fn transform_data(&self, data: &[f64]) -> Vec<f64> {
+        let mean = data.iter().sum::<f64>() / data.len() as f64;
+        data.iter()
+            .map(|&x| (x - mean).abs())
+            .collect()
+    }
+
+    pub fn clear_cache(&mut self) {
+        self.cache.clear();
+    }
+
+    pub fn get_cache_stats(&self) -> (usize, usize) {
+        let total_items: usize = self.cache.values().map(|v| v.len()).sum();
+        (self.cache.len(), total_items)
     }
 }
 
-pub struct SummaryStats {
-    pub count: usize,
-    pub mean: Option<f64>,
-    pub std_dev: Option<f64>,
-    pub min: Option<f64>,
-    pub max: Option<f64>,
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-impl std::fmt::Display for SummaryStats {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Data Summary:")?;
-        writeln!(f, "  Count: {}", self.count)?;
-        writeln!(f, "  Mean: {:.4}", self.mean.unwrap_or(f64::NAN))?;
-        writeln!(f, "  Std Dev: {:.4}", self.std_dev.unwrap_or(f64::NAN))?;
-        writeln!(f, "  Min: {:.4}", self.min.unwrap_or(f64::NAN))?;
-        write!(f, "  Max: {:.4}", self.max.unwrap_or(f64::NAN))
+    #[test]
+    fn test_data_processing() {
+        let mut processor = DataProcessor::new();
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        
+        let result = processor.process_numeric_data("test", &data);
+        assert!(result.is_ok());
+        
+        let transformed = result.unwrap();
+        assert_eq!(transformed.len(), 5);
+        
+        let stats = processor.get_cache_stats();
+        assert_eq!(stats.0, 1);
+    }
+
+    #[test]
+    fn test_invalid_data() {
+        let mut processor = DataProcessor::new();
+        let data = vec![1.0, f64::NAN, 3.0];
+        
+        let result = processor.process_numeric_data("invalid", &data);
+        assert!(result.is_err());
     }
 }

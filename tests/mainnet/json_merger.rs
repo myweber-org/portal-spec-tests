@@ -89,3 +89,68 @@ mod tests {
         assert_eq!(base, json!({"b": {"d": 3}}));
     }
 }
+use serde_json::{Map, Value};
+use std::collections::HashSet;
+
+pub fn merge_json(base: &mut Value, update: &Value, strategy: MergeStrategy) -> Result<(), String> {
+    match (base, update) {
+        (Value::Object(base_map), Value::Object(update_map)) => {
+            merge_objects(base_map, update_map, strategy)
+        }
+        _ => Err("Both values must be JSON objects".to_string()),
+    }
+}
+
+fn merge_objects(
+    base: &mut Map<String, Value>,
+    update: &Map<String, Value>,
+    strategy: MergeStrategy,
+) -> Result<(), String> {
+    for (key, update_value) in update {
+        match base.get_mut(key) {
+            Some(base_value) => {
+                if let (Value::Object(base_obj), Value::Object(update_obj)) = (base_value, update_value) {
+                    merge_objects(base_obj, update_obj, strategy)?;
+                } else {
+                    handle_conflict(key, base_value, update_value, strategy)?;
+                }
+            }
+            None => {
+                base.insert(key.clone(), update_value.clone());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn handle_conflict(
+    key: &str,
+    base: &mut Value,
+    update: &Value,
+    strategy: MergeStrategy,
+) -> Result<(), String> {
+    match strategy {
+        MergeStrategy::PreferUpdate => *base = update.clone(),
+        MergeStrategy::PreferBase => (),
+        MergeStrategy::CombineArrays => {
+            if let (Value::Array(base_arr), Value::Array(update_arr)) = (base, update) {
+                let combined: HashSet<_> = base_arr.iter().chain(update_arr).cloned().collect();
+                *base = Value::Array(combined.into_iter().collect());
+            } else {
+                return Err(format!("Type mismatch for key '{}': cannot combine non-array values", key));
+            }
+        }
+        MergeStrategy::FailOnConflict => {
+            return Err(format!("Conflict detected for key '{}'", key));
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum MergeStrategy {
+    PreferUpdate,
+    PreferBase,
+    CombineArrays,
+    FailOnConflict,
+}

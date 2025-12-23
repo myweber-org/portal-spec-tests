@@ -218,4 +218,77 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     Ok(())
+}use csv::{Reader, Writer};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    id: u32,
+    name: String,
+    category: String,
+    value: f64,
+    active: bool,
+}
+
+fn process_csv(input_path: &str, output_path: &str, min_value: f64) -> Result<(), Box<dyn Error>> {
+    let mut reader = Reader::from_path(input_path)?;
+    let mut writer = Writer::from_path(output_path)?;
+
+    let mut total_value = 0.0;
+    let mut active_count = 0;
+
+    for result in reader.deserialize() {
+        let record: Record = result?;
+
+        if record.value >= min_value {
+            writer.serialize(&record)?;
+
+            total_value += record.value;
+            if record.active {
+                active_count += 1;
+            }
+        }
+    }
+
+    writer.flush()?;
+
+    println!("Processing complete:");
+    println!("  Total filtered value: {:.2}", total_value);
+    println!("  Active records: {}", active_count);
+    println!("  Output written to: {}", output_path);
+
+    Ok(())
+}
+
+fn generate_sample_csv(path: &str) -> Result<(), Box<dyn Error>> {
+    let mut writer = Writer::from_path(path)?;
+
+    let sample_data = vec![
+        Record { id: 1, name: String::from("Item A"), category: String::from("Electronics"), value: 125.50, active: true },
+        Record { id: 2, name: String::from("Item B"), category: String::from("Books"), value: 25.99, active: true },
+        Record { id: 3, name: String::from("Item C"), category: String::from("Clothing"), value: 45.75, active: false },
+        Record { id: 4, name: String::from("Item D"), category: String::from("Electronics"), value: 89.99, active: true },
+        Record { id: 5, name: String::from("Item E"), category: String::from("Home"), value: 15.25, active: true },
+    ];
+
+    for record in sample_data {
+        writer.serialize(&record)?;
+    }
+
+    writer.flush()?;
+    println!("Sample CSV generated at: {}", path);
+    Ok(())
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let input_file = "sample_data.csv";
+    let output_file = "filtered_data.csv";
+    let filter_threshold = 30.0;
+
+    generate_sample_csv(input_file)?;
+    process_csv(input_file, output_file, filter_threshold)?;
+
+    Ok(())
 }

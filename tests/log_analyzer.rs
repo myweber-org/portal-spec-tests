@@ -85,4 +85,100 @@ mod tests {
         assert_eq!(*stats.get("warnings").unwrap(), 1);
         assert_eq!(*stats.get("info").unwrap(), 2);
     }
+}use std::collections::HashMap;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug)]
+pub struct LogSummary {
+    pub total_lines: usize,
+    pub error_count: usize,
+    pub warning_count: usize,
+    pub info_count: usize,
+    pub unique_errors: HashMap<String, usize>,
+}
+
+impl LogSummary {
+    pub fn new() -> Self {
+        LogSummary {
+            total_lines: 0,
+            error_count: 0,
+            warning_count: 0,
+            info_count: 0,
+            unique_errors: HashMap::new(),
+        }
+    }
+
+    pub fn analyze_file<P: AsRef<Path>>(path: P) -> std::io::Result<Self> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut summary = LogSummary::new();
+
+        for line in reader.lines() {
+            let line = line?;
+            summary.process_line(&line);
+        }
+
+        Ok(summary)
+    }
+
+    fn process_line(&mut self, line: &str) {
+        self.total_lines += 1;
+
+        if line.contains("[ERROR]") {
+            self.error_count += 1;
+            self.extract_error_pattern(line);
+        } else if line.contains("[WARN]") {
+            self.warning_count += 1;
+        } else if line.contains("[INFO]") {
+            self.info_count += 1;
+        }
+    }
+
+    fn extract_error_pattern(&mut self, line: &str) {
+        let parts: Vec<&str> = line.split(": ").collect();
+        if parts.len() > 1 {
+            let error_msg = parts[1].to_string();
+            *self.unique_errors.entry(error_msg).or_insert(0) += 1;
+        }
+    }
+
+    pub fn print_summary(&self) {
+        println!("Log Analysis Summary:");
+        println!("Total lines processed: {}", self.total_lines);
+        println!("Error count: {}", self.error_count);
+        println!("Warning count: {}", self.warning_count);
+        println!("Info count: {}", self.info_count);
+        println!("\nUnique error patterns:");
+        
+        for (error, count) in &self.unique_errors {
+            println!("  {}: {}", error, count);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_log_analysis() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "[INFO] Application started").unwrap();
+        writeln!(temp_file, "[WARN] Low memory detected").unwrap();
+        writeln!(temp_file, "[ERROR] Database connection failed: timeout").unwrap();
+        writeln!(temp_file, "[ERROR] Database connection failed: timeout").unwrap();
+        writeln!(temp_file, "[INFO] User login successful").unwrap();
+
+        let summary = LogSummary::analyze_file(temp_file.path()).unwrap();
+        
+        assert_eq!(summary.total_lines, 5);
+        assert_eq!(summary.error_count, 2);
+        assert_eq!(summary.warning_count, 1);
+        assert_eq!(summary.info_count, 2);
+        assert_eq!(summary.unique_errors.get("timeout"), Some(&2));
+    }
 }

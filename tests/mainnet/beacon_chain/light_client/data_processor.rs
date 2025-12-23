@@ -381,3 +381,163 @@ mod tests {
         assert!(validation_result.is_err());
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub value: f64,
+    pub timestamp: String,
+}
+
+pub struct DataProcessor {
+    records: Vec<DataRecord>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<usize, Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut count = 0;
+
+        for (line_num, line) in reader.lines().enumerate() {
+            let line = line?;
+            
+            if line_num == 0 {
+                continue;
+            }
+
+            let parts: Vec<&str> = line.split(',').collect();
+            if parts.len() != 3 {
+                continue;
+            }
+
+            let id = match parts[0].parse::<u32>() {
+                Ok(id) => id,
+                Err(_) => continue,
+            };
+
+            let value = match parts[1].parse::<f64>() {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
+
+            let timestamp = parts[2].to_string();
+
+            if !Self::validate_timestamp(&timestamp) {
+                continue;
+            }
+
+            self.records.push(DataRecord {
+                id,
+                value,
+                timestamp,
+            });
+
+            count += 1;
+        }
+
+        Ok(count)
+    }
+
+    fn validate_timestamp(timestamp: &str) -> bool {
+        let parts: Vec<&str> = timestamp.split('-').collect();
+        if parts.len() != 3 {
+            return false;
+        }
+
+        parts[0].len() == 4 && 
+        parts[1].len() == 2 && 
+        parts[2].len() == 2
+    }
+
+    pub fn filter_by_value_range(&self, min: f64, max: f64) -> Vec<DataRecord> {
+        self.records
+            .iter()
+            .filter(|record| record.value >= min && record.value <= max)
+            .cloned()
+            .collect()
+    }
+
+    pub fn calculate_statistics(&self) -> (f64, f64, f64) {
+        if self.records.is_empty() {
+            return (0.0, 0.0, 0.0);
+        }
+
+        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        let count = self.records.len() as f64;
+        let mean = sum / count;
+
+        let variance: f64 = self.records
+            .iter()
+            .map(|r| (r.value - mean).powi(2))
+            .sum::<f64>() / count;
+
+        let std_dev = variance.sqrt();
+
+        (mean, variance, std_dev)
+    }
+
+    pub fn get_record_count(&self) -> usize {
+        self.records.len()
+    }
+
+    pub fn clear(&mut self) {
+        self.records.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_data_processor() {
+        let mut processor = DataProcessor::new();
+        assert_eq!(processor.get_record_count(), 0);
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,value,timestamp").unwrap();
+        writeln!(temp_file, "1,10.5,2023-01-15").unwrap();
+        writeln!(temp_file, "2,20.3,2023-01-16").unwrap();
+        writeln!(temp_file, "3,15.7,2023-01-17").unwrap();
+
+        let count = processor.load_from_csv(temp_file.path()).unwrap();
+        assert_eq!(count, 3);
+        assert_eq!(processor.get_record_count(), 3);
+
+        let filtered = processor.filter_by_value_range(10.0, 16.0);
+        assert_eq!(filtered.len(), 2);
+
+        let stats = processor.calculate_statistics();
+        assert!(stats.0 > 0.0);
+
+        processor.clear();
+        assert_eq!(processor.get_record_count(), 0);
+    }
+
+    #[test]
+    fn test_invalid_data_handling() {
+        let mut processor = DataProcessor::new();
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,value,timestamp").unwrap();
+        writeln!(temp_file, "invalid,10.5,2023-01-15").unwrap();
+        writeln!(temp_file, "2,not_a_number,2023-01-16").unwrap();
+        writeln!(temp_file, "3,15.7,invalid-date").unwrap();
+
+        let count = processor.load_from_csv(temp_file.path()).unwrap();
+        assert_eq!(count, 0);
+    }
+}

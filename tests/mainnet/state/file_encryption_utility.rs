@@ -253,4 +253,152 @@ pub fn interactive_decrypt() -> Result<(), String> {
     decrypt_file(input_path, output_path, password.trim())?;
     println!("File decrypted successfully!");
     Ok(())
+}use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce,
+};
+use argon2::{
+    password_hash::{rand_core::OsRng as ArgonRng, PasswordHasher, SaltString},
+    Argon2, ParamsBuilder,
+};
+use std::{
+    fs::{self, File},
+    io::{Read, Write},
+    path::Path,
+};
+
+const NONCE_SIZE: usize = 12;
+const SALT_SIZE: usize = 16;
+
+pub struct FileEncryptor {
+    key: [u8; 32],
+}
+
+impl FileEncryptor {
+    pub fn from_password(password: &str, salt: &[u8]) -> Result<Self, String> {
+        let argon2 = Argon2::new(
+            argon2::Algorithm::Argon2id,
+            argon2::Version::V0x13,
+            ParamsBuilder::new()
+                .output_len(32)
+                .p_cost(4)
+                .m_cost(8192)
+                .t_cost(3)
+                .build()
+                .map_err(|e| format!("Argon2 params error: {}", e))?,
+        );
+
+        let salt_string = SaltString::encode_b64(salt)
+            .map_err(|e| format!("Salt encoding error: {}", e))?;
+        
+        let password_hash = argon2
+            .hash_password(password.as_bytes(), &salt_string)
+            .map_err(|e| format!("Key derivation error: {}", e))?
+            .hash
+            .ok_or("No hash generated")?;
+
+        let mut key = [0u8; 32];
+        key.copy_from_slice(&password_hash.as_bytes()[..32]);
+        
+        Ok(Self { key })
+    }
+
+    pub fn encrypt_file(&self, input_path: &Path, output_path: &Path) -> Result<(), String> {
+        let mut file = File::open(input_path)
+            .map_err(|e| format!("Failed to open input file: {}", e))?;
+        
+        let mut plaintext = Vec::new();
+        file.read_to_end(&mut plaintext)
+            .map_err(|e| format!("Failed to read file: {}", e))?;
+
+        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&self.key));
+        let nonce = Nonce::from_slice(&Self::generate_nonce());
+        
+        let ciphertext = cipher
+            .encrypt(nonce, plaintext.as_ref())
+            .map_err(|e| format!("Encryption failed: {}", e))?;
+
+        let mut output_file = File::create(output_path)
+            .map_err(|e| format!("Failed to create output file: {}", e))?;
+        
+        output_file.write_all(&ciphertext)
+            .map_err(|e| format!("Failed to write encrypted data: {}", e))?;
+
+        Ok(())
+    }
+
+    pub fn decrypt_file(&self, input_path: &Path, output_path: &Path) -> Result<(), String> {
+        let mut file = File::open(input_path)
+            .map_err(|e| format!("Failed to open encrypted file: {}", e))?;
+        
+        let mut ciphertext = Vec::new();
+        file.read_to_end(&mut ciphertext)
+            .map_err(|e| format!("Failed to read encrypted file: {}", e))?;
+
+        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&self.key));
+        let nonce = Nonce::from_slice(&Self::generate_nonce());
+        
+        let plaintext = cipher
+            .decrypt(nonce, ciphertext.as_ref())
+            .map_err(|e| format!("Decryption failed: {}", e))?;
+
+        let mut output_file = File::create(output_path)
+            .map_err(|e| format!("Failed to create output file: {}", e))?;
+        
+        output_file.write_all(&plaintext)
+            .map_err(|e| format!("Failed to write decrypted data: {}", e))?;
+
+        Ok(())
+    }
+
+    fn generate_nonce() -> [u8; NONCE_SIZE] {
+        let mut nonce = [0u8; NONCE_SIZE];
+        OsRng.fill_bytes(&mut nonce);
+        nonce
+    }
+
+    pub fn generate_salt() -> [u8; SALT_SIZE] {
+        let mut salt = [0u8; SALT_SIZE];
+        ArgonRng.fill_bytes(&mut salt);
+        salt
+    }
+}
+
+pub fn process_directory(
+    encryptor: &FileEncryptor,
+    dir_path: &Path,
+    operation: &str,
+) -> Result<(), String> {
+    if !dir_path.is_dir() {
+        return Err("Provided path is not a directory".to_string());
+    }
+
+    for entry in fs::read_dir(dir_path)
+        .map_err(|e| format!("Failed to read directory: {}", e))?
+    {
+        let entry = entry.map_err(|e| format!("Directory entry error: {}", e))?;
+        let path = entry.path();
+        
+        if path.is_file() {
+            let extension = path.extension()
+                .and_then(|ext| ext.to_str())
+                .unwrap_or("");
+            
+            if !extension.is_empty() {
+                let output_path = path.with_extension(match operation {
+                    "encrypt" => format!("{}.enc", extension),
+                    "decrypt" => extension.trim_end_matches(".enc").to_string(),
+                    _ => return Err("Invalid operation".to_string()),
+                });
+
+                match operation {
+                    "encrypt" => encryptor.encrypt_file(&path, &output_path)?,
+                    "decrypt" => encryptor.decrypt_file(&path, &output_path)?,
+                    _ => unreachable!(),
+                }
+            }
+        }
+    }
+
+    Ok(())
 }

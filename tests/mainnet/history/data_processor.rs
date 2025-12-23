@@ -622,4 +622,85 @@ mod tests {
         let average_age = processor.calculate_average(1).unwrap();
         assert_eq!(average_age, 30.0);
     }
+}use csv::Reader;
+use serde::Deserialize;
+use std::error::Error;
+use std::path::Path;
+
+#[derive(Debug, Deserialize)]
+pub struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
+}
+
+pub fn process_csv_file(file_path: &Path) -> Result<Vec<Record>, Box<dyn Error>> {
+    let mut reader = Reader::from_path(file_path)?;
+    let mut records = Vec::new();
+
+    for result in reader.deserialize() {
+        let record: Record = result?;
+        validate_record(&record)?;
+        records.push(record);
+    }
+
+    if records.is_empty() {
+        return Err("No valid records found in CSV file".into());
+    }
+
+    Ok(records)
+}
+
+fn validate_record(record: &Record) -> Result<(), String> {
+    if record.name.trim().is_empty() {
+        return Err(format!("Empty name for record ID {}", record.id));
+    }
+
+    if record.value < 0.0 {
+        return Err(format!("Negative value {} for record ID {}", record.value, record.id));
+    }
+
+    Ok(())
+}
+
+pub fn calculate_average(records: &[Record]) -> Option<f64> {
+    if records.is_empty() {
+        return None;
+    }
+
+    let sum: f64 = records.iter().map(|r| r.value).sum();
+    Some(sum / records.len() as f64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_valid_csv_processing() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,name,value,active").unwrap();
+        writeln!(temp_file, "1,ItemA,25.5,true").unwrap();
+        writeln!(temp_file, "2,ItemB,30.0,false").unwrap();
+
+        let records = process_csv_file(temp_file.path()).unwrap();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].name, "ItemA");
+        assert_eq!(records[1].value, 30.0);
+    }
+
+    #[test]
+    fn test_average_calculation() {
+        let records = vec![
+            Record { id: 1, name: "Test1".to_string(), value: 10.0, active: true },
+            Record { id: 2, name: "Test2".to_string(), value: 20.0, active: false },
+            Record { id: 3, name: "Test3".to_string(), value: 30.0, active: true },
+        ];
+
+        let avg = calculate_average(&records).unwrap();
+        assert!((avg - 20.0).abs() < f64::EPSILON);
+    }
 }

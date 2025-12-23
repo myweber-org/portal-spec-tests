@@ -693,3 +693,97 @@ mod tests {
         assert_eq!(filtered.len(), 3);
     }
 }
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DataRecord {
+    pub id: u32,
+    pub value: f64,
+    pub timestamp: i64,
+}
+
+#[derive(Debug)]
+pub enum DataError {
+    InvalidValue,
+    InvalidTimestamp,
+    MissingField,
+}
+
+impl fmt::Display for DataError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DataError::InvalidValue => write!(f, "Value must be between 0.0 and 1000.0"),
+            DataError::InvalidTimestamp => write!(f, "Timestamp must be non-negative"),
+            DataError::MissingField => write!(f, "Required field is missing"),
+        }
+    }
+}
+
+impl Error for DataError {}
+
+pub fn validate_record(record: &DataRecord) -> Result<(), DataError> {
+    if record.value < 0.0 || record.value > 1000.0 {
+        return Err(DataError::InvalidValue);
+    }
+    
+    if record.timestamp < 0 {
+        return Err(DataError::InvalidTimestamp);
+    }
+    
+    Ok(())
+}
+
+pub fn transform_value(value: f64, multiplier: f64) -> f64 {
+    (value * multiplier).round()
+}
+
+pub fn process_records(records: Vec<DataRecord>) -> Result<Vec<DataRecord>, DataError> {
+    let mut processed = Vec::with_capacity(records.len());
+    
+    for record in records {
+        validate_record(&record)?;
+        
+        let transformed_record = DataRecord {
+            value: transform_value(record.value, 1.5),
+            ..record
+        };
+        
+        processed.push(transformed_record);
+    }
+    
+    Ok(processed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_validate_valid_record() {
+        let record = DataRecord {
+            id: 1,
+            value: 500.0,
+            timestamp: 1625097600,
+        };
+        
+        assert!(validate_record(&record).is_ok());
+    }
+    
+    #[test]
+    fn test_validate_invalid_value() {
+        let record = DataRecord {
+            id: 1,
+            value: 1500.0,
+            timestamp: 1625097600,
+        };
+        
+        assert!(matches!(validate_record(&record), Err(DataError::InvalidValue)));
+    }
+    
+    #[test]
+    fn test_transform_value() {
+        assert_eq!(transform_value(100.0, 1.5), 150.0);
+        assert_eq!(transform_value(33.33, 2.0), 67.0);
+    }
+}

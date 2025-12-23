@@ -391,3 +391,154 @@ mod tests {
         assert!((average - 15.416666).abs() < 0.0001);
     }
 }
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
+}
+
+#[derive(Debug)]
+pub enum ProcessingError {
+    InvalidData(String),
+    TransformationError(String),
+    ValidationFailed(String),
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProcessingError::InvalidData(msg) => write!(f, "Invalid data: {}", msg),
+            ProcessingError::TransformationError(msg) => write!(f, "Transformation error: {}", msg),
+            ProcessingError::ValidationFailed(msg) => write!(f, "Validation failed: {}", msg),
+        }
+    }
+}
+
+impl Error for ProcessingError {}
+
+impl DataRecord {
+    pub fn new(id: u32, values: Vec<f64>) -> Self {
+        Self {
+            id,
+            values,
+            metadata: HashMap::new(),
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), ProcessingError> {
+        if self.id == 0 {
+            return Err(ProcessingError::ValidationFailed(
+                "ID cannot be zero".to_string(),
+            ));
+        }
+
+        if self.values.is_empty() {
+            return Err(ProcessingError::ValidationFailed(
+                "Values cannot be empty".to_string(),
+            ));
+        }
+
+        for value in &self.values {
+            if !value.is_finite() {
+                return Err(ProcessingError::InvalidData(
+                    "Values must be finite numbers".to_string(),
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn normalize(&mut self) -> Result<(), ProcessingError> {
+        self.validate()?;
+
+        let sum: f64 = self.values.iter().sum();
+        if sum.abs() < f64::EPSILON {
+            return Err(ProcessingError::TransformationError(
+                "Cannot normalize zero vector".to_string(),
+            ));
+        }
+
+        for value in &mut self.values {
+            *value /= sum;
+        }
+
+        Ok(())
+    }
+
+    pub fn add_metadata(&mut self, key: String, value: String) {
+        self.metadata.insert(key, value);
+    }
+
+    pub fn get_statistics(&self) -> Result<(f64, f64, f64), ProcessingError> {
+        self.validate()?;
+
+        let min = self
+            .values
+            .iter()
+            .fold(f64::INFINITY, |a, &b| a.min(b));
+        let max = self
+            .values
+            .iter()
+            .fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+        let mean = self.values.iter().sum::<f64>() / self.values.len() as f64;
+
+        Ok((min, max, mean))
+    }
+}
+
+pub fn process_records(records: &mut [DataRecord]) -> Result<Vec<DataRecord>, ProcessingError> {
+    let mut processed = Vec::with_capacity(records.len());
+
+    for record in records {
+        record.validate()?;
+        let mut processed_record = record.clone();
+        processed_record.normalize()?;
+        processed_record.add_metadata(
+            "processed_timestamp".to_string(),
+            chrono::Utc::now().to_rfc3339(),
+        );
+        processed.push(processed_record);
+    }
+
+    Ok(processed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_record() {
+        let record = DataRecord::new(1, vec![1.0, 2.0, 3.0]);
+        assert!(record.validate().is_ok());
+    }
+
+    #[test]
+    fn test_invalid_record_zero_id() {
+        let record = DataRecord::new(0, vec![1.0, 2.0, 3.0]);
+        assert!(record.validate().is_err());
+    }
+
+    #[test]
+    fn test_normalization() {
+        let mut record = DataRecord::new(1, vec![1.0, 2.0, 3.0]);
+        assert!(record.normalize().is_ok());
+        let sum: f64 = record.values.iter().sum();
+        assert!((sum - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_statistics() {
+        let record = DataRecord::new(1, vec![1.0, 2.0, 3.0, 4.0, 5.0]);
+        let (min, max, mean) = record.get_statistics().unwrap();
+        assert_eq!(min, 1.0);
+        assert_eq!(max, 5.0);
+        assert_eq!(mean, 3.0);
+    }
+}

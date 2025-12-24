@@ -704,3 +704,172 @@ mod tests {
         assert!((avg - 20.0).abs() < f64::EPSILON);
     }
 }
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum DataError {
+    #[error("Invalid input data: {0}")]
+    ValidationError(String),
+    #[error("Transformation failed: {0}")]
+    TransformationError(String),
+    #[error("IO error: {0}")]
+    IoError(#[from] std::io::Error),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataRecord {
+    pub id: u64,
+    pub value: f64,
+    pub timestamp: i64,
+}
+
+impl DataRecord {
+    pub fn new(id: u64, value: f64, timestamp: i64) -> Self {
+        Self {
+            id,
+            value,
+            timestamp,
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), DataError> {
+        if self.id == 0 {
+            return Err(DataError::ValidationError("ID cannot be zero".to_string()));
+        }
+        
+        if self.value.is_nan() || self.value.is_infinite() {
+            return Err(DataError::ValidationError(
+                "Value must be a finite number".to_string(),
+            ));
+        }
+        
+        if self.timestamp < 0 {
+            return Err(DataError::ValidationError(
+                "Timestamp cannot be negative".to_string(),
+            ));
+        }
+        
+        Ok(())
+    }
+}
+
+pub struct DataProcessor {
+    records: Vec<DataRecord>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        Self {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn add_record(&mut self, record: DataRecord) -> Result<(), DataError> {
+        record.validate()?;
+        self.records.push(record);
+        Ok(())
+    }
+
+    pub fn process_records(&self) -> Result<Vec<f64>, DataError> {
+        if self.records.is_empty() {
+            return Err(DataError::TransformationError(
+                "No records to process".to_string(),
+            ));
+        }
+
+        let mut results = Vec::with_capacity(self.records.len());
+        
+        for record in &self.records {
+            let processed_value = record.value * 2.0;
+            
+            if processed_value.is_nan() || processed_value.is_infinite() {
+                return Err(DataError::TransformationError(
+                    "Processed value became invalid".to_string(),
+                ));
+            }
+            
+            results.push(processed_value);
+        }
+        
+        Ok(results)
+    }
+
+    pub fn calculate_statistics(&self) -> Result<(f64, f64, f64), DataError> {
+        if self.records.is_empty() {
+            return Err(DataError::TransformationError(
+                "No records for statistics".to_string(),
+            ));
+        }
+
+        let values: Vec<f64> = self.records.iter().map(|r| r.value).collect();
+        
+        let sum: f64 = values.iter().sum();
+        let count = values.len() as f64;
+        let mean = sum / count;
+        
+        let variance: f64 = values
+            .iter()
+            .map(|&v| (v - mean).powi(2))
+            .sum::<f64>()
+            / count;
+        
+        let std_dev = variance.sqrt();
+        
+        Ok((mean, variance, std_dev))
+    }
+
+    pub fn save_to_file(&self, path: &str) -> Result<(), DataError> {
+        let json_data = serde_json::to_string_pretty(&self.records)
+            .map_err(|e| DataError::TransformationError(e.to_string()))?;
+        
+        std::fs::write(path, json_data)?;
+        Ok(())
+    }
+
+    pub fn load_from_file(path: &str) -> Result<Self, DataError> {
+        let content = std::fs::read_to_string(path)?;
+        let records: Vec<DataRecord> = serde_json::from_str(&content)
+            .map_err(|e| DataError::ValidationError(e.to_string()))?;
+        
+        Ok(Self { records })
+    }
+}
+
+impl Default for DataProcessor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_record() {
+        let record = DataRecord::new(1, 42.5, 1234567890);
+        assert!(record.validate().is_ok());
+    }
+
+    #[test]
+    fn test_invalid_record() {
+        let record = DataRecord::new(0, 42.5, 1234567890);
+        assert!(record.validate().is_err());
+    }
+
+    #[test]
+    fn test_processor_operations() {
+        let mut processor = DataProcessor::new();
+        
+        let record = DataRecord::new(1, 10.0, 1234567890);
+        assert!(processor.add_record(record).is_ok());
+        
+        let stats = processor.calculate_statistics();
+        assert!(stats.is_ok());
+        
+        let processed = processor.process_records();
+        assert!(processed.is_ok());
+        assert_eq!(processed.unwrap()[0], 20.0);
+    }
+}

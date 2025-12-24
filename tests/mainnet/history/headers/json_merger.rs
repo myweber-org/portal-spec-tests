@@ -133,3 +133,63 @@ mod tests {
         assert!(result.contains("name_conflict"));
     }
 }
+use std::fs::{self, File};
+use std::io::{BufReader, Read, Write};
+use std::path::Path;
+use serde_json::{Value, json};
+
+pub fn merge_json_files(input_paths: &[&str], output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let mut merged_array = Vec::new();
+
+    for input_path in input_paths {
+        let path = Path::new(input_path);
+        if !path.exists() {
+            return Err(format!("Input file not found: {}", input_path).into());
+        }
+
+        let mut file = File::open(path)?;
+        let mut contents = String::new();
+        file.read_to_string(&mut contents)?;
+
+        let json_value: Value = serde_json::from_str(&contents)?;
+        merged_array.push(json_value);
+    }
+
+    let output_file = File::create(output_path)?;
+    let merged_json = json!(merged_array);
+    serde_json::to_writer_pretty(output_file, &merged_json)?;
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_merge_json_files() {
+        let json1 = r#"{"name": "Alice", "age": 30}"#;
+        let json2 = r#"{"name": "Bob", "age": 25}"#;
+
+        let file1 = NamedTempFile::new().unwrap();
+        let file2 = NamedTempFile::new().unwrap();
+        let output_file = NamedTempFile::new().unwrap();
+
+        fs::write(file1.path(), json1).unwrap();
+        fs::write(file2.path(), json2).unwrap();
+
+        let input_paths = vec![
+            file1.path().to_str().unwrap(),
+            file2.path().to_str().unwrap(),
+        ];
+
+        let result = merge_json_files(&input_paths, output_file.path().to_str().unwrap());
+        assert!(result.is_ok());
+
+        let output_content = fs::read_to_string(output_file.path()).unwrap();
+        let parsed: Value = serde_json::from_str(&output_content).unwrap();
+        assert!(parsed.is_array());
+        assert_eq!(parsed.as_array().unwrap().len(), 2);
+    }
+}

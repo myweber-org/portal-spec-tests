@@ -295,3 +295,118 @@ mod tests {
         assert_eq!(summary, Some((1, 100.0)));
     }
 }
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct ValidationError {
+    message: String,
+}
+
+impl fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Validation error: {}", self.message)
+    }
+}
+
+impl Error for ValidationError {}
+
+pub struct DataProcessor {
+    threshold: f64,
+}
+
+impl DataProcessor {
+    pub fn new(threshold: f64) -> Result<Self, ValidationError> {
+        if threshold < 0.0 || threshold > 1.0 {
+            return Err(ValidationError {
+                message: format!("Threshold {} must be between 0.0 and 1.0", threshold),
+            });
+        }
+
+        Ok(DataProcessor { threshold })
+    }
+
+    pub fn process_data(&self, values: &[f64]) -> Result<Vec<f64>, ValidationError> {
+        if values.is_empty() {
+            return Err(ValidationError {
+                message: "Input data cannot be empty".to_string(),
+            });
+        }
+
+        let mut result = Vec::with_capacity(values.len());
+        for &value in values {
+            if value.is_nan() || value.is_infinite() {
+                return Err(ValidationError {
+                    message: format!("Invalid numeric value encountered: {}", value),
+                });
+            }
+
+            let processed_value = if value >= self.threshold {
+                value * 2.0
+            } else {
+                value / 2.0
+            };
+
+            result.push(processed_value);
+        }
+
+        Ok(result)
+    }
+
+    pub fn calculate_statistics(&self, data: &[f64]) -> Result<(f64, f64), ValidationError> {
+        if data.len() < 2 {
+            return Err(ValidationError {
+                message: "Insufficient data for statistics calculation".to_string(),
+            });
+        }
+
+        let sum: f64 = data.iter().sum();
+        let mean = sum / data.len() as f64;
+
+        let variance: f64 = data
+            .iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>()
+            / (data.len() - 1) as f64;
+
+        Ok((mean, variance.sqrt()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_processor_creation() {
+        let processor = DataProcessor::new(0.5);
+        assert!(processor.is_ok());
+    }
+
+    #[test]
+    fn test_invalid_processor_creation() {
+        let processor = DataProcessor::new(1.5);
+        assert!(processor.is_err());
+    }
+
+    #[test]
+    fn test_data_processing() {
+        let processor = DataProcessor::new(0.5).unwrap();
+        let input = vec![0.3, 0.6, 0.8, 0.2];
+        let result = processor.process_data(&input).unwrap();
+        
+        assert_eq!(result.len(), 4);
+        assert_eq!(result[0], 0.15);
+        assert_eq!(result[1], 1.2);
+    }
+
+    #[test]
+    fn test_statistics_calculation() {
+        let processor = DataProcessor::new(0.5).unwrap();
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let (mean, std_dev) = processor.calculate_statistics(&data).unwrap();
+        
+        assert!((mean - 3.0).abs() < 1e-10);
+        assert!((std_dev - 1.5811388300841898).abs() < 1e-10);
+    }
+}

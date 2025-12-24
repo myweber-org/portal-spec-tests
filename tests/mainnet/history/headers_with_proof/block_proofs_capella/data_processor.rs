@@ -377,3 +377,126 @@ fn main() -> Result<(), Box<dyn Error>> {
     
     Ok(())
 }
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub value: f64,
+    pub timestamp: i64,
+}
+
+#[derive(Debug)]
+pub enum ValidationError {
+    InvalidId,
+    InvalidValue,
+    InvalidTimestamp,
+    MissingField,
+}
+
+impl fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ValidationError::InvalidId => write!(f, "ID must be greater than zero"),
+            ValidationError::InvalidValue => write!(f, "Value must be between 0.0 and 1000.0"),
+            ValidationError::InvalidTimestamp => write!(f, "Timestamp cannot be negative"),
+            ValidationError::MissingField => write!(f, "Required field is missing"),
+        }
+    }
+}
+
+impl Error for ValidationError {}
+
+pub fn validate_record(record: &DataRecord) -> Result<(), ValidationError> {
+    if record.id == 0 {
+        return Err(ValidationError::InvalidId);
+    }
+    
+    if record.value < 0.0 || record.value > 1000.0 {
+        return Err(ValidationError::InvalidValue);
+    }
+    
+    if record.timestamp < 0 {
+        return Err(ValidationError::InvalidTimestamp);
+    }
+    
+    Ok(())
+}
+
+pub fn transform_record(record: &DataRecord, multiplier: f64) -> DataRecord {
+    DataRecord {
+        id: record.id,
+        value: record.value * multiplier,
+        timestamp: record.timestamp,
+    }
+}
+
+pub fn process_records(records: Vec<DataRecord>, multiplier: f64) -> Result<Vec<DataRecord>, ValidationError> {
+    let mut processed_records = Vec::with_capacity(records.len());
+    
+    for record in records {
+        validate_record(&record)?;
+        let transformed = transform_record(&record, multiplier);
+        processed_records.push(transformed);
+    }
+    
+    Ok(processed_records)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_validate_record_valid() {
+        let record = DataRecord {
+            id: 1,
+            value: 100.0,
+            timestamp: 1625097600,
+        };
+        
+        assert!(validate_record(&record).is_ok());
+    }
+    
+    #[test]
+    fn test_validate_record_invalid_id() {
+        let record = DataRecord {
+            id: 0,
+            value: 100.0,
+            timestamp: 1625097600,
+        };
+        
+        assert!(matches!(validate_record(&record), Err(ValidationError::InvalidId)));
+    }
+    
+    #[test]
+    fn test_transform_record() {
+        let record = DataRecord {
+            id: 1,
+            value: 100.0,
+            timestamp: 1625097600,
+        };
+        
+        let transformed = transform_record(&record, 2.0);
+        assert_eq!(transformed.value, 200.0);
+        assert_eq!(transformed.id, record.id);
+        assert_eq!(transformed.timestamp, record.timestamp);
+    }
+    
+    #[test]
+    fn test_process_records() {
+        let records = vec![
+            DataRecord { id: 1, value: 50.0, timestamp: 1625097600 },
+            DataRecord { id: 2, value: 75.0, timestamp: 1625184000 },
+        ];
+        
+        let result = process_records(records, 3.0);
+        assert!(result.is_ok());
+        
+        let processed = result.unwrap();
+        assert_eq!(processed.len(), 2);
+        assert_eq!(processed[0].value, 150.0);
+        assert_eq!(processed[1].value, 225.0);
+    }
+}

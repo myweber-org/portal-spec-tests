@@ -379,3 +379,116 @@ impl AppConfig {
         Ok(())
     }
 }
+use std::collections::HashMap;
+use std::env;
+use regex::Regex;
+
+pub struct Config {
+    values: HashMap<String, String>,
+}
+
+impl Config {
+    pub fn from_file(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let content = std::fs::read_to_string(path)?;
+        Self::from_str(&content)
+    }
+
+    pub fn from_str(content: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let mut values = HashMap::new();
+        let var_pattern = Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")?;
+
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+
+            if let Some((key, mut value)) = line.split_once('=') {
+                let key = key.trim().to_string();
+                value = value.trim();
+
+                let mut processed_value = value.to_string();
+                for cap in var_pattern.captures_iter(value) {
+                    if let Some(var_name) = cap.get(1) {
+                        if let Ok(env_value) = env::var(var_name.as_str()) {
+                            processed_value = processed_value.replace(&cap[0], &env_value);
+                        }
+                    }
+                }
+
+                values.insert(key, processed_value);
+            }
+        }
+
+        Ok(Config { values })
+    }
+
+    pub fn get(&self, key: &str) -> Option<&String> {
+        self.values.get(key)
+    }
+
+    pub fn get_or_default(&self, key: &str, default: &str) -> String {
+        self.values.get(key).map(|s| s.as_str()).unwrap_or(default).to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_basic_parsing() {
+        let content = r#"
+            host=localhost
+            port=8080
+            # This is a comment
+            timeout=30
+        "#;
+
+        let config = Config::from_str(content).unwrap();
+        assert_eq!(config.get("host"), Some(&"localhost".to_string()));
+        assert_eq!(config.get("port"), Some(&"8080".to_string()));
+        assert_eq!(config.get("timeout"), Some(&"30".to_string()));
+        assert_eq!(config.get("nonexistent"), None);
+    }
+
+    #[test]
+    fn test_env_substitution() {
+        env::set_var("DB_HOST", "postgres-server");
+        env::set_var("API_PORT", "9000");
+
+        let content = r#"
+            database_host=${DB_HOST}
+            api_port=${API_PORT}
+            static_value=constant
+            mixed=server-${DB_HOST}-${API_PORT}
+        "#;
+
+        let config = Config::from_str(content).unwrap();
+        assert_eq!(config.get("database_host"), Some(&"postgres-server".to_string()));
+        assert_eq!(config.get("api_port"), Some(&"9000".to_string()));
+        assert_eq!(config.get("static_value"), Some(&"constant".to_string()));
+        assert_eq!(config.get("mixed"), Some(&"server-postgres-server-9000".to_string()));
+    }
+
+    #[test]
+    fn test_file_loading() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "key1=value1\nkey2=value2").unwrap();
+
+        let config = Config::from_file(temp_file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.get("key1"), Some(&"value1".to_string()));
+        assert_eq!(config.get("key2"), Some(&"value2".to_string()));
+    }
+
+    #[test]
+    fn test_get_or_default() {
+        let content = "existing=found";
+        let config = Config::from_str(content).unwrap();
+        
+        assert_eq!(config.get_or_default("existing", "default"), "found");
+        assert_eq!(config.get_or_default("missing", "default"), "default");
+    }
+}

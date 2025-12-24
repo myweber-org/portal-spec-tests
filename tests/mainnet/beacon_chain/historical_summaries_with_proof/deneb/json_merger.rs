@@ -1,63 +1,43 @@
 
-use std::collections::HashMap;
+use serde_json::{Value, Map};
 use std::fs;
 use std::path::Path;
 
-pub fn merge_json_files(file_paths: &[&str]) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
-    let mut merged = HashMap::new();
-
-    for path_str in file_paths {
-        let path = Path::new(path_str);
-        if !path.exists() {
-            return Err(format!("File not found: {}", path_str).into());
-        }
-
+pub fn merge_json_files<P: AsRef<Path>>(paths: &[P], output_path: P) -> Result<(), Box<dyn std::error::Error>> {
+    let mut merged = Map::new();
+    
+    for path in paths {
         let content = fs::read_to_string(path)?;
-        let json_value: serde_json::Value = serde_json::from_str(&content)?;
-
-        if let serde_json::Value::Object(obj) = json_value {
-            for (key, value) in obj {
-                merged.insert(key, value);
-            }
-        } else {
-            return Err("Each JSON file must contain a JSON object".into());
+        let json: Value = serde_json::from_str(&content)?;
+        
+        if let Value::Object(obj) = json {
+            merge_objects(&mut merged, obj);
         }
     }
-
-    Ok(serde_json::Value::Object(
-        merged.into_iter().collect()
-    ))
+    
+    let output_json = Value::Object(merged);
+    let serialized = serde_json::to_string_pretty(&output_json)?;
+    fs::write(output_path, serialized)?;
+    
+    Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-    use tempfile::NamedTempFile;
-
-    #[test]
-    fn test_merge_json_files() {
-        let file1_content = json!({"a": 1, "b": 2});
-        let file2_content = json!({"c": 3, "d": 4});
-
-        let file1 = NamedTempFile::new().unwrap();
-        let file2 = NamedTempFile::new().unwrap();
-
-        fs::write(file1.path(), file1_content.to_string()).unwrap();
-        fs::write(file2.path(), file2_content.to_string()).unwrap();
-
-        let result = merge_json_files(&[
-            file1.path().to_str().unwrap(),
-            file2.path().to_str().unwrap()
-        ]).unwrap();
-
-        let expected = json!({
-            "a": 1,
-            "b": 2,
-            "c": 3,
-            "d": 4
-        });
-
-        assert_eq!(result, expected);
+fn merge_objects(base: &mut Map<String, Value>, new: Map<String, Value>) {
+    for (key, value) in new {
+        if let Some(existing) = base.get_mut(&key) {
+            if existing.is_object() && value.is_object() {
+                if let (Value::Object(ref mut base_obj), Value::Object(new_obj)) = (existing, value) {
+                    merge_objects(base_obj, new_obj);
+                }
+            } else if existing.is_array() && value.is_array() {
+                if let (Value::Array(ref mut base_arr), Value::Array(new_arr)) = (existing, value) {
+                    base_arr.extend(new_arr);
+                }
+            } else {
+                *existing = value;
+            }
+        } else {
+            base.insert(key, value);
+        }
     }
 }

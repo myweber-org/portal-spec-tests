@@ -402,3 +402,100 @@ mod tests {
         assert_eq!(test_data.to_vec(), restored);
     }
 }
+use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce,
+};
+use std::fs::{self, File};
+use std::io::{Read, Write};
+use std::path::Path;
+
+const NONCE_SIZE: usize = 12;
+
+pub struct EncryptionResult {
+    pub encrypted_data: Vec<u8>,
+    pub nonce: [u8; NONCE_SIZE],
+}
+
+pub fn encrypt_file(input_path: &str, output_path: &str, key: &[u8; 32]) -> Result<(), String> {
+    let path = Path::new(input_path);
+    if !path.exists() {
+        return Err("Input file does not exist".to_string());
+    }
+
+    let mut file = File::open(input_path).map_err(|e| e.to_string())?;
+    let mut plaintext = Vec::new();
+    file.read_to_end(&mut plaintext).map_err(|e| e.to_string())?;
+
+    let encryption_result = encrypt_data(&plaintext, key)?;
+
+    let mut output_file = File::create(output_path).map_err(|e| e.to_string())?;
+    output_file.write_all(&encryption_result.nonce).map_err(|e| e.to_string())?;
+    output_file.write_all(&encryption_result.encrypted_data).map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+pub fn decrypt_file(input_path: &str, output_path: &str, key: &[u8; 32]) -> Result<(), String> {
+    let mut file = File::open(input_path).map_err(|e| e.to_string())?;
+    let mut encrypted_content = Vec::new();
+    file.read_to_end(&mut encrypted_content).map_err(|e| e.to_string())?;
+
+    if encrypted_content.len() < NONCE_SIZE {
+        return Err("Encrypted file is too short".to_string());
+    }
+
+    let nonce = &encrypted_content[..NONCE_SIZE];
+    let ciphertext = &encrypted_content[NONCE_SIZE..];
+
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+    let nonce_array: [u8; NONCE_SIZE] = nonce.try_into().map_err(|_| "Invalid nonce size")?;
+    let nonce_obj = Nonce::from_slice(&nonce_array);
+
+    let plaintext = cipher.decrypt(nonce_obj, ciphertext).map_err(|e| e.to_string())?;
+
+    let mut output_file = File::create(output_path).map_err(|e| e.to_string())?;
+    output_file.write_all(&plaintext).map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+fn encrypt_data(plaintext: &[u8], key: &[u8; 32]) -> Result<EncryptionResult, String> {
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+    
+    let mut nonce = [0u8; NONCE_SIZE];
+    OsRng.fill_bytes(&mut nonce);
+    let nonce_obj = Nonce::from_slice(&nonce);
+
+    let encrypted_data = cipher.encrypt(nonce_obj, plaintext).map_err(|e| e.to_string())?;
+
+    Ok(EncryptionResult {
+        encrypted_data,
+        nonce,
+    })
+}
+
+pub fn generate_random_key() -> [u8; 32] {
+    let mut key = [0u8; 32];
+    OsRng.fill_bytes(&mut key);
+    key
+}
+
+pub fn save_key_to_file(key: &[u8; 32], path: &str) -> Result<(), String> {
+    let hex_key = hex::encode(key);
+    fs::write(path, hex_key).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub fn load_key_from_file(path: &str) -> Result<[u8; 32], String> {
+    let hex_key = fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let key_bytes = hex::decode(hex_key.trim()).map_err(|e| e.to_string())?;
+    
+    if key_bytes.len() != 32 {
+        return Err("Invalid key length".to_string());
+    }
+    
+    let mut key = [0u8; 32];
+    key.copy_from_slice(&key_bytes);
+    Ok(key)
+}

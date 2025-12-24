@@ -143,4 +143,57 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("Valid records: {}", valid_count);
     
     Ok(())
+}use std::collections::HashSet;
+use std::hash::Hash;
+
+pub fn deduplicate<T: Eq + Hash + Clone>(items: &[T]) -> Vec<T> {
+    let mut seen = HashSet::new();
+    let mut result = Vec::new();
+    
+    for item in items {
+        if !seen.contains(item) {
+            seen.insert(item.clone());
+            result.push(item.clone());
+        }
+    }
+    
+    result
+}
+
+pub fn normalize_strings(strings: &[String]) -> Vec<String> {
+    strings
+        .iter()
+        .map(|s| s.trim().to_lowercase())
+        .collect()
+}
+
+pub fn clean_data(strings: &[String]) -> Vec<String> {
+    let normalized = normalize_strings(strings);
+    deduplicate(&normalized)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_deduplicate() {
+        let input = vec![1, 2, 2, 3, 1, 4];
+        let result = deduplicate(&input);
+        assert_eq!(result, vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn test_normalize_strings() {
+        let input = vec!["  HELLO  ".to_string(), "World".to_string()];
+        let result = normalize_strings(&input);
+        assert_eq!(result, vec!["hello".to_string(), "world".to_string()]);
+    }
+
+    #[test]
+    fn test_clean_data() {
+        let input = vec!["  Hello  ".to_string(), "hello".to_string(), "WORLD".to_string()];
+        let result = clean_data(&input);
+        assert_eq!(result, vec!["hello".to_string(), "world".to_string()]);
+    }
 }

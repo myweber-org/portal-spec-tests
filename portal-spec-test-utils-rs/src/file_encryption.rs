@@ -241,4 +241,63 @@ mod tests {
         let result = decrypt_data(&encrypted);
         assert!(result.is_err());
     }
+}use std::fs;
+use std::io::{self, Read, Write};
+
+pub fn xor_encrypt_decrypt(data: &[u8], key: &[u8]) -> Vec<u8> {
+    data.iter()
+        .enumerate()
+        .map(|(i, &byte)| byte ^ key[i % key.len()])
+        .collect()
+}
+
+pub fn process_file(input_path: &str, output_path: &str, key: &[u8]) -> io::Result<()> {
+    let mut input_file = fs::File::open(input_path)?;
+    let mut buffer = Vec::new();
+    input_file.read_to_end(&mut buffer)?;
+
+    let processed_data = xor_encrypt_decrypt(&buffer, key);
+
+    let mut output_file = fs::File::create(output_path)?;
+    output_file.write_all(&processed_data)?;
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn test_xor_symmetry() {
+        let data = b"Hello, World!";
+        let key = b"secret";
+        
+        let encrypted = xor_encrypt_decrypt(data, key);
+        let decrypted = xor_encrypt_decrypt(&encrypted, key);
+        
+        assert_eq!(data.to_vec(), decrypted);
+    }
+
+    #[test]
+    fn test_file_processing() -> io::Result<()> {
+        let test_data = b"Test file content";
+        let key = b"testkey";
+        
+        fs::write("test_input.txt", test_data)?;
+        
+        process_file("test_input.txt", "test_output.txt", key)?;
+        process_file("test_output.txt", "test_restored.txt", key)?;
+        
+        let restored = fs::read("test_restored.txt")?;
+        
+        assert_eq!(test_data.to_vec(), restored);
+        
+        fs::remove_file("test_input.txt")?;
+        fs::remove_file("test_output.txt")?;
+        fs::remove_file("test_restored.txt")?;
+        
+        Ok(())
+    }
 }

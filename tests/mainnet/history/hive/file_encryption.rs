@@ -203,3 +203,57 @@ pub fn decrypt_file(input_path: &str, output_path: &str, key_hex: &str) -> io::R
     println!("Decryption successful.");
     Ok(())
 }
+use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Nonce,
+};
+use std::fs;
+use std::io::{self, Read, Write};
+
+const NONCE_SIZE: usize = 12;
+
+pub fn encrypt_file(input_path: &str, output_path: &str, key: &[u8; 32]) -> io::Result<()> {
+    let cipher = Aes256Gcm::new_from_slice(key).unwrap();
+    let nonce = Nonce::from_slice(&OsRng.gen::<[u8; NONCE_SIZE]>());
+
+    let mut file = fs::File::open(input_path)?;
+    let mut plaintext = Vec::new();
+    file.read_to_end(&mut plaintext)?;
+
+    let ciphertext = cipher
+        .encrypt(nonce, plaintext.as_ref())
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+
+    let mut output = fs::File::create(output_path)?;
+    output.write_all(nonce)?;
+    output.write_all(&ciphertext)?;
+
+    Ok(())
+}
+
+pub fn decrypt_file(input_path: &str, output_path: &str, key: &[u8; 32]) -> io::Result<()> {
+    let cipher = Aes256Gcm::new_from_slice(key).unwrap();
+
+    let mut file = fs::File::open(input_path)?;
+    let mut encrypted_data = Vec::new();
+    file.read_to_end(&mut encrypted_data)?;
+
+    if encrypted_data.len() < NONCE_SIZE {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "File too short to contain nonce",
+        ));
+    }
+
+    let (nonce_bytes, ciphertext) = encrypted_data.split_at(NONCE_SIZE);
+    let nonce = Nonce::from_slice(nonce_bytes);
+
+    let plaintext = cipher
+        .decrypt(nonce, ciphertext)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+
+    let mut output = fs::File::create(output_path)?;
+    output.write_all(&plaintext)?;
+
+    Ok(())
+}

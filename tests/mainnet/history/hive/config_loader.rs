@@ -72,3 +72,136 @@ mod tests {
         assert_eq!(config.get("SPECIAL_KEY"), Some("env_value".to_string()));
     }
 }
+use serde::Deserialize;
+use std::collections::HashMap;
+use std::env;
+use std::fs;
+
+#[derive(Debug, Deserialize)]
+pub struct AppConfig {
+    pub server: ServerConfig,
+    pub database: DatabaseConfig,
+    pub features: HashMap<String, bool>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ServerConfig {
+    pub host: String,
+    pub port: u16,
+    pub tls_enabled: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DatabaseConfig {
+    pub url: String,
+    pub max_connections: u32,
+    pub timeout_seconds: u32,
+}
+
+impl AppConfig {
+    pub fn load() -> Result<Self, Box<dyn std::error::Error>> {
+        let config_path = env::var("CONFIG_PATH").unwrap_or_else(|_| "config.json".to_string());
+        
+        let config_content = fs::read_to_string(&config_path)?;
+        let mut config: AppConfig = serde_json::from_str(&config_content)?;
+        
+        config.apply_environment_overrides();
+        
+        Ok(config)
+    }
+    
+    fn apply_environment_overrides(&mut self) {
+        if let Ok(host) = env::var("SERVER_HOST") {
+            self.server.host = host;
+        }
+        
+        if let Ok(port) = env::var("SERVER_PORT") {
+            if let Ok(port_num) = port.parse::<u16>() {
+                self.server.port = port_num;
+            }
+        }
+        
+        if let Ok(db_url) = env::var("DATABASE_URL") {
+            self.database.url = db_url;
+        }
+    }
+    
+    pub fn is_feature_enabled(&self, feature_name: &str) -> bool {
+        self.features.get(feature_name).copied().unwrap_or(false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+    
+    #[test]
+    fn test_config_loading() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        let config_json = r#"{
+            "server": {
+                "host": "localhost",
+                "port": 8080,
+                "tls_enabled": false
+            },
+            "database": {
+                "url": "postgresql://localhost/app",
+                "max_connections": 10,
+                "timeout_seconds": 30
+            },
+            "features": {
+                "logging": true,
+                "metrics": false
+            }
+        }"#;
+        
+        write!(temp_file, "{}", config_json).unwrap();
+        
+        env::set_var("CONFIG_PATH", temp_file.path().to_str().unwrap());
+        
+        let config = AppConfig::load().unwrap();
+        
+        assert_eq!(config.server.host, "localhost");
+        assert_eq!(config.server.port, 8080);
+        assert_eq!(config.database.max_connections, 10);
+        assert!(config.is_feature_enabled("logging"));
+        assert!(!config.is_feature_enabled("metrics"));
+        
+        env::remove_var("CONFIG_PATH");
+    }
+    
+    #[test]
+    fn test_environment_overrides() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        let config_json = r#"{
+            "server": {
+                "host": "localhost",
+                "port": 8080,
+                "tls_enabled": false
+            },
+            "database": {
+                "url": "postgresql://localhost/app",
+                "max_connections": 10,
+                "timeout_seconds": 30
+            },
+            "features": {}
+        }"#;
+        
+        write!(temp_file, "{}", config_json).unwrap();
+        
+        env::set_var("CONFIG_PATH", temp_file.path().to_str().unwrap());
+        env::set_var("SERVER_HOST", "0.0.0.0");
+        env::set_var("DATABASE_URL", "postgresql://prod-db/app");
+        
+        let config = AppConfig::load().unwrap();
+        
+        assert_eq!(config.server.host, "0.0.0.0");
+        assert_eq!(config.database.url, "postgresql://prod-db/app");
+        
+        env::remove_var("CONFIG_PATH");
+        env::remove_var("SERVER_HOST");
+        env::remove_var("DATABASE_URL");
+    }
+}

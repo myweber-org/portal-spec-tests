@@ -207,4 +207,82 @@ mod tests {
 
         assert_eq!(result, expected);
     }
+}use serde_json::{Value, Map};
+use std::collections::HashSet;
+
+pub fn merge_json(base: &mut Value, extension: &Value, overwrite_arrays: bool) {
+    match (base, extension) {
+        (Value::Object(base_map), Value::Object(ext_map)) => {
+            for (key, ext_value) in ext_map {
+                if let Some(base_value) = base_map.get_mut(key) {
+                    merge_json(base_value, ext_value, overwrite_arrays);
+                } else {
+                    base_map.insert(key.clone(), ext_value.clone());
+                }
+            }
+        }
+        (Value::Array(base_arr), Value::Array(ext_arr)) if !overwrite_arrays => {
+            let mut seen = HashSet::new();
+            for item in base_arr.iter() {
+                if let Some(obj) = item.as_object() {
+                    if let Some(id) = obj.get("id").and_then(|v| v.as_str()) {
+                        seen.insert(id.to_string());
+                    }
+                }
+            }
+            
+            for item in ext_arr {
+                if let Some(obj) = item.as_object() {
+                    if let Some(id) = obj.get("id").and_then(|v| v.as_str()) {
+                        if !seen.contains(id) {
+                            base_arr.push(item.clone());
+                        }
+                    } else {
+                        base_arr.push(item.clone());
+                    }
+                } else {
+                    base_arr.push(item.clone());
+                }
+            }
+        }
+        (base, extension) if overwrite_arrays || !matches!(extension, Value::Array(_)) => {
+            *base = extension.clone();
+        }
+        _ => {}
+    }
+}
+
+pub fn merge_json_with_defaults(base: &mut Value, extension: &Value) {
+    merge_json(base, extension, false);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_basic_merge() {
+        let mut base = json!({"a": 1, "b": {"c": 2}});
+        let extension = json!({"b": {"d": 3}, "e": 4});
+        
+        merge_json_with_defaults(&mut base, &extension);
+        
+        assert_eq!(base["a"], 1);
+        assert_eq!(base["b"]["c"], 2);
+        assert_eq!(base["b"]["d"], 3);
+        assert_eq!(base["e"], 4);
+    }
+
+    #[test]
+    fn test_array_merge_no_duplicates() {
+        let mut base = json!({"items": [{"id": "1", "name": "first"}]});
+        let extension = json!({"items": [{"id": "1", "name": "updated"}, {"id": "2", "name": "second"}]});
+        
+        merge_json_with_defaults(&mut base, &extension);
+        
+        assert_eq!(base["items"].as_array().unwrap().len(), 2);
+        assert_eq!(base["items"][0]["name"], "first");
+        assert_eq!(base["items"][1]["name"], "second");
+    }
 }

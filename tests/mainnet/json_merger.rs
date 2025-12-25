@@ -182,3 +182,68 @@ pub fn merge_and_write<P: AsRef<Path>>(input_paths: &[P], output_path: P) -> io:
     serde_json::to_writer_pretty(output_file, &merged)?;
     Ok(())
 }
+use serde_json::{Value, Map};
+use std::fs;
+use std::path::Path;
+
+pub fn merge_json_files<P: AsRef<Path>>(paths: &[P]) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut merged = Map::new();
+
+    for path in paths {
+        let content = fs::read_to_string(path)?;
+        let json: Value = serde_json::from_str(&content)?;
+
+        if let Value::Object(obj) = json {
+            for (key, value) in obj {
+                merge_value(&mut merged, key, value);
+            }
+        }
+    }
+
+    Ok(Value::Object(merged))
+}
+
+fn merge_value(map: &mut Map<String, Value>, key: String, new_value: Value) {
+    match map.get(&key) {
+        Some(existing) => {
+            if let (Value::Object(existing_obj), Value::Object(new_obj)) = (existing, &new_value) {
+                let mut merged_obj = existing_obj.clone();
+                for (nested_key, nested_value) in new_obj {
+                    merge_value(&mut merged_obj, nested_key.clone(), nested_value.clone());
+                }
+                map.insert(key, Value::Object(merged_obj));
+            } else if existing != &new_value {
+                let conflict_key = format!("{}_conflict", key);
+                map.insert(conflict_key, new_value);
+            }
+        }
+        None => {
+            map.insert(key, new_value);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_merge_json() -> Result<(), Box<dyn std::error::Error>> {
+        let file1 = NamedTempFile::new()?;
+        let file2 = NamedTempFile::new()?;
+
+        fs::write(&file1, r#"{"name": "Alice", "age": 30}"#)?;
+        fs::write(&file2, r#"{"name": "Bob", "city": "London"}"#)?;
+
+        let result = merge_json_files(&[file1.path(), file2.path()])?;
+        
+        assert_eq!(result["name"], json!("Alice"));
+        assert_eq!(result["name_conflict"], json!("Bob"));
+        assert_eq!(result["age"], json!(30));
+        assert_eq!(result["city"], json!("London"));
+
+        Ok(())
+    }
+}

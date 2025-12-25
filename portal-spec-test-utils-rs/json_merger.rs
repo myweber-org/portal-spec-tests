@@ -82,4 +82,58 @@ mod tests {
         assert_eq!(result["nested"]["a"], 1);
         assert_eq!(result["nested"]["b"], 2);
     }
+}use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
+
+pub fn merge_json_files(file_paths: &[&str], output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let mut merged_data = HashMap::new();
+
+    for file_path in file_paths {
+        let content = fs::read_to_string(file_path)?;
+        let data: HashMap<String, serde_json::Value> = serde_json::from_str(&content)?;
+        
+        for (key, value) in data {
+            merged_data.insert(key, value);
+        }
+    }
+
+    let output_json = serde_json::to_string_pretty(&merged_data)?;
+    fs::write(output_path, output_json)?;
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_merge_json_files() {
+        let mut file1 = NamedTempFile::new().unwrap();
+        let mut file2 = NamedTempFile::new().unwrap();
+        
+        writeln!(file1, r#"{"name": "Alice", "age": 30}"#).unwrap();
+        writeln!(file2, r#"{"city": "London", "active": true}"#).unwrap();
+
+        let output_file = NamedTempFile::new().unwrap();
+        let output_path = output_file.path().to_str().unwrap();
+
+        let input_paths = vec![
+            file1.path().to_str().unwrap(),
+            file2.path().to_str().unwrap()
+        ];
+
+        merge_json_files(&input_paths, output_path).unwrap();
+
+        let merged_content = fs::read_to_string(output_path).unwrap();
+        let parsed: HashMap<String, serde_json::Value> = serde_json::from_str(&merged_content).unwrap();
+
+        assert_eq!(parsed.get("name").unwrap().as_str().unwrap(), "Alice");
+        assert_eq!(parsed.get("age").unwrap().as_u64().unwrap(), 30);
+        assert_eq!(parsed.get("city").unwrap().as_str().unwrap(), "London");
+        assert_eq!(parsed.get("active").unwrap().as_bool().unwrap(), true);
+    }
 }

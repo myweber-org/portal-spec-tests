@@ -1,255 +1,90 @@
-
-use csv::Reader;
-use serde::Deserialize;
 use std::error::Error;
 use std::fs::File;
-
-#[derive(Debug, Deserialize)]
-struct Record {
-    id: u32,
-    name: String,
-    value: f64,
-    active: bool,
-}
-
-pub fn process_data_file(file_path: &str) -> Result<Vec<Record>, Box<dyn Error>> {
-    let file = File::open(file_path)?;
-    let mut reader = Reader::from_reader(file);
-    let mut records = Vec::new();
-
-    for result in reader.deserialize() {
-        let record: Record = result?;
-        if record.value >= 0.0 {
-            records.push(record);
-        }
-    }
-
-    Ok(records)
-}
-
-pub fn calculate_statistics(records: &[Record]) -> (f64, f64, usize) {
-    let sum: f64 = records.iter().map(|r| r.value).sum();
-    let count = records.len();
-    let average = if count > 0 { sum / count as f64 } else { 0.0 };
-    
-    let active_count = records.iter().filter(|r| r.active).count();
-    
-    (sum, average, active_count)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::NamedTempFile;
-    use std::io::Write;
-
-    #[test]
-    fn test_process_data_file() {
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "id,name,value,active").unwrap();
-        writeln!(temp_file, "1,Test1,10.5,true").unwrap();
-        writeln!(temp_file, "2,Test2,-5.0,false").unwrap();
-        writeln!(temp_file, "3,Test3,20.0,true").unwrap();
-        
-        let records = process_data_file(temp_file.path().to_str().unwrap()).unwrap();
-        assert_eq!(records.len(), 2);
-        assert_eq!(records[0].name, "Test1");
-        assert_eq!(records[1].name, "Test3");
-    }
-
-    #[test]
-    fn test_calculate_statistics() {
-        let records = vec![
-            Record { id: 1, name: "A".to_string(), value: 10.0, active: true },
-            Record { id: 2, name: "B".to_string(), value: 20.0, active: false },
-            Record { id: 3, name: "C".to_string(), value: 30.0, active: true },
-        ];
-        
-        let (sum, avg, active_count) = calculate_statistics(&records);
-        assert_eq!(sum, 60.0);
-        assert_eq!(avg, 20.0);
-        assert_eq!(active_count, 2);
-    }
-}
-use std::collections::HashMap;
+use std::io::{BufRead, BufReader};
 
 pub struct DataProcessor {
-    data: HashMap<String, Vec<f64>>,
-    validation_rules: Vec<ValidationRule>,
-}
-
-pub struct ValidationRule {
-    field_name: String,
-    min_value: f64,
-    max_value: f64,
-    required: bool,
+    file_path: String,
 }
 
 impl DataProcessor {
-    pub fn new() -> Self {
+    pub fn new(file_path: &str) -> Self {
         DataProcessor {
-            data: HashMap::new(),
-            validation_rules: Vec::new(),
+            file_path: file_path.to_string(),
         }
     }
 
-    pub fn add_dataset(&mut self, name: String, values: Vec<f64>) {
-        self.data.insert(name, values);
-    }
+    pub fn process(&self) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let file = File::open(&self.file_path)?;
+        let reader = BufReader::new(file);
+        let mut records = Vec::new();
 
-    pub fn add_validation_rule(&mut self, rule: ValidationRule) {
-        self.validation_rules.push(rule);
-    }
-
-    pub fn validate_all(&self) -> Result<(), Vec<String>> {
-        let mut errors = Vec::new();
-
-        for rule in &self.validation_rules {
-            if let Some(data) = self.data.get(&rule.field_name) {
-                if rule.required && data.is_empty() {
-                    errors.push(format!("Field '{}' is required but empty", rule.field_name));
-                }
-
-                for &value in data {
-                    if value < rule.min_value || value > rule.max_value {
-                        errors.push(format!(
-                            "Value {} in field '{}' is outside valid range [{}, {}]",
-                            value, rule.field_name, rule.min_value, rule.max_value
-                        ));
-                    }
-                }
-            } else if rule.required {
-                errors.push(format!("Required field '{}' not found", rule.field_name));
-            }
-        }
-
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(errors)
-        }
-    }
-
-    pub fn normalize_data(&mut self, field_name: &str) -> Option<Vec<f64>> {
-        if let Some(data) = self.data.get_mut(field_name) {
-            if data.is_empty() {
-                return None;
-            }
-
-            let min = data.iter().fold(f64::INFINITY, |a, &b| a.min(b));
-            let max = data.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+        for (index, line) in reader.lines().enumerate() {
+            let line = line?;
+            let fields: Vec<String> = line.split(',').map(|s| s.trim().to_string()).collect();
             
-            if (max - min).abs() < f64::EPSILON {
-                return Some(vec![0.0; data.len()]);
+            if fields.len() < 2 {
+                return Err(format!("Invalid data format at line {}", index + 1).into());
             }
-
-            let normalized: Vec<f64> = data
-                .iter()
-                .map(|&x| (x - min) / (max - min))
-                .collect();
-
-            self.data.insert(field_name.to_string(), normalized.clone());
-            Some(normalized)
-        } else {
-            None
+            
+            records.push(fields);
         }
+
+        if records.is_empty() {
+            return Err("No data found in file".into());
+        }
+
+        Ok(records)
     }
 
-    pub fn calculate_statistics(&self, field_name: &str) -> Option<DataStatistics> {
-        if let Some(data) = self.data.get(field_name) {
-            if data.is_empty() {
-                return None;
+    pub fn validate_numeric_fields(&self, data: &[Vec<String>], column_index: usize) -> Result<Vec<f64>, Box<dyn Error>> {
+        let mut numeric_values = Vec::new();
+        
+        for (row_index, record) in data.iter().enumerate() {
+            if column_index >= record.len() {
+                return Err(format!("Column index {} out of bounds at row {}", column_index, row_index + 1).into());
             }
-
-            let sum: f64 = data.iter().sum();
-            let mean = sum / data.len() as f64;
             
-            let variance: f64 = data
-                .iter()
-                .map(|&x| (x - mean).powi(2))
-                .sum::<f64>() / data.len() as f64;
-            
-            let std_dev = variance.sqrt();
-
-            let sorted_data = {
-                let mut sorted = data.clone();
-                sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
-                sorted
-            };
-
-            let median = if data.len() % 2 == 0 {
-                let mid = data.len() / 2;
-                (sorted_data[mid - 1] + sorted_data[mid]) / 2.0
-            } else {
-                sorted_data[data.len() / 2]
-            };
-
-            Some(DataStatistics {
-                mean,
-                median,
-                std_dev,
-                min: sorted_data[0],
-                max: sorted_data[sorted_data.len() - 1],
-                count: data.len(),
-            })
-        } else {
-            None
+            match record[column_index].parse::<f64>() {
+                Ok(value) => numeric_values.push(value),
+                Err(_) => return Err(format!("Non-numeric value at row {} column {}", row_index + 1, column_index).into()),
+            }
         }
-    }
-}
-
-pub struct DataStatistics {
-    pub mean: f64,
-    pub median: f64,
-    pub std_dev: f64,
-    pub min: f64,
-    pub max: f64,
-    pub count: usize,
-}
-
-impl ValidationRule {
-    pub fn new(field_name: String, min_value: f64, max_value: f64, required: bool) -> Self {
-        ValidationRule {
-            field_name,
-            min_value,
-            max_value,
-            required,
-        }
+        
+        Ok(numeric_values)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_data_validation() {
-        let mut processor = DataProcessor::new();
-        processor.add_dataset("temperature".to_string(), vec![20.5, 22.3, 18.7, 25.1]);
+    fn test_process_valid_csv() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,city").unwrap();
+        writeln!(temp_file, "Alice,30,New York").unwrap();
+        writeln!(temp_file, "Bob,25,London").unwrap();
         
-        let rule = ValidationRule::new("temperature".to_string(), 15.0, 30.0, true);
-        processor.add_validation_rule(rule);
-
-        assert!(processor.validate_all().is_ok());
+        let processor = DataProcessor::new(temp_file.path().to_str().unwrap());
+        let result = processor.process().unwrap();
+        
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], vec!["Alice", "30", "New York"]);
+        assert_eq!(result[1], vec!["Bob", "25", "London"]);
     }
 
     #[test]
-    fn test_normalization() {
-        let mut processor = DataProcessor::new();
-        processor.add_dataset("scores".to_string(), vec![10.0, 20.0, 30.0, 40.0]);
+    fn test_validate_numeric_fields() {
+        let data = vec![
+            vec!["Alice".to_string(), "30.5".to_string()],
+            vec!["Bob".to_string(), "25.0".to_string()],
+        ];
         
-        let normalized = processor.normalize_data("scores").unwrap();
-        assert_eq!(normalized, vec![0.0, 1.0/3.0, 2.0/3.0, 1.0]);
-    }
-
-    #[test]
-    fn test_statistics_calculation() {
-        let mut processor = DataProcessor::new();
-        processor.add_dataset("values".to_string(), vec![1.0, 2.0, 3.0, 4.0, 5.0]);
+        let processor = DataProcessor::new("dummy.csv");
+        let numeric_values = processor.validate_numeric_fields(&data, 1).unwrap();
         
-        let stats = processor.calculate_statistics("values").unwrap();
-        assert_eq!(stats.mean, 3.0);
-        assert_eq!(stats.median, 3.0);
-        assert_eq!(stats.std_dev, (2.0_f64).sqrt());
+        assert_eq!(numeric_values, vec![30.5, 25.0]);
     }
 }

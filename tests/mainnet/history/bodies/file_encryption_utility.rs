@@ -86,4 +86,101 @@ mod tests {
             
         assert_eq!(test_data.to_vec(), decrypted_data);
     }
+}use std::fs;
+use std::io::{self, Read, Write};
+use std::path::Path;
+
+const BUFFER_SIZE: usize = 8192;
+
+pub struct XorCipher {
+    key: Vec<u8>,
+    key_position: usize,
+}
+
+impl XorCipher {
+    pub fn new(key: &str) -> Self {
+        XorCipher {
+            key: key.as_bytes().to_vec(),
+            key_position: 0,
+        }
+    }
+
+    pub fn encrypt_file(&mut self, source_path: &Path, dest_path: &Path) -> io::Result<()> {
+        self.process_file(source_path, dest_path)
+    }
+
+    pub fn decrypt_file(&mut self, source_path: &Path, dest_path: &Path) -> io::Result<()> {
+        self.process_file(source_path, dest_path)
+    }
+
+    fn process_file(&mut self, source_path: &Path, dest_path: &Path) -> io::Result<()> {
+        let mut source_file = fs::File::open(source_path)?;
+        let mut dest_file = fs::File::create(dest_path)?;
+        
+        let mut buffer = [0u8; BUFFER_SIZE];
+        
+        loop {
+            let bytes_read = source_file.read(&mut buffer)?;
+            if bytes_read == 0 {
+                break;
+            }
+            
+            for i in 0..bytes_read {
+                buffer[i] ^= self.key[self.key_position];
+                self.key_position = (self.key_position + 1) % self.key.len();
+            }
+            
+            dest_file.write_all(&buffer[..bytes_read])?;
+        }
+        
+        Ok(())
+    }
+}
+
+pub fn encrypt_directory(dir_path: &Path, key: &str, output_dir: &Path) -> io::Result<()> {
+    if !output_dir.exists() {
+        fs::create_dir_all(output_dir)?;
+    }
+
+    for entry in fs::read_dir(dir_path)? {
+        let entry = entry?;
+        let path = entry.path();
+        
+        if path.is_file() {
+            let mut cipher = XorCipher::new(key);
+            let output_path = output_dir.join(path.file_name().unwrap());
+            cipher.encrypt_file(&path, &output_path)?;
+        }
+    }
+    
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_xor_cipher() {
+        let test_data = b"Hello, World!";
+        let key = "secret";
+        
+        let mut cipher = XorCipher::new(key);
+        
+        let temp_dir = TempDir::new().unwrap();
+        let source_path = temp_dir.path().join("source.txt");
+        let encrypted_path = temp_dir.path().join("encrypted.bin");
+        let decrypted_path = temp_dir.path().join("decrypted.txt");
+        
+        fs::write(&source_path, test_data).unwrap();
+        
+        cipher.encrypt_file(&source_path, &encrypted_path).unwrap();
+        
+        let mut cipher2 = XorCipher::new(key);
+        cipher2.decrypt_file(&encrypted_path, &decrypted_path).unwrap();
+        
+        let decrypted_data = fs::read(&decrypted_path).unwrap();
+        assert_eq!(test_data.to_vec(), decrypted_data);
+    }
 }

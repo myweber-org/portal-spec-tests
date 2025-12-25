@@ -1,130 +1,44 @@
 use std::collections::HashSet;
 
 pub struct DataCleaner {
-    data: Vec<Vec<Option<String>>>,
+    dedupe_set: HashSet<String>,
 }
 
 impl DataCleaner {
-    pub fn new(data: Vec<Vec<Option<String>>>) -> Self {
-        DataCleaner { data }
+    pub fn new() -> Self {
+        DataCleaner {
+            dedupe_set: HashSet::new(),
+        }
     }
 
-    pub fn remove_null_rows(&mut self) {
-        self.data.retain(|row| {
-            row.iter().all(|cell| cell.is_some())
-        });
-    }
-
-    pub fn deduplicate(&mut self) {
-        let mut seen = HashSet::new();
-        self.data.retain(|row| {
-            let row_string: String = row
-                .iter()
-                .map(|cell| cell.as_ref().unwrap_or(&"NULL".to_string()))
-                .collect::<Vec<&String>>()
-                .join("|");
-            seen.insert(row_string)
-        });
-    }
-
-    pub fn get_data(&self) -> &Vec<Vec<Option<String>>> {
-        &self.data
-    }
-
-    pub fn count_rows(&self) -> usize {
-        self.data.len()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_cleaner_operations() {
-        let mut cleaner = DataCleaner::new(vec![
-            vec![Some("A".to_string()), Some("1".to_string())],
-            vec![Some("B".to_string()), None],
-            vec![Some("A".to_string()), Some("1".to_string())],
-        ]);
-
-        assert_eq!(cleaner.count_rows(), 3);
+    pub fn clean_entry(&mut self, input: &str) -> Option<String> {
+        let trimmed = input.trim().to_lowercase();
         
-        cleaner.remove_null_rows();
-        assert_eq!(cleaner.count_rows(), 2);
-        
-        cleaner.deduplicate();
-        assert_eq!(cleaner.count_rows(), 1);
-    }
-}use std::collections::HashMap;
-
-pub struct DataCleaner {
-    data: Vec<f64>,
-    threshold: f64,
-}
-
-impl DataCleaner {
-    pub fn new(data: Vec<f64>, threshold: f64) -> Self {
-        DataCleaner { data, threshold }
-    }
-
-    pub fn remove_outliers(&mut self) -> Vec<f64> {
-        if self.data.len() < 4 {
-            return self.data.clone();
+        if trimmed.is_empty() {
+            return None;
         }
 
-        let mut sorted_data = self.data.clone();
-        sorted_data.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        if self.dedupe_set.contains(&trimmed) {
+            return None;
+        }
 
-        let q1 = Self::calculate_quantile(&sorted_data, 0.25);
-        let q3 = Self::calculate_quantile(&sorted_data, 0.75);
-        let iqr = q3 - q1;
+        self.dedupe_set.insert(trimmed.clone());
+        Some(trimmed)
+    }
 
-        let lower_bound = q1 - self.threshold * iqr;
-        let upper_bound = q3 + self.threshold * iqr;
-
-        self.data
+    pub fn batch_clean(&mut self, inputs: Vec<&str>) -> Vec<String> {
+        inputs
             .iter()
-            .filter(|&&x| x >= lower_bound && x <= upper_bound)
-            .cloned()
+            .filter_map(|&input| self.clean_entry(input))
             .collect()
     }
 
-    pub fn get_statistics(&self) -> HashMap<String, f64> {
-        let mut stats = HashMap::new();
-        
-        if self.data.is_empty() {
-            return stats;
-        }
-
-        let sum: f64 = self.data.iter().sum();
-        let mean = sum / self.data.len() as f64;
-
-        let variance: f64 = self.data
-            .iter()
-            .map(|&x| (x - mean).powi(2))
-            .sum::<f64>() / self.data.len() as f64;
-
-        stats.insert("mean".to_string(), mean);
-        stats.insert("variance".to_string(), variance);
-        stats.insert("count".to_string(), self.data.len() as f64);
-
-        stats
+    pub fn get_unique_count(&self) -> usize {
+        self.dedupe_set.len()
     }
 
-    fn calculate_quantile(sorted_data: &[f64], percentile: f64) -> f64 {
-        let n = sorted_data.len();
-        let index = percentile * (n - 1) as f64;
-        
-        let lower_idx = index.floor() as usize;
-        let upper_idx = index.ceil() as usize;
-        
-        if lower_idx == upper_idx {
-            sorted_data[lower_idx]
-        } else {
-            let weight = index - lower_idx as f64;
-            sorted_data[lower_idx] * (1.0 - weight) + sorted_data[upper_idx] * weight
-        }
+    pub fn reset(&mut self) {
+        self.dedupe_set.clear();
     }
 }
 
@@ -133,22 +47,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_outlier_removal() {
-        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 100.0];
-        let mut cleaner = DataCleaner::new(data, 1.5);
-        let cleaned = cleaner.remove_outliers();
+    fn test_deduplication() {
+        let mut cleaner = DataCleaner::new();
         
-        assert_eq!(cleaned.len(), 5);
-        assert!(!cleaned.contains(&100.0));
+        let result1 = cleaner.clean_entry("  TEST  ");
+        let result2 = cleaner.clean_entry("test");
+        let result3 = cleaner.clean_entry("new data");
+        
+        assert_eq!(result1, Some("test".to_string()));
+        assert_eq!(result2, None);
+        assert_eq!(result3, Some("new data".to_string()));
+        assert_eq!(cleaner.get_unique_count(), 2);
     }
 
     #[test]
-    fn test_statistics() {
-        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
-        let cleaner = DataCleaner::new(data, 1.5);
-        let stats = cleaner.get_statistics();
+    fn test_empty_input() {
+        let mut cleaner = DataCleaner::new();
+        assert_eq!(cleaner.clean_entry("   "), None);
+        assert_eq!(cleaner.clean_entry(""), None);
+    }
+
+    #[test]
+    fn test_batch_processing() {
+        let mut cleaner = DataCleaner::new();
+        let inputs = vec!["apple", "APPLE", "banana", "  Banana  ", "cherry"];
         
-        assert_eq!(stats.get("mean").unwrap(), &3.0);
-        assert_eq!(stats.get("count").unwrap(), &5.0);
+        let cleaned = cleaner.batch_clean(inputs);
+        
+        assert_eq!(cleaned.len(), 3);
+        assert!(cleaned.contains(&"apple".to_string()));
+        assert!(cleaned.contains(&"banana".to_string()));
+        assert!(cleaned.contains(&"cherry".to_string()));
     }
 }

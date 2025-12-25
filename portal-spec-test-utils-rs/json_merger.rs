@@ -137,3 +137,77 @@ mod tests {
         assert_eq!(parsed.get("active").unwrap().as_bool().unwrap(), true);
     }
 }
+use serde_json::{Value, Map};
+use std::fs;
+use std::path::Path;
+
+pub fn merge_json_files(file_paths: &[&str], output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let mut merged_map = Map::new();
+
+    for file_path in file_paths {
+        let content = fs::read_to_string(file_path)?;
+        let json_value: Value = serde_json::from_str(&content)?;
+
+        if let Value::Object(map) = json_value {
+            for (key, value) in map {
+                merge_value(&mut merged_map, key, value);
+            }
+        }
+    }
+
+    let merged_json = Value::Object(merged_map);
+    let json_string = serde_json::to_string_pretty(&merged_json)?;
+    fs::write(output_path, json_string)?;
+
+    Ok(())
+}
+
+fn merge_value(map: &mut Map<String, Value>, key: String, new_value: Value) {
+    match map.get_mut(&key) {
+        Some(existing_value) => {
+            if existing_value.is_object() && new_value.is_object() {
+                if let (Value::Object(existing_map), Value::Object(new_map)) = (existing_value, new_value) {
+                    for (nested_key, nested_value) in new_map {
+                        merge_value(existing_map, nested_key, nested_value);
+                    }
+                }
+            } else if existing_value.is_array() && new_value.is_array() {
+                if let (Value::Array(existing_arr), Value::Array(new_arr)) = (existing_value, new_value) {
+                    existing_arr.extend(new_arr);
+                }
+            } else {
+                map.insert(key, new_value);
+            }
+        }
+        None => {
+            map.insert(key, new_value);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_basic_merge() {
+        let file1 = NamedTempFile::new().unwrap();
+        let file2 = NamedTempFile::new().unwrap();
+        let output = NamedTempFile::new().unwrap();
+
+        fs::write(file1.path(), r#"{"a": 1, "b": {"c": 2}}"#).unwrap();
+        fs::write(file2.path(), r#"{"b": {"d": 3}, "e": 4}"#).unwrap();
+
+        merge_json_files(
+            &[file1.path().to_str().unwrap(), file2.path().to_str().unwrap()],
+            output.path().to_str().unwrap()
+        ).unwrap();
+
+        let result = fs::read_to_string(output.path()).unwrap();
+        assert!(result.contains("\"a\": 1"));
+        assert!(result.contains("\"c\": 2"));
+        assert!(result.contains("\"d\": 3"));
+        assert!(result.contains("\"e\": 4"));
+    }
+}

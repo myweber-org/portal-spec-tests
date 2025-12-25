@@ -378,3 +378,167 @@ mod tests {
         assert!(categories.contains(&"Y".to_string()));
     }
 }
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub category: String,
+    pub metadata: HashMap<String, String>,
+}
+
+#[derive(Debug)]
+pub enum ValidationError {
+    InvalidId,
+    EmptyName,
+    NegativeValue,
+    InvalidCategory,
+    MissingMetadata,
+}
+
+impl fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ValidationError::InvalidId => write!(f, "ID must be greater than zero"),
+            ValidationError::EmptyName => write!(f, "Name cannot be empty"),
+            ValidationError::NegativeValue => write!(f, "Value must be non-negative"),
+            ValidationError::InvalidCategory => write!(f, "Category must be one of: A, B, C, D"),
+            ValidationError::MissingMetadata => write!(f, "Required metadata fields are missing"),
+        }
+    }
+}
+
+impl Error for ValidationError {}
+
+pub fn validate_record(record: &DataRecord) -> Result<(), ValidationError> {
+    if record.id == 0 {
+        return Err(ValidationError::InvalidId);
+    }
+    
+    if record.name.trim().is_empty() {
+        return Err(ValidationError::EmptyName);
+    }
+    
+    if record.value < 0.0 {
+        return Err(ValidationError::NegativeValue);
+    }
+    
+    let valid_categories = ["A", "B", "C", "D"];
+    if !valid_categories.contains(&record.category.as_str()) {
+        return Err(ValidationError::InvalidCategory);
+    }
+    
+    if !record.metadata.contains_key("source") || !record.metadata.contains_key("timestamp") {
+        return Err(ValidationError::MissingMetadata);
+    }
+    
+    Ok(())
+}
+
+pub fn transform_record(record: &DataRecord) -> DataRecord {
+    let mut transformed = record.clone();
+    
+    transformed.name = record.name.to_uppercase();
+    transformed.value = (record.value * 100.0).round() / 100.0;
+    
+    let mut new_metadata = record.metadata.clone();
+    new_metadata.insert("processed".to_string(), "true".to_string());
+    new_metadata.insert("version".to_string(), "1.0".to_string());
+    
+    transformed.metadata = new_metadata;
+    transformed
+}
+
+pub fn process_records(records: Vec<DataRecord>) -> Result<Vec<DataRecord>, ValidationError> {
+    let mut processed_records = Vec::with_capacity(records.len());
+    
+    for record in records {
+        validate_record(&record)?;
+        let transformed = transform_record(&record);
+        processed_records.push(transformed);
+    }
+    
+    Ok(processed_records)
+}
+
+pub fn calculate_statistics(records: &[DataRecord]) -> (f64, f64, f64) {
+    if records.is_empty() {
+        return (0.0, 0.0, 0.0);
+    }
+    
+    let sum: f64 = records.iter().map(|r| r.value).sum();
+    let count = records.len() as f64;
+    let mean = sum / count;
+    
+    let variance: f64 = records.iter()
+        .map(|r| (r.value - mean).powi(2))
+        .sum::<f64>() / count;
+    
+    let max = records.iter()
+        .map(|r| r.value)
+        .fold(f64::NEG_INFINITY, f64::max);
+    
+    (mean, variance.sqrt(), max)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    fn create_test_record() -> DataRecord {
+        let mut metadata = HashMap::new();
+        metadata.insert("source".to_string(), "test".to_string());
+        metadata.insert("timestamp".to_string(), "2024-01-01".to_string());
+        
+        DataRecord {
+            id: 1,
+            name: "Test Record".to_string(),
+            value: 42.5,
+            category: "A".to_string(),
+            metadata,
+        }
+    }
+    
+    #[test]
+    fn test_validate_record_success() {
+        let record = create_test_record();
+        assert!(validate_record(&record).is_ok());
+    }
+    
+    #[test]
+    fn test_validate_record_invalid_id() {
+        let mut record = create_test_record();
+        record.id = 0;
+        assert!(matches!(validate_record(&record), Err(ValidationError::InvalidId)));
+    }
+    
+    #[test]
+    fn test_transform_record() {
+        let record = create_test_record();
+        let transformed = transform_record(&record);
+        
+        assert_eq!(transformed.name, "TEST RECORD");
+        assert_eq!(transformed.value, 42.5);
+        assert_eq!(transformed.metadata.get("processed"), Some(&"true".to_string()));
+        assert_eq!(transformed.metadata.get("version"), Some(&"1.0".to_string()));
+    }
+    
+    #[test]
+    fn test_calculate_statistics() {
+        let records = vec![
+            DataRecord { id: 1, name: "A".to_string(), value: 10.0, category: "A".to_string(), metadata: HashMap::new() },
+            DataRecord { id: 2, name: "B".to_string(), value: 20.0, category: "B".to_string(), metadata: HashMap::new() },
+            DataRecord { id: 3, name: "C".to_string(), value: 30.0, category: "C".to_string(), metadata: HashMap::new() },
+        ];
+        
+        let (mean, std_dev, max) = calculate_statistics(&records);
+        
+        assert_eq!(mean, 20.0);
+        assert!((std_dev - 8.164965).abs() < 0.0001);
+        assert_eq!(max, 30.0);
+    }
+}

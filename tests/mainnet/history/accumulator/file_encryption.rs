@@ -1,77 +1,95 @@
 
-use std::fs;
-use std::io::{self, Read, Write};
-use std::path::Path;
+use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
+use pbkdf2::{pbkdf2_hmac, Params};
+use rand::RngCore;
+use sha2::Sha256;
+use std::error::Error;
 
-pub fn xor_encrypt_file(input_path: &str, output_path: &str, key: &[u8]) -> io::Result<()> {
-    let input_data = fs::read(input_path)?;
-    let encrypted_data: Vec<u8> = input_data
-        .iter()
-        .enumerate()
-        .map(|(i, &byte)| byte ^ key[i % key.len()])
-        .collect();
-    
-    fs::write(output_path, encrypted_data)?;
-    Ok(())
+type Aes256CbcEnc = cbc::Encryptor<aes::Aes256>;
+type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
+
+const SALT_LENGTH: usize = 16;
+const IV_LENGTH: usize = 16;
+const KEY_ITERATIONS: u32 = 100_000;
+const KEY_LENGTH: usize = 32;
+
+pub struct EncryptionResult {
+    pub ciphertext: Vec<u8>,
+    pub salt: [u8; SALT_LENGTH],
+    pub iv: [u8; IV_LENGTH],
 }
 
-pub fn xor_decrypt_file(input_path: &str, output_path: &str, key: &[u8]) -> io::Result<()> {
-    xor_encrypt_file(input_path, output_path, key)
+pub fn encrypt_data(
+    plaintext: &[u8],
+    password: &str,
+) -> Result<EncryptionResult, Box<dyn Error>> {
+    let mut salt = [0u8; SALT_LENGTH];
+    let mut iv = [0u8; IV_LENGTH];
+    let mut rng = rand::thread_rng();
+    
+    rng.fill_bytes(&mut salt);
+    rng.fill_bytes(&mut iv);
+    
+    let key = derive_key(password, &salt)?;
+    
+    let ciphertext = Aes256CbcEnc::new(&key.into(), &iv.into())
+        .encrypt_padded_vec_mut::<Pkcs7>(plaintext);
+    
+    Ok(EncryptionResult {
+        ciphertext,
+        salt,
+        iv,
+    })
+}
+
+pub fn decrypt_data(
+    encrypted: &EncryptionResult,
+    password: &str,
+) -> Result<Vec<u8>, Box<dyn Error>> {
+    let key = derive_key(password, &encrypted.salt)?;
+    
+    let plaintext = Aes256CbcDec::new(&key.into(), &encrypted.iv.into())
+        .decrypt_padded_vec_mut::<Pkcs7>(&encrypted.ciphertext)?;
+    
+    Ok(plaintext)
+}
+
+fn derive_key(password: &str, salt: &[u8]) -> Result<[u8; KEY_LENGTH], Box<dyn Error>> {
+    let mut key = [0u8; KEY_LENGTH];
+    let params = Params {
+        rounds: KEY_ITERATIONS,
+        output_length: KEY_LENGTH,
+    };
+    
+    pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, params.rounds, &mut key)
+        .map_err(|e| e.into())
+        .map(|_| key)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::NamedTempFile;
 
     #[test]
     fn test_encryption_decryption() {
-        let original_content = b"Secret data that needs protection!";
-        let key = b"mysecretkey";
+        let plaintext = b"Secret data that needs protection";
+        let password = "StrongPassword123!";
         
-        let input_file = NamedTempFile::new().unwrap();
-        let encrypted_file = NamedTempFile::new().unwrap();
-        let decrypted_file = NamedTempFile::new().unwrap();
+        let encrypted = encrypt_data(plaintext, password).unwrap();
+        let decrypted = decrypt_data(&encrypted, password).unwrap();
         
-        fs::write(input_file.path(), original_content).unwrap();
-        
-        xor_encrypt_file(
-            input_file.path().to_str().unwrap(),
-            encrypted_file.path().to_str().unwrap(),
-            key
-        ).unwrap();
-        
-        xor_decrypt_file(
-            encrypted_file.path().to_str().unwrap(),
-            decrypted_file.path().to_str().unwrap(),
-            key
-        ).unwrap();
-        
-        let decrypted_content = fs::read(decrypted_file.path()).unwrap();
-        assert_eq!(original_content.to_vec(), decrypted_content);
+        assert_eq!(plaintext.to_vec(), decrypted);
     }
-}use aes_gcm::{
-    aead::{Aead, KeyInit, OsRng},
-    Aes256Gcm, Key, Nonce,
-};
-use std::error::Error;
 
-pub fn encrypt_file(data: &[u8], key: &[u8; 32]) -> Result<Vec<u8>, Box<dyn Error>> {
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
-    let nonce = Nonce::from_slice(b"unique_nonce_12");
-    let ciphertext = cipher.encrypt(nonce, data)?;
-    Ok(ciphertext)
-}
-
-pub fn decrypt_file(ciphertext: &[u8], key: &[u8; 32]) -> Result<Vec<u8>, Box<dyn Error>> {
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
-    let nonce = Nonce::from_slice(b"unique_nonce_12");
-    let plaintext = cipher.decrypt(nonce, ciphertext)?;
-    Ok(plaintext)
-}
-
-pub fn generate_key() -> [u8; 32] {
-    let mut key = [0u8; 32];
-    OsRng.fill_bytes(&mut key);
-    key
+    #[test]
+    fn test_wrong_password_fails() {
+        let plaintext = b"Test data";
+        let password = "CorrectPassword";
+        let wrong_password = "WrongPassword";
+        
+        let encrypted = encrypt_data(plaintext, password).unwrap();
+        let result = decrypt_data(&encrypted, wrong_password);
+        
+        assert!(result.is_err());
+    }
 }

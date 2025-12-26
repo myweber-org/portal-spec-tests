@@ -90,4 +90,107 @@ mod tests {
         let decrypted_content = fs::read(decrypted_file.path()).unwrap();
         assert_eq!(original_content.to_vec(), decrypted_content);
     }
+}use std::fs;
+use std::io::{self, Read, Write};
+use std::path::Path;
+
+pub struct XORCipher {
+    key: Vec<u8>,
+}
+
+impl XORCipher {
+    pub fn new(key: &str) -> Self {
+        XORCipher {
+            key: key.as_bytes().to_vec(),
+        }
+    }
+
+    pub fn encrypt_file(&self, source_path: &Path, dest_path: &Path) -> io::Result<()> {
+        self.process_file(source_path, dest_path)
+    }
+
+    pub fn decrypt_file(&self, source_path: &Path, dest_path: &Path) -> io::Result<()> {
+        self.process_file(source_path, dest_path)
+    }
+
+    fn process_file(&self, source_path: &Path, dest_path: &Path) -> io::Result<()> {
+        let mut source_file = fs::File::open(source_path)?;
+        let mut dest_file = fs::File::create(dest_path)?;
+
+        let mut buffer = [0; 4096];
+        let mut key_index = 0;
+
+        loop {
+            let bytes_read = source_file.read(&mut buffer)?;
+            if bytes_read == 0 {
+                break;
+            }
+
+            let mut processed_buffer = buffer[..bytes_read].to_vec();
+            for byte in processed_buffer.iter_mut() {
+                *byte ^= self.key[key_index];
+                key_index = (key_index + 1) % self.key.len();
+            }
+
+            dest_file.write_all(&processed_buffer)?;
+        }
+
+        dest_file.flush()?;
+        Ok(())
+    }
+}
+
+pub fn calculate_file_hash(path: &Path) -> io::Result<String> {
+    use sha2::{Sha256, Digest};
+    let mut file = fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0; 8192];
+
+    loop {
+        let bytes_read = file.read(&mut buffer)?;
+        if bytes_read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..bytes_read]);
+    }
+
+    let result = hasher.finalize();
+    Ok(format!("{:x}", result))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_xor_cipher_symmetry() {
+        let cipher = XORCipher::new("secret_key_123");
+        let test_data = b"Hello, this is a test message for XOR encryption!";
+        
+        let mut temp_input = NamedTempFile::new().unwrap();
+        temp_input.write_all(test_data).unwrap();
+        
+        let temp_encrypted = NamedTempFile::new().unwrap();
+        let temp_decrypted = NamedTempFile::new().unwrap();
+
+        cipher.encrypt_file(temp_input.path(), temp_encrypted.path()).unwrap();
+        cipher.decrypt_file(temp_encrypted.path(), temp_decrypted.path()).unwrap();
+
+        let decrypted_data = fs::read(temp_decrypted.path()).unwrap();
+        assert_eq!(test_data.to_vec(), decrypted_data);
+    }
+
+    #[test]
+    fn test_hash_consistency() {
+        let test_data = b"Consistent hash test data";
+        let temp_file = NamedTempFile::new().unwrap();
+        fs::write(temp_file.path(), test_data).unwrap();
+
+        let hash1 = calculate_file_hash(temp_file.path()).unwrap();
+        let hash2 = calculate_file_hash(temp_file.path()).unwrap();
+        
+        assert_eq!(hash1, hash2);
+        assert_eq!(hash1.len(), 64);
+    }
 }

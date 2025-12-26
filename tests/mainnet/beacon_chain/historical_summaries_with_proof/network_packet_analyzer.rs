@@ -140,4 +140,140 @@ pub fn parse_raw_packet_data(data: &[u8]) -> Option<NetworkPacket> {
         payload,
         timestamp,
     ))
+}use std::net::Ipv4Addr;
+
+#[derive(Debug, Clone)]
+pub struct NetworkPacket {
+    source_ip: Ipv4Addr,
+    destination_ip: Ipv4Addr,
+    protocol: u8,
+    payload: Vec<u8>,
+    timestamp: u64,
+}
+
+impl NetworkPacket {
+    pub fn new(
+        source_ip: Ipv4Addr,
+        destination_ip: Ipv4Addr,
+        protocol: u8,
+        payload: Vec<u8>,
+        timestamp: u64,
+    ) -> Self {
+        Self {
+            source_ip,
+            destination_ip,
+            protocol,
+            payload,
+            timestamp,
+        }
+    }
+
+    pub fn is_local_traffic(&self) -> bool {
+        self.source_ip.is_private() && self.destination_ip.is_private()
+    }
+
+    pub fn payload_size(&self) -> usize {
+        self.payload.len()
+    }
+
+    pub fn protocol_name(&self) -> &'static str {
+        match self.protocol {
+            1 => "ICMP",
+            6 => "TCP",
+            17 => "UDP",
+            _ => "UNKNOWN",
+        }
+    }
+}
+
+pub struct PacketAnalyzer {
+    packets: Vec<NetworkPacket>,
+    total_bytes: usize,
+}
+
+impl PacketAnalyzer {
+    pub fn new() -> Self {
+        Self {
+            packets: Vec::new(),
+            total_bytes: 0,
+        }
+    }
+
+    pub fn add_packet(&mut self, packet: NetworkPacket) {
+        self.total_bytes += packet.payload_size();
+        self.packets.push(packet);
+    }
+
+    pub fn total_packets(&self) -> usize {
+        self.packets.len()
+    }
+
+    pub fn average_packet_size(&self) -> f64 {
+        if self.packets.is_empty() {
+            0.0
+        } else {
+            self.total_bytes as f64 / self.packets.len() as f64
+        }
+    }
+
+    pub fn protocol_distribution(&self) -> Vec<(&'static str, usize)> {
+        let mut distribution = std::collections::HashMap::new();
+
+        for packet in &self.packets {
+            let protocol = packet.protocol_name();
+            *distribution.entry(protocol).or_insert(0) += 1;
+        }
+
+        distribution.into_iter().collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_packet_creation() {
+        let packet = NetworkPacket::new(
+            Ipv4Addr::new(192, 168, 1, 1),
+            Ipv4Addr::new(192, 168, 1, 2),
+            6,
+            vec![1, 2, 3, 4, 5],
+            1234567890,
+        );
+
+        assert!(packet.is_local_traffic());
+        assert_eq!(packet.payload_size(), 5);
+        assert_eq!(packet.protocol_name(), "TCP");
+    }
+
+    #[test]
+    fn test_analyzer_statistics() {
+        let mut analyzer = PacketAnalyzer::new();
+
+        let packet1 = NetworkPacket::new(
+            Ipv4Addr::new(10, 0, 0, 1),
+            Ipv4Addr::new(10, 0, 0, 2),
+            6,
+            vec![0; 100],
+            1234567890,
+        );
+
+        let packet2 = NetworkPacket::new(
+            Ipv4Addr::new(192, 168, 1, 1),
+            Ipv4Addr::new(8, 8, 8, 8),
+            17,
+            vec![0; 200],
+            1234567891,
+        );
+
+        analyzer.add_packet(packet1);
+        analyzer.add_packet(packet2);
+
+        assert_eq!(analyzer.total_packets(), 2);
+        assert_eq!(analyzer.average_packet_size(), 150.0);
+
+        let distribution = analyzer.protocol_distribution();
+        assert_eq!(distribution.len(), 2);
+    }
 }

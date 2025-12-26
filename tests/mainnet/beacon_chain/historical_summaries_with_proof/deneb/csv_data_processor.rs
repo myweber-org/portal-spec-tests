@@ -226,4 +226,43 @@ mod tests {
         assert_eq!(max_record.id, 2);
         assert_eq!(max_record.value, 25.0);
     }
+}use std::error::Error;
+use std::fs::File;
+use csv::ReaderBuilder;
+
+#[derive(Debug, serde::Deserialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
+}
+
+fn process_csv_file(file_path: &str, min_value: f64) -> Result<Vec<Record>, Box<dyn Error>> {
+    let file = File::open(file_path)?;
+    let mut rdr = ReaderBuilder::new()
+        .has_headers(true)
+        .from_reader(file);
+
+    let mut filtered_records = Vec::new();
+
+    for result in rdr.deserialize() {
+        let record: Record = result?;
+        if record.value >= min_value && record.active {
+            filtered_records.push(record);
+        }
+    }
+
+    Ok(filtered_records)
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let records = process_csv_file("data.csv", 100.0)?;
+    
+    println!("Filtered Records:");
+    for record in records {
+        println!("ID: {}, Name: {}, Value: {}", record.id, record.name, record.value);
+    }
+    
+    Ok(())
 }

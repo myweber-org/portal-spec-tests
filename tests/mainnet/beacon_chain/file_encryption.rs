@@ -80,4 +80,67 @@ mod tests {
 
         assert!(result.is_err());
     }
+}use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce,
+};
+use std::error::Error;
+
+const NONCE_SIZE: usize = 12;
+
+pub fn encrypt_file(key: &[u8; 32], plaintext: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+    let nonce = Nonce::from_slice(&OsRng.gen::<[u8; NONCE_SIZE]>());
+    
+    let ciphertext = cipher
+        .encrypt(nonce, plaintext)
+        .map_err(|e| format!("Encryption failed: {}", e))?;
+    
+    let mut result = Vec::with_capacity(NONCE_SIZE + ciphertext.len());
+    result.extend_from_slice(nonce);
+    result.extend_from_slice(&ciphertext);
+    
+    Ok(result)
+}
+
+pub fn decrypt_file(key: &[u8; 32], ciphertext: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+    if ciphertext.len() < NONCE_SIZE {
+        return Err("Ciphertext too short".into());
+    }
+    
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+    let nonce = Nonce::from_slice(&ciphertext[..NONCE_SIZE]);
+    let encrypted_data = &ciphertext[NONCE_SIZE..];
+    
+    cipher
+        .decrypt(nonce, encrypted_data)
+        .map_err(|e| format!("Decryption failed: {}", e).into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hex_literal::hex;
+
+    #[test]
+    fn test_encryption_roundtrip() {
+        let key = hex!("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
+        let plaintext = b"Secret data that needs protection";
+        
+        let encrypted = encrypt_file(&key, plaintext).unwrap();
+        let decrypted = decrypt_file(&key, &encrypted).unwrap();
+        
+        assert_eq!(plaintext.to_vec(), decrypted);
+    }
+    
+    #[test]
+    fn test_tampered_ciphertext() {
+        let key = hex!("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
+        let plaintext = b"Test message";
+        
+        let mut encrypted = encrypt_file(&key, plaintext).unwrap();
+        encrypted[20] ^= 0xFF;
+        
+        assert!(decrypt_file(&key, &encrypted).is_err());
+    }
 }

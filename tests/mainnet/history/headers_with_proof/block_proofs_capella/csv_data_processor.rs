@@ -278,3 +278,178 @@ mod tests {
         assert!((stats.3 - 20.3).abs() < 0.1);
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufReader, BufWriter};
+use std::path::Path;
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    category: String,
+}
+
+#[derive(Debug)]
+pub struct DataProcessor {
+    records: Vec<Record>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut csv_reader = csv::Reader::from_reader(reader);
+
+        for result in csv_reader.deserialize() {
+            let record: Record = result?;
+            self.records.push(record);
+        }
+
+        Ok(())
+    }
+
+    pub fn save_to_csv<P: AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn Error>> {
+        let file = File::create(path)?;
+        let writer = BufWriter::new(file);
+        let mut csv_writer = csv::Writer::from_writer(writer);
+
+        for record in &self.records {
+            csv_writer.serialize(record)?;
+        }
+
+        csv_writer.flush()?;
+        Ok(())
+    }
+
+    pub fn filter_by_category(&self, category: &str) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|record| record.category == category)
+            .collect()
+    }
+
+    pub fn calculate_average_value(&self) -> Option<f64> {
+        if self.records.is_empty() {
+            return None;
+        }
+
+        let sum: f64 = self.records.iter().map(|record| record.value).sum();
+        Some(sum / self.records.len() as f64)
+    }
+
+    pub fn transform_values<F>(&mut self, transform_fn: F)
+    where
+        F: Fn(f64) -> f64,
+    {
+        for record in &mut self.records {
+            record.value = transform_fn(record.value);
+        }
+    }
+
+    pub fn validate_records(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+
+        for (index, record) in self.records.iter().enumerate() {
+            if record.name.trim().is_empty() {
+                errors.push(format!("Record {} has empty name", index));
+            }
+
+            if record.value < 0.0 {
+                errors.push(format!("Record {} has negative value: {}", index, record.value));
+            }
+
+            if record.category.trim().is_empty() {
+                errors.push(format!("Record {} has empty category", index));
+            }
+        }
+
+        errors
+    }
+
+    pub fn get_record_count(&self) -> usize {
+        self.records.len()
+    }
+
+    pub fn add_record(&mut self, record: Record) {
+        self.records.push(record);
+    }
+
+    pub fn clear_records(&mut self) {
+        self.records.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_data_processor_operations() {
+        let mut processor = DataProcessor::new();
+
+        let test_record = Record {
+            id: 1,
+            name: "Test Item".to_string(),
+            value: 100.0,
+            category: "Electronics".to_string(),
+        };
+
+        processor.add_record(test_record);
+        assert_eq!(processor.get_record_count(), 1);
+
+        let avg = processor.calculate_average_value();
+        assert_eq!(avg, Some(100.0));
+
+        let errors = processor.validate_records();
+        assert!(errors.is_empty());
+
+        processor.transform_values(|x| x * 1.1);
+        let avg_after = processor.calculate_average_value();
+        assert_eq!(avg_after, Some(110.0));
+    }
+
+    #[test]
+    fn test_csv_io() {
+        let mut processor = DataProcessor::new();
+
+        let records = vec![
+            Record {
+                id: 1,
+                name: "Item A".to_string(),
+                value: 50.0,
+                category: "Category1".to_string(),
+            },
+            Record {
+                id: 2,
+                name: "Item B".to_string(),
+                value: 75.0,
+                category: "Category2".to_string(),
+            },
+        ];
+
+        for record in records {
+            processor.add_record(record);
+        }
+
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.path();
+
+        processor.save_to_csv(path).unwrap();
+
+        let mut new_processor = DataProcessor::new();
+        new_processor.load_from_csv(path).unwrap();
+
+        assert_eq!(new_processor.get_record_count(), 2);
+    }
+}

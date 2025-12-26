@@ -1,109 +1,174 @@
-use std::error::Error;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use thiserror::Error;
 
-pub struct DataProcessor {
-    file_path: String,
+#[derive(Debug, Error)]
+pub enum DataError {
+    #[error("Invalid input data")]
+    InvalidInput,
+    #[error("Transformation failed")]
+    TransformationFailed,
+    #[error("Validation error: {0}")]
+    ValidationError(String),
 }
 
-impl DataProcessor {
-    pub fn new(file_path: &str) -> Self {
-        DataProcessor {
-            file_path: file_path.to_string(),
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataRecord {
+    pub id: u64,
+    pub timestamp: i64,
+    pub values: HashMap<String, f64>,
+    pub metadata: Option<HashMap<String, String>>,
+}
+
+impl DataRecord {
+    pub fn validate(&self) -> Result<(), DataError> {
+        if self.id == 0 {
+            return Err(DataError::ValidationError("ID cannot be zero".to_string()));
         }
-    }
-
-    pub fn process_csv(&self, filter_threshold: f64) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
-        let file = File::open(&self.file_path)?;
-        let reader = BufReader::new(file);
-        let mut filtered_data = Vec::new();
-
-        for (index, line) in reader.lines().enumerate() {
-            let line = line?;
-            if index == 0 {
-                filtered_data.push(line.split(',').map(|s| s.to_string()).collect());
-                continue;
+        
+        if self.timestamp < 0 {
+            return Err(DataError::ValidationError("Timestamp cannot be negative".to_string()));
+        }
+        
+        if self.values.is_empty() {
+            return Err(DataError::ValidationError("Values cannot be empty".to_string()));
+        }
+        
+        for (key, value) in &self.values {
+            if key.trim().is_empty() {
+                return Err(DataError::ValidationError("Key cannot be empty".to_string()));
             }
+            
+            if !value.is_finite() {
+                return Err(DataError::ValidationError(
+                    format!("Value for key '{}' must be finite", key)
+                ));
+            }
+        }
+        
+        Ok(())
+    }
+    
+    pub fn transform_values<F>(&mut self, transformer: F) -> Result<(), DataError>
+    where
+        F: Fn(f64) -> Result<f64, DataError>,
+    {
+        let mut transformed = HashMap::new();
+        
+        for (key, value) in &self.values {
+            match transformer(*value) {
+                Ok(transformed_value) => {
+                    transformed.insert(key.clone(), transformed_value);
+                }
+                Err(e) => {
+                    return Err(DataError::TransformationFailed);
+                }
+            }
+        }
+        
+        self.values = transformed;
+        Ok(())
+    }
+    
+    pub fn normalize(&mut self) -> Result<(), DataError> {
+        if self.values.is_empty() {
+            return Ok(());
+        }
+        
+        let sum: f64 = self.values.values().sum();
+        if sum.abs() < f64::EPSILON {
+            return Err(DataError::TransformationFailed);
+        }
+        
+        let mut normalized = HashMap::new();
+        for (key, value) in &self.values {
+            normalized.insert(key.clone(), value / sum);
+        }
+        
+        self.values = normalized;
+        Ok(())
+    }
+}
 
-            let columns: Vec<&str> = line.split(',').collect();
-            if columns.len() >= 3 {
-                if let Ok(value) = columns[2].parse::<f64>() {
-                    if value > filter_threshold {
-                        filtered_data.push(columns.iter().map(|&s| s.to_string()).collect());
+pub fn process_records(records: &mut [DataRecord]) -> Result<Vec<DataRecord>, DataError> {
+    let mut processed = Vec::new();
+    
+    for record in records {
+        match record.validate() {
+            Ok(_) => {
+                let mut processed_record = record.clone();
+                
+                processed_record.transform_values(|x| {
+                    if x < 0.0 {
+                        Err(DataError::TransformationFailed)
+                    } else {
+                        Ok(x.ln())
                     }
-                }
+                })?;
+                
+                processed_record.normalize()?;
+                processed.push(processed_record);
+            }
+            Err(e) => {
+                return Err(e);
             }
         }
-
-        Ok(filtered_data)
     }
-
-    pub fn calculate_statistics(&self, column_index: usize) -> Result<(f64, f64), Box<dyn Error>> {
-        let file = File::open(&self.file_path)?;
-        let reader = BufReader::new(file);
-        let mut values = Vec::new();
-
-        for (index, line) in reader.lines().enumerate() {
-            let line = line?;
-            if index == 0 {
-                continue;
-            }
-
-            let columns: Vec<&str> = line.split(',').collect();
-            if column_index < columns.len() {
-                if let Ok(value) = columns[column_index].parse::<f64>() {
-                    values.push(value);
-                }
-            }
-        }
-
-        if values.is_empty() {
-            return Ok((0.0, 0.0));
-        }
-
-        let sum: f64 = values.iter().sum();
-        let mean = sum / values.len() as f64;
-        let variance: f64 = values.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / values.len() as f64;
-        let std_dev = variance.sqrt();
-
-        Ok((mean, std_dev))
-    }
+    
+    Ok(processed)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
-
+    
     #[test]
-    fn test_process_csv() {
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "id,name,value").unwrap();
-        writeln!(temp_file, "1,item_a,15.5").unwrap();
-        writeln!(temp_file, "2,item_b,8.2").unwrap();
-        writeln!(temp_file, "3,item_c,22.7").unwrap();
-
-        let processor = DataProcessor::new(temp_file.path().to_str().unwrap());
-        let result = processor.process_csv(10.0).unwrap();
-
-        assert_eq!(result.len(), 3);
-        assert_eq!(result[1][2], "15.5");
-        assert_eq!(result[2][2], "22.7");
+    fn test_valid_record() {
+        let mut values = HashMap::new();
+        values.insert("temperature".to_string(), 25.5);
+        values.insert("humidity".to_string(), 60.0);
+        
+        let record = DataRecord {
+            id: 1,
+            timestamp: 1625097600,
+            values,
+            metadata: None,
+        };
+        
+        assert!(record.validate().is_ok());
     }
-
+    
     #[test]
-    fn test_calculate_statistics() {
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "id,score").unwrap();
-        writeln!(temp_file, "1,85.0").unwrap();
-        writeln!(temp_file, "2,92.0").unwrap();
-        writeln!(temp_file, "3,78.0").unwrap();
-
-        let processor = DataProcessor::new(temp_file.path().to_str().unwrap());
-        let (mean, std_dev) = processor.calculate_statistics(1).unwrap();
-
-        assert!((mean - 85.0).abs() < 0.1);
-        assert!(std_dev > 0.0);
+    fn test_invalid_record() {
+        let mut values = HashMap::new();
+        values.insert("".to_string(), f64::NAN);
+        
+        let record = DataRecord {
+            id: 0,
+            timestamp: -1,
+            values,
+            metadata: None,
+        };
+        
+        assert!(record.validate().is_err());
+    }
+    
+    #[test]
+    fn test_normalization() {
+        let mut values = HashMap::new();
+        values.insert("a".to_string(), 1.0);
+        values.insert("b".to_string(), 2.0);
+        values.insert("c".to_string(), 3.0);
+        
+        let mut record = DataRecord {
+            id: 1,
+            timestamp: 1625097600,
+            values,
+            metadata: None,
+        };
+        
+        assert!(record.normalize().is_ok());
+        let sum: f64 = record.values.values().sum();
+        assert!((sum - 1.0).abs() < f64::EPSILON);
     }
 }

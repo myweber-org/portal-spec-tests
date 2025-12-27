@@ -340,3 +340,77 @@ mod tests {
         assert!(content.contains("1") && content.contains("value"));
     }
 }
+use serde_json::{Value, Map};
+use std::fs;
+use std::path::Path;
+use std::collections::HashSet;
+
+pub fn merge_json_files<P: AsRef<Path>>(paths: &[P]) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut merged = Map::new();
+    let mut processed_keys = HashSet::new();
+    let mut conflict_log = Vec::new();
+
+    for path in paths {
+        let content = fs::read_to_string(path)?;
+        let json: Value = serde_json::from_str(&content)?;
+
+        if let Value::Object(obj) = json {
+            for (key, value) in obj {
+                if processed_keys.contains(&key) {
+                    conflict_log.push(format!("Conflict detected for key '{}'", key));
+                    continue;
+                }
+                merged.insert(key.clone(), value);
+                processed_keys.insert(key);
+            }
+        }
+    }
+
+    if !conflict_log.is_empty() {
+        eprintln!("Conflicts found during merge:");
+        for log in &conflict_log {
+            eprintln!("  {}", log);
+        }
+    }
+
+    Ok(Value::Object(merged))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_merge_json_files() {
+        let file1 = NamedTempFile::new().unwrap();
+        let file2 = NamedTempFile::new().unwrap();
+
+        fs::write(&file1, r#"{"a": 1, "b": 2}"#).unwrap();
+        fs::write(&file2, r#"{"c": 3, "d": 4}"#).unwrap();
+
+        let result = merge_json_files(&[file1.path(), file2.path()]).unwrap();
+        let obj = result.as_object().unwrap();
+
+        assert_eq!(obj.len(), 4);
+        assert_eq!(obj.get("a").unwrap().as_i64(), Some(1));
+        assert_eq!(obj.get("c").unwrap().as_i64(), Some(3));
+    }
+
+    #[test]
+    fn test_merge_with_conflict() {
+        let file1 = NamedTempFile::new().unwrap();
+        let file2 = NamedTempFile::new().unwrap();
+
+        fs::write(&file1, r#"{"a": 1, "b": 2}"#).unwrap();
+        fs::write(&file2, r#"{"a": 99, "c": 3}"#).unwrap();
+
+        let result = merge_json_files(&[file1.path(), file2.path()]).unwrap();
+        let obj = result.as_object().unwrap();
+
+        assert_eq!(obj.len(), 2);
+        assert_eq!(obj.get("a").unwrap().as_i64(), Some(1));
+        assert_eq!(obj.get("b").unwrap().as_i64(), Some(2));
+        assert!(!obj.contains_key("c"));
+    }
+}

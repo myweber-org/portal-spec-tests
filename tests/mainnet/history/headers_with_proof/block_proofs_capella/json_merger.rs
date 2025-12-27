@@ -180,3 +180,74 @@ mod tests {
         assert!(ids.contains(&3));
     }
 }
+use serde_json::{Value, Map};
+use std::fs;
+use std::path::Path;
+use std::collections::HashSet;
+
+pub fn merge_json_files<P: AsRef<Path>>(paths: &[P], output_path: P) -> Result<(), Box<dyn std::error::Error>> {
+    let mut merged = Map::new();
+    let mut key_sources = Map::new();
+
+    for (index, path) in paths.iter().enumerate() {
+        let content = fs::read_to_string(path)?;
+        let json: Value = serde_json::from_str(&content)?;
+
+        if let Value::Object(obj) = json {
+            for (key, value) in obj {
+                if merged.contains_key(&key) {
+                    let existing_source = key_sources.get(&key).and_then(|v| v.as_u64()).unwrap_or(0);
+                    let conflict_resolution = resolve_conflict(&key, &merged[&key], &value, existing_source as usize, index);
+                    
+                    match conflict_resolution {
+                        ConflictResolution::KeepExisting => continue,
+                        ConflictResolution::UseNew(new_value) => {
+                            merged.insert(key.clone(), new_value);
+                            key_sources.insert(key.clone(), Value::from(index as u64));
+                        }
+                        ConflictResolution::MergeArrays => {
+                            if let (Value::Array(mut existing), Value::Array(new)) = (&merged[&key], &value) {
+                                let mut combined = existing.clone();
+                                combined.extend(new.clone());
+                                let unique_values: Vec<Value> = combined.into_iter().collect::<HashSet<_>>().into_iter().collect();
+                                merged.insert(key.clone(), Value::from(unique_values));
+                                key_sources.insert(key.clone(), Value::from(vec![existing_source, index as u64]));
+                            }
+                        }
+                    }
+                } else {
+                    merged.insert(key.clone(), value);
+                    key_sources.insert(key.clone(), Value::from(index as u64));
+                }
+            }
+        }
+    }
+
+    let result = Value::Object(merged);
+    let output = serde_json::to_string_pretty(&result)?;
+    fs::write(output_path, output)?;
+
+    Ok(())
+}
+
+enum ConflictResolution {
+    KeepExisting,
+    UseNew(Value),
+    MergeArrays,
+}
+
+fn resolve_conflict(key: &str, existing: &Value, new: &Value, source1: usize, source2: usize) -> ConflictResolution {
+    match (existing, new) {
+        (Value::Array(_), Value::Array(_)) => ConflictResolution::MergeArrays,
+        (Value::Number(a), Value::Number(b)) if a == b => ConflictResolution::KeepExisting,
+        (Value::String(a), Value::String(b)) if a == b => ConflictResolution::KeepExisting,
+        (Value::Bool(a), Value::Bool(b)) if a == b => ConflictResolution::KeepExisting,
+        _ => {
+            eprintln!("Conflict for key '{}':", key);
+            eprintln!("  Source {}: {}", source1 + 1, existing);
+            eprintln!("  Source {}: {}", source2 + 1, new);
+            eprintln!("  Using value from source {}", source2 + 1);
+            ConflictResolution::UseNew(new.clone())
+        }
+    }
+}

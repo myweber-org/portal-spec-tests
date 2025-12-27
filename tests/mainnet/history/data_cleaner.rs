@@ -95,3 +95,32 @@ mod tests {
         assert_eq!(cleaned[0], "test");
     }
 }
+pub fn normalize_string(input: &str) -> String {
+    input.trim().to_lowercase()
+}
+
+pub fn clean_string_vector(strings: Vec<&str>) -> Vec<String> {
+    strings
+        .iter()
+        .map(|s| normalize_string(s))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_normalize_string() {
+        assert_eq!(normalize_string("  HELLO World  "), "hello world");
+        assert_eq!(normalize_string("RUST"), "rust");
+        assert_eq!(normalize_string(""), "");
+    }
+
+    #[test]
+    fn test_clean_string_vector() {
+        let input = vec!["  APPLE", "Banana  ", "  CHERRY  "];
+        let expected = vec!["apple", "banana", "cherry"];
+        assert_eq!(clean_string_vector(input), expected);
+    }
+}

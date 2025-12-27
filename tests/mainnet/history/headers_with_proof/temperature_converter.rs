@@ -1,51 +1,65 @@
-use std::io;
 
-fn main() {
-    println!("Temperature Converter");
-    println!("1. Celsius to Fahrenheit");
-    println!("2. Fahrenheit to Celsius");
-
-    let choice: u32 = loop {
-        let mut input = String::new();
-        println!("Enter your choice (1 or 2):");
-        io::stdin().read_line(&mut input).expect("Failed to read line");
-
-        match input.trim().parse() {
-            Ok(num) if num == 1 || num == 2 => break num,
-            _ => println!("Invalid input. Please enter 1 or 2."),
-        }
-    };
-
-    let temperature: f64 = loop {
-        let mut input = String::new();
-        println!("Enter the temperature:");
-        io::stdin().read_line(&mut input).expect("Failed to read line");
-
-        match input.trim().parse() {
-            Ok(num) => break num,
-            Err(_) => println!("Invalid input. Please enter a number."),
-        }
-    };
-
-    let converted = if choice == 1 {
-        celsius_to_fahrenheit(temperature)
-    } else {
-        fahrenheit_to_celsius(temperature)
-    };
-
-    let (from_unit, to_unit) = if choice == 1 {
-        ("Celsius", "Fahrenheit")
-    } else {
-        ("Fahrenheit", "Celsius")
-    };
-
-    println!("{:.2}° {} is equal to {:.2}° {}", temperature, from_unit, converted, to_unit);
-}
-
-fn celsius_to_fahrenheit(celsius: f64) -> f64 {
+pub fn celsius_to_fahrenheit(celsius: f64) -> f64 {
     (celsius * 9.0 / 5.0) + 32.0
 }
 
-fn fahrenheit_to_celsius(fahrenheit: f64) -> f64 {
+pub fn celsius_to_kelvin(celsius: f64) -> f64 {
+    celsius + 273.15
+}
+
+pub fn fahrenheit_to_celsius(fahrenheit: f64) -> f64 {
     (fahrenheit - 32.0) * 5.0 / 9.0
+}
+
+pub fn fahrenheit_to_kelvin(fahrenheit: f64) -> f64 {
+    celsius_to_kelvin(fahrenheit_to_celsius(fahrenheit))
+}
+
+pub fn kelvin_to_celsius(kelvin: f64) -> f64 {
+    kelvin - 273.15
+}
+
+pub fn kelvin_to_fahrenheit(kelvin: f64) -> f64 {
+    celsius_to_fahrenheit(kelvin_to_celsius(kelvin))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_celsius_to_fahrenheit() {
+        assert!((celsius_to_fahrenheit(0.0) - 32.0).abs() < f64::EPSILON);
+        assert!((celsius_to_fahrenheit(100.0) - 212.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_celsius_to_kelvin() {
+        assert!((celsius_to_kelvin(0.0) - 273.15).abs() < f64::EPSILON);
+        assert!((celsius_to_kelvin(100.0) - 373.15).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_fahrenheit_to_celsius() {
+        assert!((fahrenheit_to_celsius(32.0) - 0.0).abs() < f64::EPSILON);
+        assert!((fahrenheit_to_celsius(212.0) - 100.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_kelvin_to_celsius() {
+        assert!((kelvin_to_celsius(273.15) - 0.0).abs() < f64::EPSILON);
+        assert!((kelvin_to_celsius(373.15) - 100.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_conversion_chain() {
+        let celsius = 25.0;
+        let fahrenheit = celsius_to_fahrenheit(celsius);
+        let kelvin = celsius_to_kelvin(celsius);
+        let celsius_back = fahrenheit_to_celsius(fahrenheit);
+        let kelvin_back = fahrenheit_to_kelvin(fahrenheit);
+        
+        assert!((celsius - celsius_back).abs() < f64::EPSILON);
+        assert!((kelvin - kelvin_back).abs() < f64::EPSILON);
+    }
 }

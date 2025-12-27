@@ -86,3 +86,120 @@ mod tests {
         assert!(!validate_record(&invalid_record));
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::path::Path;
+
+pub struct DataRecord {
+    id: u32,
+    value: f64,
+    category: String,
+}
+
+impl DataRecord {
+    pub fn new(id: u32, value: f64, category: &str) -> Result<Self, String> {
+        if value < 0.0 {
+            return Err("Value cannot be negative".to_string());
+        }
+        if category.trim().is_empty() {
+            return Err("Category cannot be empty".to_string());
+        }
+        
+        Ok(Self {
+            id,
+            value,
+            category: category.to_string(),
+        })
+    }
+    
+    pub fn calculate_adjusted_value(&self, multiplier: f64) -> f64 {
+        self.value * multiplier
+    }
+}
+
+pub fn load_csv_data(file_path: &Path) -> Result<Vec<DataRecord>, Box<dyn Error>> {
+    let file = File::open(file_path)?;
+    let mut rdr = csv::Reader::from_reader(file);
+    let mut records = Vec::new();
+    
+    for result in rdr.records() {
+        let record = result?;
+        if record.len() >= 3 {
+            let id: u32 = record[0].parse()?;
+            let value: f64 = record[1].parse()?;
+            let category = &record[2];
+            
+            match DataRecord::new(id, value, category) {
+                Ok(data_record) => records.push(data_record),
+                Err(e) => eprintln!("Skipping invalid record: {}", e),
+            }
+        }
+    }
+    
+    Ok(records)
+}
+
+pub fn process_records(records: &[DataRecord]) -> (f64, f64, usize) {
+    let total: f64 = records.iter().map(|r| r.value).sum();
+    let average = if !records.is_empty() {
+        total / records.len() as f64
+    } else {
+        0.0
+    };
+    let count = records.len();
+    
+    (total, average, count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+    
+    #[test]
+    fn test_data_record_creation() {
+        let record = DataRecord::new(1, 42.5, "analytics").unwrap();
+        assert_eq!(record.id, 1);
+        assert_eq!(record.value, 42.5);
+        assert_eq!(record.category, "analytics");
+    }
+    
+    #[test]
+    fn test_invalid_data_record() {
+        let result = DataRecord::new(2, -5.0, "test");
+        assert!(result.is_err());
+    }
+    
+    #[test]
+    fn test_calculate_adjusted_value() {
+        let record = DataRecord::new(3, 100.0, "finance").unwrap();
+        assert_eq!(record.calculate_adjusted_value(1.5), 150.0);
+    }
+    
+    #[test]
+    fn test_load_csv_data() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,value,category").unwrap();
+        writeln!(temp_file, "1,25.5,analytics").unwrap();
+        writeln!(temp_file, "2,30.0,finance").unwrap();
+        
+        let records = load_csv_data(temp_file.path()).unwrap();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].category, "analytics");
+    }
+    
+    #[test]
+    fn test_process_records() {
+        let records = vec![
+            DataRecord::new(1, 10.0, "a").unwrap(),
+            DataRecord::new(2, 20.0, "b").unwrap(),
+            DataRecord::new(3, 30.0, "c").unwrap(),
+        ];
+        
+        let (total, average, count) = process_records(&records);
+        assert_eq!(total, 60.0);
+        assert_eq!(average, 20.0);
+        assert_eq!(count, 3);
+    }
+}

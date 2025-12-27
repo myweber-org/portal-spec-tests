@@ -247,3 +247,171 @@ mod tests {
         assert!(result.is_err());
     }
 }
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    id: u32,
+    name: String,
+    value: f64,
+    metadata: HashMap<String, String>,
+}
+
+#[derive(Debug)]
+pub enum ValidationError {
+    InvalidId,
+    EmptyName,
+    NegativeValue,
+    MissingMetadata(String),
+}
+
+impl fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ValidationError::InvalidId => write!(f, "ID must be greater than 0"),
+            ValidationError::EmptyName => write!(f, "Name cannot be empty"),
+            ValidationError::NegativeValue => write!(f, "Value cannot be negative"),
+            ValidationError::MissingMetadata(key) => write!(f, "Missing metadata key: {}", key),
+        }
+    }
+}
+
+impl Error for ValidationError {}
+
+impl DataRecord {
+    pub fn new(id: u32, name: String, value: f64) -> Self {
+        Self {
+            id,
+            name,
+            value,
+            metadata: HashMap::new(),
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        if self.id == 0 {
+            return Err(ValidationError::InvalidId);
+        }
+        if self.name.trim().is_empty() {
+            return Err(ValidationError::EmptyName);
+        }
+        if self.value < 0.0 {
+            return Err(ValidationError::NegativeValue);
+        }
+        Ok(())
+    }
+
+    pub fn add_metadata(&mut self, key: String, value: String) {
+        self.metadata.insert(key, value);
+    }
+
+    pub fn get_metadata(&self, key: &str) -> Option<&String> {
+        self.metadata.get(key)
+    }
+
+    pub fn transform_value<F>(&mut self, transformer: F)
+    where
+        F: Fn(f64) -> f64,
+    {
+        self.value = transformer(self.value);
+    }
+
+    pub fn to_json(&self) -> String {
+        let metadata_json: Vec<String> = self
+            .metadata
+            .iter()
+            .map(|(k, v)| format!("\"{}\":\"{}\"", k, v))
+            .collect();
+
+        format!(
+            "{{\"id\":{},\"name\":\"{}\",\"value\":{},\"metadata\":{{{}}}}}",
+            self.id,
+            self.name,
+            self.value,
+            metadata_json.join(",")
+        )
+    }
+}
+
+pub fn process_records(records: &mut [DataRecord]) -> Result<Vec<String>, ValidationError> {
+    let mut results = Vec::new();
+
+    for record in records {
+        record.validate()?;
+        record.transform_value(|v| v * 1.1);
+        results.push(record.to_json());
+    }
+
+    Ok(results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_record() {
+        let record = DataRecord::new(1, "Test".to_string(), 100.0);
+        assert!(record.validate().is_ok());
+    }
+
+    #[test]
+    fn test_invalid_id() {
+        let record = DataRecord::new(0, "Test".to_string(), 100.0);
+        assert!(matches!(record.validate(), Err(ValidationError::InvalidId)));
+    }
+
+    #[test]
+    fn test_empty_name() {
+        let record = DataRecord::new(1, "".to_string(), 100.0);
+        assert!(matches!(record.validate(), Err(ValidationError::EmptyName)));
+    }
+
+    #[test]
+    fn test_negative_value() {
+        let record = DataRecord::new(1, "Test".to_string(), -50.0);
+        assert!(matches!(record.validate(), Err(ValidationError::NegativeValue)));
+    }
+
+    #[test]
+    fn test_metadata_operations() {
+        let mut record = DataRecord::new(1, "Test".to_string(), 100.0);
+        record.add_metadata("category".to_string(), "premium".to_string());
+        assert_eq!(record.get_metadata("category"), Some(&"premium".to_string()));
+    }
+
+    #[test]
+    fn test_value_transformation() {
+        let mut record = DataRecord::new(1, "Test".to_string(), 100.0);
+        record.transform_value(|v| v * 2.0);
+        assert_eq!(record.value, 200.0);
+    }
+
+    #[test]
+    fn test_json_output() {
+        let mut record = DataRecord::new(42, "Sample".to_string(), 75.5);
+        record.add_metadata("status".to_string(), "active".to_string());
+        let json = record.to_json();
+        assert!(json.contains("\"id\":42"));
+        assert!(json.contains("\"name\":\"Sample\""));
+        assert!(json.contains("\"value\":75.5"));
+        assert!(json.contains("\"status\":\"active\""));
+    }
+
+    #[test]
+    fn test_batch_processing() {
+        let mut records = vec![
+            DataRecord::new(1, "First".to_string(), 10.0),
+            DataRecord::new(2, "Second".to_string(), 20.0),
+        ];
+
+        let result = process_records(&mut records);
+        assert!(result.is_ok());
+        let json_results = result.unwrap();
+        assert_eq!(json_results.len(), 2);
+        assert!(json_results[0].contains("\"value\":11"));
+        assert!(json_results[1].contains("\"value\":22"));
+    }
+}

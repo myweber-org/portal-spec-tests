@@ -1,93 +1,122 @@
-
-use std::error::Error;
-use std::fs::File;
-use std::path::Path;
-
-pub struct DataRecord {
-    pub id: u32,
-    pub value: f64,
-    pub category: String,
-}
+use std::collections::HashMap;
 
 pub struct DataProcessor {
-    records: Vec<DataRecord>,
+    validators: HashMap<String, Box<dyn Fn(&str) -> bool>>,
+    transformers: HashMap<String, Box<dyn Fn(String) -> String>>,
 }
 
 impl DataProcessor {
     pub fn new() -> Self {
         DataProcessor {
-            records: Vec::new(),
+            validators: HashMap::new(),
+            transformers: HashMap::new(),
         }
     }
 
-    pub fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
-        let path = Path::new(file_path);
-        let file = File::open(path)?;
-        let mut rdr = csv::Reader::from_reader(file);
+    pub fn register_validator<N, F>(&mut self, name: N, validator: F)
+    where
+        N: Into<String>,
+        F: Fn(&str) -> bool + 'static,
+    {
+        self.validators.insert(name.into(), Box::new(validator));
+    }
 
-        for result in rdr.deserialize() {
-            let record: DataRecord = result?;
-            self.records.push(record);
+    pub fn register_transformer<N, F>(&mut self, name: N, transformer: F)
+    where
+        N: Into<String>,
+        F: Fn(String) -> String + 'static,
+    {
+        self.transformers.insert(name.into(), Box::new(transformer));
+    }
+
+    pub fn validate(&self, name: &str, value: &str) -> bool {
+        self.validators
+            .get(name)
+            .map(|validator| validator(value))
+            .unwrap_or(false)
+    }
+
+    pub fn transform(&self, name: &str, value: String) -> Option<String> {
+        self.transformers
+            .get(name)
+            .map(|transformer| transformer(value))
+    }
+
+    pub fn process_pipeline(&self, value: &str, operations: &[(&str, &str)]) -> Result<String, String> {
+        let mut current = value.to_string();
+
+        for (op_type, op_name) in operations {
+            match *op_type {
+                "validate" => {
+                    if !self.validate(op_name, &current) {
+                        return Err(format!("Validation '{}' failed for value: {}", op_name, current));
+                    }
+                }
+                "transform" => {
+                    current = self.transform(op_name, current)
+                        .ok_or_else(|| format!("Transformer '{}' not found", op_name))?;
+                }
+                _ => return Err(format!("Unknown operation type: {}", op_type)),
+            }
         }
 
-        Ok(())
+        Ok(current)
     }
+}
 
-    pub fn calculate_average(&self) -> Option<f64> {
-        if self.records.is_empty() {
-            return None;
-        }
+pub fn create_default_processor() -> DataProcessor {
+    let mut processor = DataProcessor::new();
 
-        let sum: f64 = self.records.iter().map(|r| r.value).sum();
-        Some(sum / self.records.len() as f64)
-    }
+    processor.register_validator("non_empty", |s| !s.trim().is_empty());
+    processor.register_validator("is_numeric", |s| s.chars().all(|c| c.is_ascii_digit()));
+    processor.register_validator("is_alpha", |s| s.chars().all(|c| c.is_ascii_alphabetic()));
 
-    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
-        self.records
-            .iter()
-            .filter(|r| r.category == category)
-            .collect()
-    }
+    processor.register_transformer("to_uppercase", |s| s.to_uppercase());
+    processor.register_transformer("to_lowercase", |s| s.to_lowercase());
+    processor.register_transformer("trim_spaces", |s| s.trim().to_string());
+    processor.register_transformer("reverse", |s| s.chars().rev().collect());
 
-    pub fn validate_records(&self) -> Vec<&DataRecord> {
-        self.records
-            .iter()
-            .filter(|r| r.value.is_finite() && !r.category.trim().is_empty())
-            .collect()
-    }
-
-    pub fn count_records(&self) -> usize {
-        self.records.len()
-    }
+    processor
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_data_processing() {
-        let mut processor = DataProcessor::new();
+    fn test_validation_pipeline() {
+        let processor = create_default_processor();
         
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "id,value,category").unwrap();
-        writeln!(temp_file, "1,42.5,alpha").unwrap();
-        writeln!(temp_file, "2,37.8,beta").unwrap();
-        writeln!(temp_file, "3,45.2,alpha").unwrap();
+        let result = processor.process_pipeline("  Hello  ", &[
+            ("validate", "non_empty"),
+            ("transform", "trim_spaces"),
+            ("transform", "to_uppercase"),
+            ("validate", "is_alpha"),
+        ]);
+
+        assert_eq!(result, Ok("HELLO".to_string()));
+    }
+
+    #[test]
+    fn test_failed_validation() {
+        let processor = create_default_processor();
         
-        let result = processor.load_from_csv(temp_file.path().to_str().unwrap());
-        assert!(result.is_ok());
-        assert_eq!(processor.count_records(), 3);
+        let result = processor.process_pipeline("", &[
+            ("validate", "non_empty"),
+        ]);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_numeric_processing() {
+        let processor = create_default_processor();
         
-        let avg = processor.calculate_average().unwrap();
-        assert!((avg - 41.83333).abs() < 0.0001);
-        
-        let alpha_records = processor.filter_by_category("alpha");
-        assert_eq!(alpha_records.len(), 2);
-        
-        let valid_records = processor.validate_records();
-        assert_eq!(valid_records.len(), 3);
+        let result = processor.process_pipeline("12345", &[
+            ("validate", "is_numeric"),
+            ("transform", "reverse"),
+        ]);
+
+        assert_eq!(result, Ok("54321".to_string()));
     }
 }

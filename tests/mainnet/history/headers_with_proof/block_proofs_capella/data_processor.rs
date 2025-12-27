@@ -1,85 +1,71 @@
-
 use std::collections::HashMap;
 
-pub struct DataProcessor {
-    cache: HashMap<String, Vec<f64>>,
-    validation_rules: Vec<ValidationRule>,
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
 }
 
-pub struct ValidationRule {
-    field_name: String,
-    min_value: f64,
-    max_value: f64,
-    required: bool,
-}
-
-impl DataProcessor {
-    pub fn new() -> Self {
-        DataProcessor {
-            cache: HashMap::new(),
-            validation_rules: Vec::new(),
+impl DataRecord {
+    pub fn new(id: u32, values: Vec<f64>) -> Self {
+        Self {
+            id,
+            values,
+            metadata: HashMap::new(),
         }
     }
 
-    pub fn add_validation_rule(&mut self, rule: ValidationRule) {
-        self.validation_rules.push(rule);
+    pub fn add_metadata(&mut self, key: String, value: String) {
+        self.metadata.insert(key, value);
     }
 
-    pub fn process_dataset(&mut self, dataset_name: &str, data: Vec<f64>) -> Result<Vec<f64>, String> {
-        if data.is_empty() {
-            return Err("Dataset cannot be empty".to_string());
+    pub fn validate(&self) -> Result<(), String> {
+        if self.id == 0 {
+            return Err("ID cannot be zero".to_string());
         }
 
-        for rule in &self.validation_rules {
-            if let Some(value) = data.iter().find(|&&x| x < rule.min_value || x > rule.max_value) {
-                return Err(format!("Value {} violates rule for field {}", value, rule.field_name));
+        if self.values.is_empty() {
+            return Err("Values cannot be empty".to_string());
+        }
+
+        for value in &self.values {
+            if value.is_nan() || value.is_infinite() {
+                return Err("Invalid numeric value detected".to_string());
             }
         }
 
-        let processed_data: Vec<f64> = data
-            .iter()
-            .map(|&x| x * 2.0)
-            .filter(|&x| x > 0.0)
-            .collect();
-
-        self.cache.insert(dataset_name.to_string(), processed_data.clone());
-
-        Ok(processed_data)
+        Ok(())
     }
 
-    pub fn get_cached_data(&self, dataset_name: &str) -> Option<&Vec<f64>> {
-        self.cache.get(dataset_name)
-    }
-
-    pub fn calculate_statistics(&self, dataset_name: &str) -> Option<Statistics> {
-        self.cache.get(dataset_name).map(|data| {
-            let sum: f64 = data.iter().sum();
-            let count = data.len();
-            let mean = if count > 0 { sum / count as f64 } else { 0.0 };
-            let max = data.iter().fold(f64::MIN, |a, &b| a.max(b));
-            let min = data.iter().fold(f64::MAX, |a, &b| a.min(b));
-
-            Statistics { mean, max, min, count }
-        })
-    }
-}
-
-pub struct Statistics {
-    pub mean: f64,
-    pub max: f64,
-    pub min: f64,
-    pub count: usize,
-}
-
-impl ValidationRule {
-    pub fn new(field_name: &str, min_value: f64, max_value: f64, required: bool) -> Self {
-        ValidationRule {
-            field_name: field_name.to_string(),
-            min_value,
-            max_value,
-            required,
+    pub fn normalize(&mut self) {
+        if let Some(max) = self.values.iter().copied().reduce(f64::max) {
+            if max != 0.0 {
+                for value in &mut self.values {
+                    *value /= max;
+                }
+            }
         }
     }
+}
+
+pub fn process_records(records: &mut [DataRecord]) -> Vec<Result<DataRecord, String>> {
+    let mut results = Vec::new();
+
+    for record in records {
+        match record.validate() {
+            Ok(_) => {
+                let mut processed = record.clone();
+                processed.normalize();
+                results.push(Ok(processed));
+            }
+            Err(e) => {
+                results.push(Err(format!("Record {} failed validation: {}", record.id, e)));
+            }
+        }
+    }
+
+    results
 }
 
 #[cfg(test)]
@@ -87,27 +73,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_data_processing() {
-        let mut processor = DataProcessor::new();
-        let rule = ValidationRule::new("temperature", -50.0, 100.0, true);
-        processor.add_validation_rule(rule);
-
-        let data = vec![10.0, 20.0, 30.0, 40.0];
-        let result = processor.process_dataset("test_data", data);
-
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), vec![20.0, 40.0, 60.0, 80.0]);
+    fn test_valid_record() {
+        let record = DataRecord::new(1, vec![1.0, 2.0, 3.0]);
+        assert!(record.validate().is_ok());
     }
 
     #[test]
-    fn test_invalid_data() {
-        let mut processor = DataProcessor::new();
-        let rule = ValidationRule::new("pressure", 0.0, 100.0, true);
-        processor.add_validation_rule(rule);
+    fn test_invalid_id() {
+        let record = DataRecord::new(0, vec![1.0, 2.0]);
+        assert!(record.validate().is_err());
+    }
 
-        let data = vec![50.0, -10.0, 75.0];
-        let result = processor.process_dataset("invalid_data", data);
-
-        assert!(result.is_err());
+    #[test]
+    fn test_normalization() {
+        let mut record = DataRecord::new(1, vec![2.0, 4.0, 6.0]);
+        record.normalize();
+        assert_eq!(record.values, vec![1.0 / 3.0, 2.0 / 3.0, 1.0]);
     }
 }

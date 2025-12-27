@@ -183,3 +183,99 @@ mod tests {
         assert_eq!(stats.get("max"), Some(&4.0));
     }
 }
+use csv::{Reader, Writer};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
+}
+
+pub struct DataProcessor {
+    records: Vec<Record>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_csv(&mut self, path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(path)?;
+        let mut rdr = Reader::from_reader(file);
+        
+        for result in rdr.deserialize() {
+            let record: Record = result?;
+            self.records.push(record);
+        }
+        
+        Ok(())
+    }
+
+    pub fn filter_by_value(&self, threshold: f64) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|record| record.value >= threshold && record.active)
+            .collect()
+    }
+
+    pub fn save_filtered_to_csv(&self, path: &str, threshold: f64) -> Result<(), Box<dyn Error>> {
+        let filtered = self.filter_by_value(threshold);
+        let mut wtr = Writer::from_path(path)?;
+
+        for record in filtered {
+            wtr.serialize(record)?;
+        }
+
+        wtr.flush()?;
+        Ok(())
+    }
+
+    pub fn calculate_average(&self) -> Option<f64> {
+        if self.records.is_empty() {
+            return None;
+        }
+
+        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        Some(sum / self.records.len() as f64)
+    }
+
+    pub fn find_by_id(&self, target_id: u32) -> Option<&Record> {
+        self.records.iter().find(|record| record.id == target_id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_data_processor_operations() {
+        let mut processor = DataProcessor::new();
+        
+        let test_data = vec![
+            Record { id: 1, name: "Item A".to_string(), value: 10.5, active: true },
+            Record { id: 2, name: "Item B".to_string(), value: 5.0, active: true },
+            Record { id: 3, name: "Item C".to_string(), value: 15.0, active: false },
+        ];
+
+        processor.records = test_data;
+
+        assert_eq!(processor.calculate_average(), Some(10.166666666666666));
+        
+        let filtered = processor.filter_by_value(10.0);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].id, 1);
+
+        assert!(processor.find_by_id(2).is_some());
+        assert!(processor.find_by_id(99).is_none());
+    }
+}

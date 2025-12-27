@@ -439,3 +439,187 @@ mod tests {
         assert_eq!(processor.get_valid_records().len(), 2);
     }
 }
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug)]
+pub enum DataError {
+    InvalidId,
+    InvalidName,
+    InvalidValue,
+    EmptyTags,
+}
+
+impl fmt::Display for DataError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DataError::InvalidId => write!(f, "ID must be greater than 0"),
+            DataError::InvalidName => write!(f, "Name cannot be empty"),
+            DataError::InvalidValue => write!(f, "Value must be between 0.0 and 1000.0"),
+            DataError::EmptyTags => write!(f, "At least one tag is required"),
+        }
+    }
+}
+
+impl Error for DataError {}
+
+pub struct DataProcessor {
+    records: HashMap<u32, DataRecord>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: HashMap::new(),
+        }
+    }
+
+    pub fn validate_record(&self, record: &DataRecord) -> Result<(), DataError> {
+        if record.id == 0 {
+            return Err(DataError::InvalidId);
+        }
+        
+        if record.name.trim().is_empty() {
+            return Err(DataError::InvalidName);
+        }
+        
+        if !(0.0..=1000.0).contains(&record.value) {
+            return Err(DataError::InvalidValue);
+        }
+        
+        if record.tags.is_empty() {
+            return Err(DataError::EmptyTags);
+        }
+        
+        Ok(())
+    }
+
+    pub fn add_record(&mut self, record: DataRecord) -> Result<(), Box<dyn Error>> {
+        self.validate_record(&record)?;
+        
+        if self.records.contains_key(&record.id) {
+            return Err(format!("Record with ID {} already exists", record.id).into());
+        }
+        
+        self.records.insert(record.id, record);
+        Ok(())
+    }
+
+    pub fn get_record(&self, id: u32) -> Option<&DataRecord> {
+        self.records.get(&id)
+    }
+
+    pub fn transform_values(&mut self, transform_fn: fn(f64) -> f64) {
+        for record in self.records.values_mut() {
+            record.value = transform_fn(record.value);
+        }
+    }
+
+    pub fn filter_by_tag(&self, tag: &str) -> Vec<&DataRecord> {
+        self.records
+            .values()
+            .filter(|record| record.tags.iter().any(|t| t == tag))
+            .collect()
+    }
+
+    pub fn calculate_statistics(&self) -> (f64, f64, f64) {
+        let values: Vec<f64> = self.records.values().map(|r| r.value).collect();
+        
+        if values.is_empty() {
+            return (0.0, 0.0, 0.0);
+        }
+        
+        let sum: f64 = values.iter().sum();
+        let count = values.len() as f64;
+        let mean = sum / count;
+        
+        let variance: f64 = values
+            .iter()
+            .map(|&v| (v - mean).powi(2))
+            .sum::<f64>() / count;
+        
+        let std_dev = variance.sqrt();
+        
+        (mean, variance, std_dev)
+    }
+
+    pub fn merge_tags(&mut self) -> HashMap<String, Vec<u32>> {
+        let mut tag_map: HashMap<String, Vec<u32>> = HashMap::new();
+        
+        for record in self.records.values() {
+            for tag in &record.tags {
+                tag_map
+                    .entry(tag.clone())
+                    .or_insert_with(Vec::new)
+                    .push(record.id);
+            }
+        }
+        
+        tag_map
+    }
+}
+
+pub fn normalize_value(value: f64) -> f64 {
+    (value / 1000.0).clamp(0.0, 1.0)
+}
+
+pub fn scale_value(value: f64, factor: f64) -> f64 {
+    value * factor
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validation() {
+        let processor = DataProcessor::new();
+        let valid_record = DataRecord {
+            id: 1,
+            name: "Test".to_string(),
+            value: 500.0,
+            tags: vec!["tag1".to_string()],
+        };
+        
+        assert!(processor.validate_record(&valid_record).is_ok());
+    }
+
+    #[test]
+    fn test_invalid_record() {
+        let processor = DataProcessor::new();
+        let invalid_record = DataRecord {
+            id: 0,
+            name: "".to_string(),
+            value: -10.0,
+            tags: vec![],
+        };
+        
+        assert!(processor.validate_record(&invalid_record).is_err());
+    }
+
+    #[test]
+    fn test_transform_values() {
+        let mut processor = DataProcessor::new();
+        let record = DataRecord {
+            id: 1,
+            name: "Test".to_string(),
+            value: 100.0,
+            tags: vec!["test".to_string()],
+        };
+        
+        processor.add_record(record).unwrap();
+        processor.transform_values(|v| v * 2.0);
+        
+        let updated = processor.get_record(1).unwrap();
+        assert_eq!(updated.value, 200.0);
+    }
+}

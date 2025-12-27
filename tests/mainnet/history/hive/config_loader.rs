@@ -204,4 +204,90 @@ mod tests {
         env::remove_var("SERVER_HOST");
         env::remove_var("DATABASE_URL");
     }
+}use std::env;
+use std::fs;
+use std::collections::HashMap;
+
+pub struct Config {
+    pub database_url: String,
+    pub api_key: String,
+    pub debug_mode: bool,
+    pub port: u16,
+    pub custom_settings: HashMap<String, String>,
+}
+
+impl Config {
+    pub fn load() -> Result<Self, String> {
+        let config_path = env::var("CONFIG_PATH").unwrap_or_else(|_| "config.toml".to_string());
+        
+        let config_content = fs::read_to_string(&config_path)
+            .map_err(|e| format!("Failed to read config file {}: {}", config_path, e))?;
+        
+        let config: toml::Value = config_content.parse()
+            .map_err(|e| format!("Failed to parse config file: {}", e))?;
+        
+        let database_url = Self::get_string(&config, "database.url")
+            .or_else(|| env::var("DATABASE_URL").ok())
+            .ok_or("Database URL not found in config or environment")?;
+        
+        let api_key = Self::get_string(&config, "api.key")
+            .or_else(|| env::var("API_KEY").ok())
+            .ok_or("API key not found in config or environment")?;
+        
+        let debug_mode = Self::get_bool(&config, "app.debug")
+            .unwrap_or_else(|| env::var("DEBUG_MODE").unwrap_or_default() == "true");
+        
+        let port = Self::get_u16(&config, "app.port")
+            .or_else(|| env::var("PORT").ok().and_then(|s| s.parse().ok()))
+            .unwrap_or(8080);
+        
+        let mut custom_settings = HashMap::new();
+        if let Some(table) = config.get("custom") {
+            if let Some(custom_table) = table.as_table() {
+                for (key, value) in custom_table {
+                    if let Some(str_val) = value.as_str() {
+                        custom_settings.insert(key.clone(), str_val.to_string());
+                    }
+                }
+            }
+        }
+        
+        Ok(Config {
+            database_url,
+            api_key,
+            debug_mode,
+            port,
+            custom_settings,
+        })
+    }
+    
+    fn get_string(config: &toml::Value, path: &str) -> Option<String> {
+        let mut current = config;
+        for part in path.split('.') {
+            current = current.get(part)?;
+        }
+        current.as_str().map(|s| s.to_string())
+    }
+    
+    fn get_bool(config: &toml::Value, path: &str) -> Option<bool> {
+        let mut current = config;
+        for part in path.split('.') {
+            current = current.get(part)?;
+        }
+        current.as_bool()
+    }
+    
+    fn get_u16(config: &toml::Value, path: &str) -> Option<u16> {
+        let mut current = config;
+        for part in path.split('.') {
+            current = current.get(part)?;
+        }
+        current.as_integer().and_then(|n| {
+            if n >= 0 && n <= u16::MAX as i64 {
+                Some(n as u16)
+            } else {
+                None
+            }
+        })
+    }
 }

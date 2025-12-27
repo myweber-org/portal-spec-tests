@@ -59,4 +59,67 @@ mod tests {
         cleaner.deduplicate();
         assert_eq!(cleaner.get_data().len(), 2);
     }
+}use std::collections::HashSet;
+use std::hash::Hash;
+
+pub struct DataCleaner<T> {
+    seen: HashSet<T>,
+}
+
+impl<T> DataCleaner<T>
+where
+    T: Hash + Eq + Clone,
+{
+    pub fn new() -> Self {
+        DataCleaner {
+            seen: HashSet::new(),
+        }
+    }
+
+    pub fn deduplicate(&mut self, items: Vec<T>) -> Vec<T> {
+        let mut result = Vec::new();
+        for item in items {
+            if self.seen.insert(item.clone()) {
+                result.push(item);
+            }
+        }
+        result
+    }
+
+    pub fn normalize_strings(strings: Vec<String>) -> Vec<String> {
+        strings
+            .into_iter()
+            .map(|s| s.trim().to_lowercase())
+            .filter(|s| !s.is_empty())
+            .collect()
+    }
+
+    pub fn reset(&mut self) {
+        self.seen.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_deduplicate() {
+        let mut cleaner = DataCleaner::new();
+        let data = vec![1, 2, 2, 3, 1, 4];
+        let result = cleaner.deduplicate(data);
+        assert_eq!(result, vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn test_normalize_strings() {
+        let input = vec![
+            "  HELLO  ".to_string(),
+            "World".to_string(),
+            "".to_string(),
+            "  TEST  ".to_string(),
+        ];
+        let result = DataCleaner::normalize_strings(input);
+        assert_eq!(result, vec!["hello", "world", "test"]);
+    }
 }

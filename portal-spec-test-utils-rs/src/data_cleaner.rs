@@ -97,3 +97,48 @@ mod tests {
         assert!(!cleaner.validate_email("invalid-email"));
     }
 }
+use std::collections::HashSet;
+
+pub fn clean_data<T: Eq + std::hash::Hash + Clone>(data: &[T]) -> Vec<T> {
+    let mut seen = HashSet::new();
+    let mut result = Vec::new();
+    
+    for item in data {
+        if !seen.contains(item) {
+            seen.insert(item.clone());
+            result.push(item.clone());
+        }
+    }
+    
+    result
+}
+
+pub fn filter_by_predicate<T, F>(data: &[T], predicate: F) -> Vec<T>
+where
+    T: Clone,
+    F: Fn(&T) -> bool,
+{
+    data.iter()
+        .filter(|item| predicate(item))
+        .cloned()
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_clean_data_removes_duplicates() {
+        let data = vec![1, 2, 2, 3, 4, 4, 4, 5];
+        let cleaned = clean_data(&data);
+        assert_eq!(cleaned, vec![1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn test_filter_by_predicate() {
+        let data = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+        let filtered = filter_by_predicate(&data, |&x| x % 2 == 0);
+        assert_eq!(filtered, vec![2, 4, 6, 8, 10]);
+    }
+}

@@ -139,4 +139,124 @@ mod tests {
         assert_eq!(filtered[0][1], "user1");
         assert_eq!(filtered[1][1], "user3");
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+
+#[derive(Debug)]
+pub struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    category: String,
+}
+
+impl Record {
+    pub fn new(id: u32, name: String, value: f64, category: String) -> Self {
+        Record {
+            id,
+            name,
+            value,
+            category,
+        }
+    }
+}
+
+pub struct DataProcessor {
+    records: Vec<Record>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_file(&mut self, filepath: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(filepath)?;
+        let reader = BufReader::new(file);
+
+        for (index, line) in reader.lines().enumerate() {
+            let line = line?;
+            if index == 0 {
+                continue;
+            }
+
+            let parts: Vec<&str> = line.split(',').collect();
+            if parts.len() == 4 {
+                let id = parts[0].parse::<u32>()?;
+                let name = parts[1].to_string();
+                let value = parts[2].parse::<f64>()?;
+                let category = parts[3].to_string();
+
+                self.records.push(Record::new(id, name, value, category));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn filter_by_category(&self, category: &str) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|record| record.category == category)
+            .collect()
+    }
+
+    pub fn calculate_average(&self) -> f64 {
+        if self.records.is_empty() {
+            return 0.0;
+        }
+
+        let sum: f64 = self.records.iter().map(|record| record.value).sum();
+        sum / self.records.len() as f64
+    }
+
+    pub fn find_max_value(&self) -> Option<&Record> {
+        self.records.iter().max_by(|a, b| {
+            a.value
+                .partial_cmp(&b.value)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+    }
+
+    pub fn get_record_count(&self) -> usize {
+        self.records.len()
+    }
+
+    pub fn clear(&mut self) {
+        self.records.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_data_processor() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,name,value,category").unwrap();
+        writeln!(temp_file, "1,ItemA,25.5,CategoryX").unwrap();
+        writeln!(temp_file, "2,ItemB,30.0,CategoryY").unwrap();
+        writeln!(temp_file, "3,ItemC,42.8,CategoryX").unwrap();
+
+        let mut processor = DataProcessor::new();
+        let result = processor.load_from_file(temp_file.path().to_str().unwrap());
+        assert!(result.is_ok());
+        assert_eq!(processor.get_record_count(), 3);
+
+        let filtered = processor.filter_by_category("CategoryX");
+        assert_eq!(filtered.len(), 2);
+
+        let average = processor.calculate_average();
+        assert!((average - 32.77).abs() < 0.1);
+
+        let max_record = processor.find_max_value();
+        assert!(max_record.is_some());
+        assert_eq!(max_record.unwrap().id, 3);
+    }
 }

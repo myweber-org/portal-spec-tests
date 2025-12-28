@@ -1,241 +1,118 @@
 
-use std::collections::HashMap;
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
 
 pub struct DataProcessor {
-    cache: HashMap<String, Vec<f64>>,
+    delimiter: char,
+    has_header: bool,
 }
 
 impl DataProcessor {
-    pub fn new() -> Self {
+    pub fn new(delimiter: char, has_header: bool) -> Self {
         DataProcessor {
-            cache: HashMap::new(),
+            delimiter,
+            has_header,
         }
     }
 
-    pub fn process_dataset(&mut self, key: &str, data: &[f64]) -> Result<Vec<f64>, String> {
-        if data.is_empty() {
-            return Err("Empty dataset provided".to_string());
-        }
-
-        if let Some(cached) = self.cache.get(key) {
-            return Ok(cached.clone());
-        }
-
-        let validated = self.validate_data(data)?;
-        let normalized = self.normalize_data(&validated);
-        let transformed = self.apply_transformations(&normalized);
-
-        self.cache.insert(key.to_string(), transformed.clone());
-        Ok(transformed)
-    }
-
-    fn validate_data(&self, data: &[f64]) -> Result<Vec<f64>, String> {
-        let mut valid_data = Vec::new();
+    pub fn process_file<P: AsRef<Path>>(&self, file_path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
         
-        for &value in data {
-            if value.is_finite() {
-                valid_data.push(value);
-            } else {
-                return Err(format!("Invalid value detected: {}", value));
+        let mut records = Vec::new();
+        let mut lines = reader.lines();
+        
+        if self.has_header {
+            lines.next();
+        }
+        
+        for line_result in lines {
+            let line = line_result?;
+            let fields: Vec<String> = line
+                .split(self.delimiter)
+                .map(|s| s.trim().to_string())
+                .collect();
+            
+            if !fields.is_empty() {
+                records.push(fields);
             }
         }
-
-        if valid_data.len() < 2 {
-            return Err("Insufficient valid data points".to_string());
-        }
-
-        Ok(valid_data)
-    }
-
-    fn normalize_data(&self, data: &[f64]) -> Vec<f64> {
-        let mean = data.iter().sum::<f64>() / data.len() as f64;
-        let variance = data.iter()
-            .map(|&x| (x - mean).powi(2))
-            .sum::<f64>() / data.len() as f64;
-        let std_dev = variance.sqrt();
-
-        if std_dev.abs() < 1e-10 {
-            return vec![0.0; data.len()];
-        }
-
-        data.iter()
-            .map(|&x| (x - mean) / std_dev)
-            .collect()
-    }
-
-    fn apply_transformations(&self, data: &[f64]) -> Vec<f64> {
-        data.iter()
-            .map(|&x| x.powi(2).ln_1p().tanh())
-            .collect()
-    }
-
-    pub fn clear_cache(&mut self) {
-        self.cache.clear();
-    }
-
-    pub fn cache_stats(&self) -> (usize, usize) {
-        let total_items = self.cache.len();
-        let total_values = self.cache.values()
-            .map(|v| v.len())
-            .sum();
         
-        (total_items, total_values)
+        Ok(records)
+    }
+    
+    pub fn validate_record(&self, record: &[String]) -> bool {
+        !record.is_empty() && record.iter().all(|field| !field.is_empty())
+    }
+    
+    pub fn calculate_statistics(&self, records: &[Vec<String>], column_index: usize) -> Option<f64> {
+        let mut sum = 0.0;
+        let mut count = 0;
+        
+        for record in records {
+            if column_index < record.len() {
+                if let Ok(value) = record[column_index].parse::<f64>() {
+                    sum += value;
+                    count += 1;
+                }
+            }
+        }
+        
+        if count > 0 {
+            Some(sum / count as f64)
+        } else {
+            None
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+    
     #[test]
-    fn test_data_processing() {
-        let mut processor = DataProcessor::new();
-        let test_data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+    fn test_process_csv() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,city").unwrap();
+        writeln!(temp_file, "John,25,New York").unwrap();
+        writeln!(temp_file, "Alice,30,London").unwrap();
         
-        let result = processor.process_dataset("test", &test_data);
+        let processor = DataProcessor::new(',', true);
+        let result = processor.process_file(temp_file.path());
+        
         assert!(result.is_ok());
-        
-        let processed = result.unwrap();
-        assert_eq!(processed.len(), test_data.len());
+        let records = result.unwrap();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0], vec!["John", "25", "New York"]);
     }
-
+    
     #[test]
-    fn test_invalid_data() {
-        let mut processor = DataProcessor::new();
-        let invalid_data = vec![1.0, f64::NAN, 3.0];
+    fn test_validate_record() {
+        let processor = DataProcessor::new(',', false);
+        let valid_record = vec!["data".to_string(), "123".to_string()];
+        let invalid_record = vec!["".to_string(), "test".to_string()];
         
-        let result = processor.process_dataset("invalid", &invalid_data);
-        assert!(result.is_err());
+        assert!(processor.validate_record(&valid_record));
+        assert!(!processor.validate_record(&invalid_record));
     }
-}
-use std::collections::HashMap;
-
-pub struct DataProcessor {
-    cache: HashMap<String, Vec<f64>>,
-    validation_rules: Vec<ValidationRule>,
-}
-
-#[derive(Debug, Clone)]
-pub struct ValidationRule {
-    pub field_name: String,
-    pub min_value: f64,
-    pub max_value: f64,
-    pub required: bool,
-}
-
-impl DataProcessor {
-    pub fn new() -> Self {
-        DataProcessor {
-            cache: HashMap::new(),
-            validation_rules: Vec::new(),
-        }
-    }
-
-    pub fn add_validation_rule(&mut self, rule: ValidationRule) {
-        self.validation_rules.push(rule);
-    }
-
-    pub fn process_data(&mut self, dataset: &[HashMap<String, f64>]) -> Result<Vec<HashMap<String, f64>>, String> {
-        let mut processed = Vec::new();
-
-        for (index, record) in dataset.iter().enumerate() {
-            match self.validate_record(record) {
-                Ok(validated_record) => {
-                    let transformed = self.transform_record(&validated_record);
-                    self.cache_record(index, &transformed);
-                    processed.push(transformed);
-                }
-                Err(err) => return Err(format!("Validation failed at record {}: {}", index, err)),
-            }
-        }
-
-        Ok(processed)
-    }
-
-    fn validate_record(&self, record: &HashMap<String, f64>) -> Result<HashMap<String, f64>, String> {
-        for rule in &self.validation_rules {
-            if let Some(&value) = record.get(&rule.field_name) {
-                if value < rule.min_value || value > rule.max_value {
-                    return Err(format!(
-                        "Field '{}' value {} out of range [{}, {}]",
-                        rule.field_name, value, rule.min_value, rule.max_value
-                    ));
-                }
-            } else if rule.required {
-                return Err(format!("Required field '{}' missing", rule.field_name));
-            }
-        }
-        Ok(record.clone())
-    }
-
-    fn transform_record(&self, record: &HashMap<String, f64>) -> HashMap<String, f64> {
-        let mut transformed = record.clone();
-        
-        for (key, value) in transformed.iter_mut() {
-            if key.starts_with("normalized_") {
-                *value = (*value * 100.0).round() / 100.0;
-            }
-        }
-
-        transformed
-    }
-
-    fn cache_record(&mut self, index: usize, record: &HashMap<String, f64>) {
-        let key = format!("record_{}", index);
-        let values: Vec<f64> = record.values().cloned().collect();
-        self.cache.insert(key, values);
-    }
-
-    pub fn get_cached_data(&self, key: &str) -> Option<&Vec<f64>> {
-        self.cache.get(key)
-    }
-
-    pub fn clear_cache(&mut self) {
-        self.cache.clear();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
+    
     #[test]
-    fn test_data_processing() {
-        let mut processor = DataProcessor::new();
-        
-        processor.add_validation_rule(ValidationRule {
-            field_name: "temperature".to_string(),
-            min_value: -50.0,
-            max_value: 100.0,
-            required: true,
-        });
-
-        let test_data = vec![
-            [("temperature".to_string(), 25.5)].iter().cloned().collect(),
-            [("temperature".to_string(), 30.0)].iter().cloned().collect(),
+    fn test_calculate_statistics() {
+        let processor = DataProcessor::new(',', false);
+        let records = vec![
+            vec!["10.5".to_string(), "20.0".to_string()],
+            vec!["15.5".to_string(), "30.0".to_string()],
+            vec!["invalid".to_string(), "40.0".to_string()],
         ];
-
-        let result = processor.process_data(&test_data);
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap().len(), 2);
-    }
-
-    #[test]
-    fn test_validation_failure() {
-        let mut processor = DataProcessor::new();
         
-        processor.add_validation_rule(ValidationRule {
-            field_name: "pressure".to_string(),
-            min_value: 0.0,
-            max_value: 10.0,
-            required: true,
-        });
-
-        let invalid_data = vec![
-            [("pressure".to_string(), 15.0)].iter().cloned().collect(),
-        ];
-
-        let result = processor.process_data(&invalid_data);
-        assert!(result.is_err());
+        let avg = processor.calculate_statistics(&records, 0);
+        assert_eq!(avg, Some(13.0));
+        
+        let invalid_avg = processor.calculate_statistics(&records, 2);
+        assert_eq!(invalid_avg, None);
     }
 }

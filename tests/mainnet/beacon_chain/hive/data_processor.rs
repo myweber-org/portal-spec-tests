@@ -623,3 +623,200 @@ mod tests {
         assert_eq!(updated.value, 200.0);
     }
 }
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub timestamp: i64,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
+}
+
+#[derive(Debug)]
+pub enum ValidationError {
+    InvalidId,
+    InvalidTimestamp,
+    EmptyValues,
+    ValueOutOfRange(f64),
+    MetadataKeyTooLong(String),
+}
+
+impl fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ValidationError::InvalidId => write!(f, "Record ID must be greater than zero"),
+            ValidationError::InvalidTimestamp => write!(f, "Timestamp cannot be negative"),
+            ValidationError::EmptyValues => write!(f, "Values vector cannot be empty"),
+            ValidationError::ValueOutOfRange(val) => write!(f, "Value {} is out of acceptable range", val),
+            ValidationError::MetadataKeyTooLong(key) => write!(f, "Metadata key '{}' exceeds maximum length", key),
+        }
+    }
+}
+
+impl Error for ValidationError {}
+
+pub struct DataProcessor {
+    max_value: f64,
+    min_value: f64,
+    max_key_length: usize,
+}
+
+impl DataProcessor {
+    pub fn new(max_value: f64, min_value: f64, max_key_length: usize) -> Self {
+        DataProcessor {
+            max_value,
+            min_value,
+            max_key_length,
+        }
+    }
+
+    pub fn validate_record(&self, record: &DataRecord) -> Result<(), ValidationError> {
+        if record.id == 0 {
+            return Err(ValidationError::InvalidId);
+        }
+
+        if record.timestamp < 0 {
+            return Err(ValidationError::InvalidTimestamp);
+        }
+
+        if record.values.is_empty() {
+            return Err(ValidationError::EmptyValues);
+        }
+
+        for &value in &record.values {
+            if value < self.min_value || value > self.max_value {
+                return Err(ValidationError::ValueOutOfRange(value));
+            }
+        }
+
+        for key in record.metadata.keys() {
+            if key.len() > self.max_key_length {
+                return Err(ValidationError::MetadataKeyTooLong(key.clone()));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn normalize_values(&self, record: &DataRecord) -> Vec<f64> {
+        if record.values.is_empty() {
+            return Vec::new();
+        }
+
+        let min_val = record.values.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+        let max_val = record.values.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+        
+        if (max_val - min_val).abs() < f64::EPSILON {
+            return vec![0.0; record.values.len()];
+        }
+
+        record.values.iter()
+            .map(|&v| (v - min_val) / (max_val - min_val))
+            .collect()
+    }
+
+    pub fn filter_records(&self, records: Vec<DataRecord>, predicate: impl Fn(&DataRecord) -> bool) -> Vec<DataRecord> {
+        records.into_iter()
+            .filter(predicate)
+            .collect()
+    }
+
+    pub fn aggregate_values(&self, records: &[DataRecord]) -> HashMap<String, f64> {
+        let mut result = HashMap::new();
+        
+        if records.is_empty() {
+            return result;
+        }
+
+        let value_count = records[0].values.len();
+        
+        for i in 0..value_count {
+            let sum: f64 = records.iter()
+                .map(|r| r.values.get(i).copied().unwrap_or(0.0))
+                .sum();
+            
+            let avg = sum / records.len() as f64;
+            result.insert(format!("avg_value_{}", i), avg);
+        }
+
+        result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_test_record() -> DataRecord {
+        let mut metadata = HashMap::new();
+        metadata.insert("source".to_string(), "test".to_string());
+        
+        DataRecord {
+            id: 1,
+            timestamp: 1625097600,
+            values: vec![10.0, 20.0, 30.0],
+            metadata,
+        }
+    }
+
+    #[test]
+    fn test_validation_success() {
+        let processor = DataProcessor::new(100.0, 0.0, 50);
+        let record = create_test_record();
+        
+        assert!(processor.validate_record(&record).is_ok());
+    }
+
+    #[test]
+    fn test_validation_invalid_id() {
+        let processor = DataProcessor::new(100.0, 0.0, 50);
+        let mut record = create_test_record();
+        record.id = 0;
+        
+        assert!(matches!(processor.validate_record(&record), Err(ValidationError::InvalidId)));
+    }
+
+    #[test]
+    fn test_normalize_values() {
+        let processor = DataProcessor::new(100.0, 0.0, 50);
+        let record = create_test_record();
+        let normalized = processor.normalize_values(&record);
+        
+        assert_eq!(normalized.len(), 3);
+        assert!((normalized[0] - 0.0).abs() < 0.001);
+        assert!((normalized[1] - 0.5).abs() < 0.001);
+        assert!((normalized[2] - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_filter_records() {
+        let processor = DataProcessor::new(100.0, 0.0, 50);
+        let records = vec![
+            create_test_record(),
+            DataRecord { id: 2, timestamp: 1625097601, values: vec![5.0], metadata: HashMap::new() },
+        ];
+        
+        let filtered = processor.filter_records(records, |r| r.values.len() > 1);
+        
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].id, 1);
+    }
+
+    #[test]
+    fn test_aggregate_values() {
+        let processor = DataProcessor::new(100.0, 0.0, 50);
+        let records = vec![
+            DataRecord { id: 1, timestamp: 1625097600, values: vec![10.0, 20.0], metadata: HashMap::new() },
+            DataRecord { id: 2, timestamp: 1625097601, values: vec![30.0, 40.0], metadata: HashMap::new() },
+        ];
+        
+        let aggregates = processor.aggregate_values(&records);
+        
+        assert_eq!(aggregates.len(), 2);
+        assert!((aggregates["avg_value_0"] - 20.0).abs() < 0.001);
+        assert!((aggregates["avg_value_1"] - 30.0).abs() < 0.001);
+    }
+}

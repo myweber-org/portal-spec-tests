@@ -40,4 +40,64 @@ fn merge_objects(base: &mut Map<String, Value>, new: Map<String, Value>) {
             base.insert(key, value);
         }
     }
+}use serde_json::{json, Value};
+use std::fs::{self, File};
+use std::io::{BufReader, Read};
+use std::path::Path;
+
+pub fn merge_json_files<P: AsRef<Path>>(paths: &[P], output_path: P) -> Result<(), Box<dyn std::error::Error>> {
+    let mut merged_array = Vec::new();
+
+    for path in paths {
+        let file = File::open(path)?;
+        let mut reader = BufReader::new(file);
+        let mut contents = String::new();
+        reader.read_to_string(&mut contents)?;
+
+        let json_value: Value = serde_json::from_str(&contents)?;
+        merged_array.push(json_value);
+    }
+
+    let output_json = json!(merged_array);
+    let output_string = serde_json::to_string_pretty(&output_json)?;
+    fs::write(output_path, output_string)?;
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_merge_json_files() {
+        let json1 = r#"{"id": 1, "name": "Alice"}"#;
+        let json2 = r#"{"id": 2, "name": "Bob"}"#;
+
+        let mut file1 = NamedTempFile::new().unwrap();
+        let mut file2 = NamedTempFile::new().unwrap();
+        let output_file = NamedTempFile::new().unwrap();
+
+        file1.write_all(json1.as_bytes()).unwrap();
+        file2.write_all(json2.as_bytes()).unwrap();
+
+        let paths = [file1.path(), file2.path()];
+        merge_json_files(&paths, output_file.path()).unwrap();
+
+        let result = fs::read_to_string(output_file.path()).unwrap();
+        let expected = r#"[
+  {
+    "id": 1,
+    "name": "Alice"
+  },
+  {
+    "id": 2,
+    "name": "Bob"
+  }
+]"#;
+
+        assert_eq!(result.trim(), expected.trim());
+    }
 }

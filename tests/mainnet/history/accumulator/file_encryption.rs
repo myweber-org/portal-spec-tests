@@ -119,3 +119,75 @@ pub fn decrypt_file(input_path: &Path, output_path: &Path) -> io::Result<()> {
 
     Ok(())
 }
+use std::fs;
+use std::io::{self, Read, Write};
+use std::path::Path;
+
+const DEFAULT_KEY: &[u8] = b"secret-key-12345";
+
+pub fn encrypt_file(input_path: &str, output_path: &str, key: Option<&[u8]>) -> io::Result<()> {
+    let key = key.unwrap_or(DEFAULT_KEY);
+    let data = fs::read(input_path)?;
+    let encrypted_data = xor_cipher(&data, key);
+    fs::write(output_path, encrypted_data)
+}
+
+pub fn decrypt_file(input_path: &str, output_path: &str, key: Option<&[u8]>) -> io::Result<()> {
+    encrypt_file(input_path, output_path, key)
+}
+
+fn xor_cipher(data: &[u8], key: &[u8]) -> Vec<u8> {
+    data.iter()
+        .enumerate()
+        .map(|(i, &byte)| byte ^ key[i % key.len()])
+        .collect()
+}
+
+pub fn encrypt_string(text: &str, key: Option<&[u8]>) -> Vec<u8> {
+    let key = key.unwrap_or(DEFAULT_KEY);
+    xor_cipher(text.as_bytes(), key)
+}
+
+pub fn decrypt_string(encrypted: &[u8], key: Option<&[u8]>) -> String {
+    let key = key.unwrap_or(DEFAULT_KEY);
+    let decrypted = xor_cipher(encrypted, key);
+    String::from_utf8_lossy(&decrypted).to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_xor_symmetry() {
+        let data = b"Hello, World!";
+        let key = b"test-key";
+        let encrypted = xor_cipher(data, key);
+        let decrypted = xor_cipher(&encrypted, key);
+        assert_eq!(data, decrypted.as_slice());
+    }
+
+    #[test]
+    fn test_file_encryption() -> io::Result<()> {
+        let content = "Sensitive data that needs protection";
+        let mut temp_file = NamedTempFile::new()?;
+        let input_path = temp_file.path().to_str().unwrap();
+        
+        fs::write(input_path, content)?;
+        
+        let encrypted_path = "test_encrypted.bin";
+        let decrypted_path = "test_decrypted.txt";
+        
+        encrypt_file(input_path, encrypted_path, Some(b"custom-key"))?;
+        decrypt_file(encrypted_path, decrypted_path, Some(b"custom-key"))?;
+        
+        let decrypted_content = fs::read_to_string(decrypted_path)?;
+        assert_eq!(content, decrypted_content);
+        
+        fs::remove_file(encrypted_path)?;
+        fs::remove_file(decrypted_path)?;
+        
+        Ok(())
+    }
+}

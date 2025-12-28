@@ -1,60 +1,55 @@
 use std::collections::HashSet;
-use std::error::Error;
-use std::fs::File;
-use std::io::{BufRead, BufReader, Write};
+use std::hash::Hash;
 
-pub fn clean_csv_duplicates(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
-    let input_file = File::open(input_path)?;
-    let reader = BufReader::new(input_file);
-    let mut lines = reader.lines();
-    
-    let header = match lines.next() {
-        Some(Ok(h)) => h,
-        _ => return Err("Empty or invalid CSV file".into()),
-    };
-    
+pub fn deduplicate<T: Eq + Hash + Clone>(items: Vec<T>) -> Vec<T> {
     let mut seen = HashSet::new();
-    let mut unique_lines = Vec::new();
+    let mut result = Vec::new();
     
-    for line_result in lines {
-        let line = line_result?;
-        if !seen.contains(&line) {
-            seen.insert(line.clone());
-            unique_lines.push(line);
+    for item in items {
+        if seen.insert(item.clone()) {
+            result.push(item);
         }
     }
     
-    let mut output_file = File::create(output_path)?;
-    writeln!(output_file, "{}", header)?;
-    
-    for line in unique_lines {
-        writeln!(output_file, "{}", line)?;
-    }
-    
-    Ok(())
+    result
+}
+
+pub fn normalize_strings(strings: Vec<String>) -> Vec<String> {
+    strings
+        .into_iter()
+        .map(|s| s.trim().to_lowercase())
+        .collect()
+}
+
+pub fn filter_by_length(strings: Vec<String>, min_length: usize) -> Vec<String> {
+    strings
+        .into_iter()
+        .filter(|s| s.len() >= min_length)
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
 
     #[test]
-    fn test_clean_csv_duplicates() {
-        let test_input = "test_input.csv";
-        let test_output = "test_output.csv";
-        
-        let test_data = "id,name,value\n1,Alice,100\n2,Bob,200\n1,Alice,100\n3,Charlie,300\n2,Bob,200";
-        fs::write(test_input, test_data).unwrap();
-        
-        clean_csv_duplicates(test_input, test_output).unwrap();
-        
-        let result = fs::read_to_string(test_output).unwrap();
-        let expected = "id,name,value\n1,Alice,100\n2,Bob,200\n3,Charlie,300\n";
-        
-        assert_eq!(result, expected);
-        
-        fs::remove_file(test_input).unwrap();
-        fs::remove_file(test_output).unwrap();
+    fn test_deduplicate() {
+        let input = vec![1, 2, 2, 3, 1, 4];
+        let result = deduplicate(input);
+        assert_eq!(result, vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn test_normalize_strings() {
+        let input = vec!["  HELLO  ".to_string(), "World".to_string()];
+        let result = normalize_strings(input);
+        assert_eq!(result, vec!["hello".to_string(), "world".to_string()]);
+    }
+
+    #[test]
+    fn test_filter_by_length() {
+        let input = vec!["a".to_string(), "ab".to_string(), "abc".to_string()];
+        let result = filter_by_length(input, 2);
+        assert_eq!(result, vec!["ab".to_string(), "abc".to_string()]);
     }
 }

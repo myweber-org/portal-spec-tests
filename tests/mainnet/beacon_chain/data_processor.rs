@@ -89,3 +89,95 @@ mod tests {
         assert!(std_dev > 8.16 && std_dev < 8.17);
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::path::Path;
+
+pub struct DataProcessor {
+    file_path: String,
+}
+
+impl DataProcessor {
+    pub fn new(file_path: &str) -> Self {
+        DataProcessor {
+            file_path: file_path.to_string(),
+        }
+    }
+
+    pub fn process(&self) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let path = Path::new(&self.file_path);
+        let file = File::open(path)?;
+        let mut rdr = csv::Reader::from_reader(file);
+        
+        let mut records = Vec::new();
+        for result in rdr.records() {
+            let record = result?;
+            let validated_record: Vec<String> = record
+                .iter()
+                .map(|field| field.trim().to_string())
+                .filter(|field| !field.is_empty())
+                .collect();
+            
+            if !validated_record.is_empty() {
+                records.push(validated_record);
+            }
+        }
+        
+        Ok(records)
+    }
+
+    pub fn calculate_statistics(&self, column_index: usize) -> Result<(f64, f64), Box<dyn Error>> {
+        let records = self.process()?;
+        let mut values = Vec::new();
+        
+        for record in records {
+            if column_index < record.len() {
+                if let Ok(value) = record[column_index].parse::<f64>() {
+                    values.push(value);
+                }
+            }
+        }
+        
+        if values.is_empty() {
+            return Err("No valid numeric data found".into());
+        }
+        
+        let mean = values.iter().sum::<f64>() / values.len() as f64;
+        let variance: f64 = values.iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>() / values.len() as f64;
+        
+        Ok((mean, variance.sqrt()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_data_processing() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,salary\nJohn,30,50000\nJane,25,60000\nBob,35,55000").unwrap();
+        
+        let processor = DataProcessor::new(temp_file.path().to_str().unwrap());
+        let result = processor.process().unwrap();
+        
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0], vec!["John", "30", "50000"]);
+    }
+
+    #[test]
+    fn test_statistics_calculation() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "value\n10.5\n20.3\n15.7\n18.2").unwrap();
+        
+        let processor = DataProcessor::new(temp_file.path().to_str().unwrap());
+        let (mean, std_dev) = processor.calculate_statistics(0).unwrap();
+        
+        assert!((mean - 16.175).abs() < 0.001);
+        assert!((std_dev - 3.968).abs() < 0.001);
+    }
+}

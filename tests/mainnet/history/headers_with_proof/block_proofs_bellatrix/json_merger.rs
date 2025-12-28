@@ -106,4 +106,119 @@ mod tests {
         let obj = result.as_object().unwrap();
         assert!(obj.contains_key(file.path().to_str().unwrap()));
     }
+}use std::collections::HashMap;
+use serde_json::{Value, Map};
+
+pub fn merge_json(base: &mut Value, update: &Value) {
+    match (base, update) {
+        (Value::Object(base_map), Value::Object(update_map)) => {
+            for (key, update_value) in update_map {
+                if let Some(base_value) = base_map.get_mut(key) {
+                    merge_json(base_value, update_value);
+                } else {
+                    base_map.insert(key.clone(), update_value.clone());
+                }
+            }
+        }
+        (base, update) => {
+            *base = update.clone();
+        }
+    }
+}
+
+pub fn merge_json_with_strategy(base: &mut Value, update: &Value, strategy: MergeStrategy) {
+    match strategy {
+        MergeStrategy::Deep => merge_json(base, update),
+        MergeStrategy::Shallow => {
+            if let (Value::Object(base_map), Value::Object(update_map)) = (base, update) {
+                for (key, value) in update_map {
+                    base_map.insert(key.clone(), value.clone());
+                }
+            } else {
+                *base = update.clone();
+            }
+        }
+        MergeStrategy::AppendArrays => {
+            if let (Value::Array(base_arr), Value::Array(update_arr)) = (base, update) {
+                base_arr.extend_from_slice(update_arr);
+            } else {
+                merge_json(base, update);
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MergeStrategy {
+    Deep,
+    Shallow,
+    AppendArrays,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_deep_merge() {
+        let mut base = json!({
+            "a": 1,
+            "b": {
+                "c": 2,
+                "d": 3
+            }
+        });
+        
+        let update = json!({
+            "b": {
+                "d": 99,
+                "e": 100
+            },
+            "f": 42
+        });
+        
+        merge_json(&mut base, &update);
+        
+        assert_eq!(base["a"], 1);
+        assert_eq!(base["b"]["c"], 2);
+        assert_eq!(base["b"]["d"], 99);
+        assert_eq!(base["b"]["e"], 100);
+        assert_eq!(base["f"], 42);
+    }
+
+    #[test]
+    fn test_shallow_merge() {
+        let mut base = json!({
+            "a": 1,
+            "b": {
+                "c": 2
+            }
+        });
+        
+        let update = json!({
+            "b": {
+                "d": 99
+            }
+        });
+        
+        merge_json_with_strategy(&mut base, &update, MergeStrategy::Shallow);
+        
+        assert_eq!(base["b"], json!({"d": 99}));
+    }
+
+    #[test]
+    fn test_array_append() {
+        let mut base = json!({
+            "items": [1, 2, 3]
+        });
+        
+        let update = json!({
+            "items": [4, 5]
+        });
+        
+        merge_json_with_strategy(&mut base, &update, MergeStrategy::AppendArrays);
+        
+        assert_eq!(base["items"], json!([1, 2, 3, 4, 5]));
+    }
 }

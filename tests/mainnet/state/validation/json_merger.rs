@@ -151,3 +151,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Successfully merged {} JSON files into {}", input_files.len(), output_path);
     Ok(())
 }
+use serde_json::{Map, Value};
+use std::env;
+use std::fs;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<String> = env::args().collect();
+    if args.len() < 3 {
+        eprintln!("Usage: {} <output_file> <input_file1> [input_file2 ...]", args[0]);
+        std::process::exit(1);
+    }
+
+    let output_path = &args[1];
+    let input_paths = &args[2..];
+
+    let mut merged_map = Map::new();
+
+    for (index, path) in input_paths.iter().enumerate() {
+        let content = fs::read_to_string(path)?;
+        let json_value: Value = serde_json::from_str(&content)?;
+
+        let key = match json_value {
+            Value::Object(ref map) if map.contains_key("name") => {
+                map.get("name").and_then(|v| v.as_str()).unwrap_or(&format!("file_{}", index))
+            }
+            _ => &format!("file_{}", index),
+        };
+
+        merged_map.insert(key.to_string(), json_value);
+    }
+
+    let merged_value = Value::Object(merged_map);
+    let json_string = serde_json::to_string_pretty(&merged_value)?;
+    fs::write(output_path, json_string)?;
+
+    println!("Successfully merged {} files into {}", input_paths.len(), output_path);
+    Ok(())
+}

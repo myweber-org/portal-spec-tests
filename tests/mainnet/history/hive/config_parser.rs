@@ -1,181 +1,102 @@
-use std::collections::HashMap;
-use std::env;
+use serde::{Deserialize, Serialize};
 use std::fs;
+use std::path::Path;
 
-pub struct Config {
-    values: HashMap<String, String>,
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ServerConfig {
+    pub host: String,
+    pub port: u16,
+    pub max_connections: usize,
+    pub enable_tls: bool,
 }
 
-impl Config {
-    pub fn from_file(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
-        let content = fs::read_to_string(path)?;
-        let mut values = HashMap::new();
-
-        for line in content.lines() {
-            let trimmed = line.trim();
-            if trimmed.is_empty() || trimmed.starts_with('#') {
-                continue;
-            }
-
-            if let Some((key, value)) = trimmed.split_once('=') {
-                let key = key.trim().to_string();
-                let processed_value = Self::process_value(value.trim());
-                values.insert(key, processed_value);
-            }
-        }
-
-        Ok(Config { values })
-    }
-
-    fn process_value(value: &str) -> String {
-        if value.starts_with('$') {
-            let var_name = &value[1..];
-            env::var(var_name).unwrap_or_else(|_| value.to_string())
-        } else {
-            value.to_string()
+impl Default for ServerConfig {
+    fn default() -> Self {
+        ServerConfig {
+            host: String::from("127.0.0.1"),
+            port: 8080,
+            max_connections: 100,
+            enable_tls: false,
         }
     }
+}
 
-    pub fn get(&self, key: &str) -> Option<&String> {
-        self.values.get(key)
-    }
+pub fn load_config<P: AsRef<Path>>(path: P) -> Result<ServerConfig, Box<dyn std::error::Error>> {
+    let config_str = fs::read_to_string(path)?;
+    let config: ServerConfig = toml::from_str(&config_str)?;
+    
+    validate_config(&config)?;
+    Ok(config)
+}
 
-    pub fn contains_key(&self, key: &str) -> bool {
-        self.values.contains_key(key)
+pub fn load_config_with_defaults<P: AsRef<Path>>(path: P) -> Result<ServerConfig, Box<dyn std::error::Error>> {
+    match load_config(path) {
+        Ok(config) => Ok(config),
+        Err(_) => {
+            println!("Using default configuration");
+            Ok(ServerConfig::default())
+        }
     }
+}
+
+fn validate_config(config: &ServerConfig) -> Result<(), String> {
+    if config.port == 0 {
+        return Err("Port cannot be 0".to_string());
+    }
+    
+    if config.max_connections == 0 {
+        return Err("Max connections must be greater than 0".to_string());
+    }
+    
+    if config.host.is_empty() {
+        return Err("Host cannot be empty".to_string());
+    }
+    
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_basic_parsing() {
-        let mut file = NamedTempFile::new().unwrap();
-        writeln!(file, "HOST=localhost").unwrap();
-        writeln!(file, "PORT=8080").unwrap();
-        writeln!(file, "# This is a comment").unwrap();
-        writeln!(file, "").unwrap();
-        writeln!(file, "TIMEOUT=30").unwrap();
-
-        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
-        assert_eq!(config.get("HOST"), Some(&"localhost".to_string()));
-        assert_eq!(config.get("PORT"), Some(&"8080".to_string()));
-        assert_eq!(config.get("TIMEOUT"), Some(&"30".to_string()));
-        assert_eq!(config.get("MISSING"), None);
+    fn test_default_config() {
+        let config = ServerConfig::default();
+        assert_eq!(config.host, "127.0.0.1");
+        assert_eq!(config.port, 8080);
+        assert_eq!(config.max_connections, 100);
+        assert!(!config.enable_tls);
     }
 
     #[test]
-    fn test_env_substitution() {
-        env::set_var("DB_PASSWORD", "secret123");
+    fn test_load_valid_config() {
+        let config_str = r#"
+            host = "0.0.0.0"
+            port = 9000
+            max_connections = 500
+            enable_tls = true
+        "#;
         
-        let mut file = NamedTempFile::new().unwrap();
-        writeln!(file, "DB_HOST=localhost").unwrap();
-        writeln!(file, "DB_PASS=$DB_PASSWORD").unwrap();
-        writeln!(file, "NO_ENV=$NONEXISTENT").unwrap();
-
-        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
-        assert_eq!(config.get("DB_HOST"), Some(&"localhost".to_string()));
-        assert_eq!(config.get("DB_PASS"), Some(&"secret123".to_string()));
-        assert_eq!(config.get("NO_ENV"), Some(&"$NONEXISTENT".to_string()));
+        let temp_file = NamedTempFile::new().unwrap();
+        fs::write(temp_file.path(), config_str).unwrap();
+        
+        let config = load_config(temp_file.path()).unwrap();
+        assert_eq!(config.host, "0.0.0.0");
+        assert_eq!(config.port, 9000);
+        assert_eq!(config.max_connections, 500);
+        assert!(config.enable_tls);
     }
-}use serde::{Deserialize, Serialize};
-use std::env;
-use std::fs;
-use std::path::Path;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DatabaseConfig {
-    pub host: String,
-    pub port: u16,
-    pub username: String,
-    pub password: String,
-    pub database_name: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ServerConfig {
-    pub address: String,
-    pub port: u16,
-    pub enable_tls: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AppConfig {
-    pub database: DatabaseConfig,
-    pub server: ServerConfig,
-    pub log_level: String,
-    pub max_connections: u32,
-}
-
-impl AppConfig {
-    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
-        let config_str = fs::read_to_string(path)?;
-        let mut config: AppConfig = serde_yaml::from_str(&config_str)?;
+    #[test]
+    fn test_validate_invalid_port() {
+        let config = ServerConfig {
+            host: "localhost".to_string(),
+            port: 0,
+            max_connections: 100,
+            enable_tls: false,
+        };
         
-        config.apply_environment_overrides();
-        config.validate()?;
-        
-        Ok(config)
-    }
-    
-    fn apply_environment_overrides(&mut self) {
-        if let Ok(host) = env::var("DB_HOST") {
-            self.database.host = host;
-        }
-        
-        if let Ok(port) = env::var("DB_PORT") {
-            if let Ok(port_num) = port.parse::<u16>() {
-                self.database.port = port_num;
-            }
-        }
-        
-        if let Ok(log_level) = env::var("LOG_LEVEL") {
-            self.log_level = log_level;
-        }
-        
-        if let Ok(max_conn) = env::var("MAX_CONNECTIONS") {
-            if let Ok(max_conn_num) = max_conn.parse::<u32>() {
-                self.max_connections = max_conn_num;
-            }
-        }
-    }
-    
-    fn validate(&self) -> Result<(), Box<dyn std::error::Error>> {
-        if self.database.port == 0 {
-            return Err("Database port cannot be zero".into());
-        }
-        
-        if self.server.port == 0 {
-            return Err("Server port cannot be zero".into());
-        }
-        
-        if self.max_connections == 0 {
-            return Err("Max connections must be greater than zero".into());
-        }
-        
-        let valid_log_levels = ["error", "warn", "info", "debug", "trace"];
-        if !valid_log_levels.contains(&self.log_level.as_str()) {
-            return Err(format!("Invalid log level: {}", self.log_level).into());
-        }
-        
-        Ok(())
-    }
-    
-    pub fn database_url(&self) -> String {
-        format!(
-            "postgres://{}:{}@{}:{}/{}",
-            self.database.username,
-            self.database.password,
-            self.database.host,
-            self.database.port,
-            self.database.database_name
-        )
-    }
-    
-    pub fn server_address(&self) -> String {
-        format!("{}:{}", self.server.address, self.server.port)
+        assert!(validate_config(&config).is_err());
     }
 }

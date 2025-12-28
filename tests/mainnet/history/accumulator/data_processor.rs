@@ -1,65 +1,122 @@
 
 use std::error::Error;
-use std::fmt;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
 
 #[derive(Debug, Clone)]
 pub struct DataRecord {
     pub id: u32,
     pub value: f64,
-    pub timestamp: i64,
+    pub category: String,
+    pub timestamp: String,
 }
 
-#[derive(Debug)]
-pub enum ValidationError {
-    InvalidId,
-    InvalidValue,
-    InvalidTimestamp,
-}
-
-impl fmt::Display for ValidationError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ValidationError::InvalidId => write!(f, "Invalid record ID"),
-            ValidationError::InvalidValue => write!(f, "Invalid value field"),
-            ValidationError::InvalidTimestamp => write!(f, "Invalid timestamp"),
+impl DataRecord {
+    pub fn new(id: u32, value: f64, category: String, timestamp: String) -> Self {
+        Self {
+            id,
+            value,
+            category,
+            timestamp,
         }
     }
-}
 
-impl Error for ValidationError {}
-
-pub fn validate_record(record: &DataRecord) -> Result<(), ValidationError> {
-    if record.id == 0 {
-        return Err(ValidationError::InvalidId);
-    }
-    
-    if !record.value.is_finite() {
-        return Err(ValidationError::InvalidValue);
-    }
-    
-    if record.timestamp < 0 {
-        return Err(ValidationError::InvalidTimestamp);
-    }
-    
-    Ok(())
-}
-
-pub fn transform_record(record: &DataRecord) -> DataRecord {
-    DataRecord {
-        id: record.id,
-        value: record.value * 1.1,
-        timestamp: record.timestamp + 3600,
+    pub fn is_valid(&self) -> bool {
+        !self.category.is_empty() 
+            && self.value.is_finite() 
+            && self.id > 0
+            && !self.timestamp.is_empty()
     }
 }
 
-pub fn process_records(records: Vec<DataRecord>) -> Vec<Result<DataRecord, ValidationError>> {
-    records
-        .into_iter()
-        .map(|record| {
-            validate_record(&record)?;
-            Ok(transform_record(&record))
-        })
-        .collect()
+pub struct DataProcessor {
+    records: Vec<DataRecord>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        Self {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<usize, Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut count = 0;
+
+        for (line_num, line) in reader.lines().enumerate() {
+            let line = line?;
+            
+            if line_num == 0 {
+                continue;
+            }
+
+            let parts: Vec<&str> = line.split(',').collect();
+            if parts.len() != 4 {
+                continue;
+            }
+
+            let id = match parts[0].parse::<u32>() {
+                Ok(val) => val,
+                Err(_) => continue,
+            };
+
+            let value = match parts[1].parse::<f64>() {
+                Ok(val) => val,
+                Err(_) => continue,
+            };
+
+            let category = parts[2].to_string();
+            let timestamp = parts[3].to_string();
+
+            let record = DataRecord::new(id, value, category, timestamp);
+            if record.is_valid() {
+                self.records.push(record);
+                count += 1;
+            }
+        }
+
+        Ok(count)
+    }
+
+    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
+        self.records
+            .iter()
+            .filter(|record| record.category == category)
+            .collect()
+    }
+
+    pub fn calculate_average(&self) -> Option<f64> {
+        if self.records.is_empty() {
+            return None;
+        }
+
+        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        Some(sum / self.records.len() as f64)
+    }
+
+    pub fn get_statistics(&self) -> (f64, f64, f64) {
+        if self.records.is_empty() {
+            return (0.0, 0.0, 0.0);
+        }
+
+        let values: Vec<f64> = self.records.iter().map(|r| r.value).collect();
+        let min = values.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+        let max = values.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+        let avg = self.calculate_average().unwrap_or(0.0);
+
+        (min, max, avg)
+    }
+
+    pub fn count_records(&self) -> usize {
+        self.records.len()
+    }
+
+    pub fn clear(&mut self) {
+        self.records.clear();
+    }
 }
 
 #[cfg(test)]
@@ -67,39 +124,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_valid_record() {
-        let record = DataRecord {
-            id: 1,
-            value: 42.5,
-            timestamp: 1672531200,
-        };
-        
-        assert!(validate_record(&record).is_ok());
+    fn test_record_validation() {
+        let valid_record = DataRecord::new(1, 10.5, "A".to_string(), "2024-01-01".to_string());
+        assert!(valid_record.is_valid());
+
+        let invalid_record = DataRecord::new(0, f64::NAN, "".to_string(), "".to_string());
+        assert!(!invalid_record.is_valid());
     }
 
     #[test]
-    fn test_invalid_id() {
-        let record = DataRecord {
-            id: 0,
-            value: 42.5,
-            timestamp: 1672531200,
-        };
-        
-        assert!(matches!(validate_record(&record), Err(ValidationError::InvalidId)));
+    fn test_empty_processor() {
+        let processor = DataProcessor::new();
+        assert_eq!(processor.count_records(), 0);
+        assert_eq!(processor.calculate_average(), None);
     }
 
     #[test]
-    fn test_transform_record() {
-        let original = DataRecord {
-            id: 1,
-            value: 100.0,
-            timestamp: 1000,
-        };
-        
-        let transformed = transform_record(&original);
-        
-        assert_eq!(transformed.id, 1);
-        assert_eq!(transformed.value, 110.0);
-        assert_eq!(transformed.timestamp, 4600);
+    fn test_filtering() {
+        let mut processor = DataProcessor::new();
+        processor.records.push(DataRecord::new(1, 10.0, "A".to_string(), "time1".to_string()));
+        processor.records.push(DataRecord::new(2, 20.0, "B".to_string(), "time2".to_string()));
+        processor.records.push(DataRecord::new(3, 30.0, "A".to_string(), "time3".to_string()));
+
+        let filtered = processor.filter_by_category("A");
+        assert_eq!(filtered.len(), 2);
     }
 }

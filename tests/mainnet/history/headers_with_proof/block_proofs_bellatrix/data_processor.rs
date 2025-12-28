@@ -1,85 +1,143 @@
 
 use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug)]
+pub enum DataError {
+    InvalidId,
+    InvalidName,
+    InvalidValue,
+    DuplicateRecord,
+    ProcessingError(String),
+}
+
+impl fmt::Display for DataError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DataError::InvalidId => write!(f, "Invalid record ID"),
+            DataError::InvalidName => write!(f, "Invalid record name"),
+            DataError::InvalidValue => write!(f, "Invalid record value"),
+            DataError::DuplicateRecord => write!(f, "Duplicate record detected"),
+            DataError::ProcessingError(msg) => write!(f, "Processing error: {}", msg),
+        }
+    }
+}
+
+impl Error for DataError {}
 
 pub struct DataProcessor {
-    cache: HashMap<String, Vec<f64>>,
+    records: HashMap<u32, DataRecord>,
+    name_index: HashMap<String, u32>,
 }
 
 impl DataProcessor {
     pub fn new() -> Self {
         DataProcessor {
-            cache: HashMap::new(),
+            records: HashMap::new(),
+            name_index: HashMap::new(),
         }
     }
 
-    pub fn process_numeric_data(&mut self, key: &str, values: &[f64]) -> Result<Vec<f64>, String> {
-        if values.is_empty() {
-            return Err("Empty data provided".to_string());
+    pub fn add_record(&mut self, record: DataRecord) -> Result<(), DataError> {
+        if record.id == 0 {
+            return Err(DataError::InvalidId);
         }
 
-        if values.iter().any(|&x| x.is_nan() || x.is_infinite()) {
-            return Err("Invalid numeric values detected".to_string());
+        if record.name.trim().is_empty() {
+            return Err(DataError::InvalidName);
         }
 
-        let processed: Vec<f64> = values
-            .iter()
-            .map(|&x| x * 2.0)
-            .collect();
+        if record.value.is_nan() || record.value.is_infinite() {
+            return Err(DataError::InvalidValue);
+        }
 
-        self.cache.insert(key.to_string(), processed.clone());
-        Ok(processed)
+        if self.records.contains_key(&record.id) {
+            return Err(DataError::DuplicateRecord);
+        }
+
+        if self.name_index.contains_key(&record.name) {
+            return Err(DataError::DuplicateRecord);
+        }
+
+        self.records.insert(record.id, record.clone());
+        self.name_index.insert(record.name, record.id);
+        Ok(())
     }
 
-    pub fn calculate_statistics(&self, key: &str) -> Option<(f64, f64, f64)> {
-        self.cache.get(key).map(|data| {
-            let sum: f64 = data.iter().sum();
-            let count = data.len() as f64;
-            let mean = sum / count;
-            
-            let variance: f64 = data.iter()
-                .map(|&x| (x - mean).powi(2))
-                .sum::<f64>() / count;
-            
-            let std_dev = variance.sqrt();
-            
-            (mean, variance, std_dev)
+    pub fn get_record_by_id(&self, id: u32) -> Option<&DataRecord> {
+        self.records.get(&id)
+    }
+
+    pub fn get_record_by_name(&self, name: &str) -> Option<&DataRecord> {
+        self.name_index.get(name).and_then(|id| self.records.get(id))
+    }
+
+    pub fn calculate_statistics(&self) -> Result<Statistics, DataError> {
+        if self.records.is_empty() {
+            return Err(DataError::ProcessingError("No records available".to_string()));
+        }
+
+        let values: Vec<f64> = self.records.values().map(|r| r.value).collect();
+        let count = values.len();
+        let sum: f64 = values.iter().sum();
+        let average = sum / count as f64;
+        let min = values.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+        let max = values.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+
+        Ok(Statistics {
+            count,
+            sum,
+            average,
+            min,
+            max,
         })
     }
 
-    pub fn clear_cache(&mut self) {
-        self.cache.clear();
+    pub fn filter_by_tag(&self, tag: &str) -> Vec<&DataRecord> {
+        self.records
+            .values()
+            .filter(|record| record.tags.iter().any(|t| t == tag))
+            .collect()
+    }
+
+    pub fn transform_values<F>(&mut self, transform_fn: F) -> Result<(), DataError>
+    where
+        F: Fn(f64) -> f64,
+    {
+        for record in self.records.values_mut() {
+            let new_value = transform_fn(record.value);
+            if new_value.is_nan() || new_value.is_infinite() {
+                return Err(DataError::InvalidValue);
+            }
+            record.value = new_value;
+        }
+        Ok(())
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub struct Statistics {
+    pub count: usize,
+    pub sum: f64,
+    pub average: f64,
+    pub min: f64,
+    pub max: f64,
+}
 
-    #[test]
-    fn test_process_valid_data() {
-        let mut processor = DataProcessor::new();
-        let result = processor.process_numeric_data("test", &[1.0, 2.0, 3.0]);
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), vec![2.0, 4.0, 6.0]);
-    }
-
-    #[test]
-    fn test_process_empty_data() {
-        let mut processor = DataProcessor::new();
-        let result = processor.process_numeric_data("empty", &[]);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_statistics_calculation() {
-        let mut processor = DataProcessor::new();
-        processor.process_numeric_data("stats", &[1.0, 2.0, 3.0]).unwrap();
-        let stats = processor.calculate_statistics("stats");
-        assert!(stats.is_some());
-        
-        let (mean, variance, std_dev) = stats.unwrap();
-        assert_eq!(mean, 4.0);
-        assert_eq!(variance, 8.0);
-        assert_eq!(std_dev, 8.0_f64.sqrt());
+impl fmt::Display for Statistics {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Statistics: count={}, sum={:.2}, avg={:.2}, min={:.2}, max={:.2}",
+            self.count, self.sum, self.average, self.min, self.max
+        )
     }
 }

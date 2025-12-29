@@ -1,270 +1,152 @@
 
-use std::error::Error;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
-use std::path::Path;
-
-pub struct DataProcessor {
-    data: Vec<f64>,
-}
-
-impl DataProcessor {
-    pub fn new() -> Self {
-        DataProcessor { data: Vec::new() }
-    }
-
-    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn Error>> {
-        let file = File::open(path)?;
-        let reader = BufReader::new(file);
-
-        for line in reader.lines() {
-            let line = line?;
-            if line.trim().is_empty() {
-                continue;
-            }
-
-            let value: f64 = line.trim().parse()?;
-            self.data.push(value);
-        }
-
-        Ok(())
-    }
-
-    pub fn calculate_mean(&self) -> Option<f64> {
-        if self.data.is_empty() {
-            return None;
-        }
-
-        let sum: f64 = self.data.iter().sum();
-        Some(sum / self.data.len() as f64)
-    }
-
-    pub fn calculate_standard_deviation(&self) -> Option<f64> {
-        if self.data.len() < 2 {
-            return None;
-        }
-
-        let mean = self.calculate_mean()?;
-        let variance: f64 = self.data
-            .iter()
-            .map(|&x| (x - mean).powi(2))
-            .sum::<f64>() / (self.data.len() - 1) as f64;
-
-        Some(variance.sqrt())
-    }
-
-    pub fn get_min_max(&self) -> Option<(f64, f64)> {
-        if self.data.is_empty() {
-            return None;
-        }
-
-        let min = self.data.iter().fold(f64::INFINITY, |a, &b| a.min(b));
-        let max = self.data.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
-
-        Some((min, max))
-    }
-
-    pub fn filter_outliers(&self, threshold: f64) -> Vec<f64> {
-        if self.data.len() < 2 {
-            return self.data.clone();
-        }
-
-        let mean = match self.calculate_mean() {
-            Some(m) => m,
-            None => return self.data.clone(),
-        };
-
-        let std_dev = match self.calculate_standard_deviation() {
-            Some(s) => s,
-            None => return self.data.clone(),
-        };
-
-        self.data
-            .iter()
-            .filter(|&&x| (x - mean).abs() <= threshold * std_dev)
-            .cloned()
-            .collect()
-    }
-
-    pub fn data_count(&self) -> usize {
-        self.data.len()
-    }
-
-    pub fn clear_data(&mut self) {
-        self.data.clear();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
-
-    #[test]
-    fn test_data_processing() {
-        let mut processor = DataProcessor::new();
-        
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "10.5\n20.3\n15.7\n25.1\n18.9").unwrap();
-        
-        assert!(processor.load_from_csv(temp_file.path()).is_ok());
-        assert_eq!(processor.data_count(), 5);
-        
-        let mean = processor.calculate_mean().unwrap();
-        assert!((mean - 18.1).abs() < 0.01);
-        
-        let (min, max) = processor.get_min_max().unwrap();
-        assert_eq!(min, 10.5);
-        assert_eq!(max, 25.1);
-        
-        let filtered = processor.filter_outliers(2.0);
-        assert_eq!(filtered.len(), 5);
-    }
-}
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 
 #[derive(Debug, Clone)]
-pub struct ValidationError {
-    message: String,
+pub struct DataRecord {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub category: String,
 }
 
-impl fmt::Display for ValidationError {
+#[derive(Debug)]
+pub enum ProcessingError {
+    InvalidData(String),
+    TransformationFailed(String),
+    ValidationError(String),
+}
+
+impl fmt::Display for ProcessingError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Validation error: {}", self.message)
-    }
-}
-
-impl Error for ValidationError {}
-
-impl ValidationError {
-    fn new(message: &str) -> Self {
-        ValidationError {
-            message: message.to_string(),
+        match self {
+            ProcessingError::InvalidData(msg) => write!(f, "Invalid data: {}", msg),
+            ProcessingError::TransformationFailed(msg) => write!(f, "Transformation failed: {}", msg),
+            ProcessingError::ValidationError(msg) => write!(f, "Validation error: {}", msg),
         }
     }
 }
 
+impl Error for ProcessingError {}
+
 pub struct DataProcessor {
-    data: HashMap<String, Vec<f64>>,
+    records: Vec<DataRecord>,
+    category_stats: HashMap<String, CategoryStats>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CategoryStats {
+    pub total_value: f64,
+    pub record_count: usize,
+    pub average_value: f64,
 }
 
 impl DataProcessor {
     pub fn new() -> Self {
         DataProcessor {
-            data: HashMap::new(),
+            records: Vec::new(),
+            category_stats: HashMap::new(),
         }
     }
 
-    pub fn add_dataset(&mut self, key: &str, values: Vec<f64>) -> Result<(), ValidationError> {
-        if values.is_empty() {
-            return Err(ValidationError::new("Dataset cannot be empty"));
-        }
-
-        for value in &values {
-            if value.is_nan() || value.is_infinite() {
-                return Err(ValidationError::new("Dataset contains invalid numeric values"));
-            }
-        }
-
-        self.data.insert(key.to_string(), values);
+    pub fn add_record(&mut self, record: DataRecord) -> Result<(), ProcessingError> {
+        self.validate_record(&record)?;
+        self.records.push(record.clone());
+        self.update_category_stats(&record);
         Ok(())
     }
 
-    pub fn calculate_statistics(&self, key: &str) -> Result<Statistics, ValidationError> {
-        let values = self.data.get(key)
-            .ok_or_else(|| ValidationError::new("Dataset not found"))?;
-
-        if values.is_empty() {
-            return Err(ValidationError::new("Dataset is empty"));
+    fn validate_record(&self, record: &DataRecord) -> Result<(), ProcessingError> {
+        if record.name.trim().is_empty() {
+            return Err(ProcessingError::ValidationError(
+                "Record name cannot be empty".to_string(),
+            ));
         }
 
-        let sum: f64 = values.iter().sum();
-        let count = values.len() as f64;
-        let mean = sum / count;
+        if record.value < 0.0 {
+            return Err(ProcessingError::ValidationError(
+                "Record value cannot be negative".to_string(),
+            ));
+        }
 
-        let variance: f64 = values.iter()
-            .map(|&x| (x - mean).powi(2))
-            .sum::<f64>() / count;
+        if record.category.trim().is_empty() {
+            return Err(ProcessingError::ValidationError(
+                "Record category cannot be empty".to_string(),
+            ));
+        }
 
-        let sorted_values = {
-            let mut sorted = values.clone();
-            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
-            sorted
-        };
+        Ok(())
+    }
 
-        let median = if count as usize % 2 == 0 {
-            let mid = count as usize / 2;
-            (sorted_values[mid - 1] + sorted_values[mid]) / 2.0
-        } else {
-            sorted_values[count as usize / 2]
-        };
+    fn update_category_stats(&mut self, record: &DataRecord) {
+        let stats = self.category_stats
+            .entry(record.category.clone())
+            .or_insert(CategoryStats {
+                total_value: 0.0,
+                record_count: 0,
+                average_value: 0.0,
+            });
 
-        Ok(Statistics {
-            count: values.len(),
-            mean,
-            variance,
-            median,
-            min: *sorted_values.first().unwrap(),
-            max: *sorted_values.last().unwrap(),
+        stats.total_value += record.value;
+        stats.record_count += 1;
+        stats.average_value = stats.total_value / stats.record_count as f64;
+    }
+
+    pub fn transform_values<F>(&mut self, transform_fn: F) -> Result<(), ProcessingError>
+    where
+        F: Fn(f64) -> f64,
+    {
+        for record in &mut self.records {
+            let new_value = transform_fn(record.value);
+            if new_value.is_nan() || new_value.is_infinite() {
+                return Err(ProcessingError::TransformationFailed(
+                    "Transformation produced invalid value".to_string(),
+                ));
+            }
+            record.value = new_value;
+        }
+
+        self.recalculate_stats();
+        Ok(())
+    }
+
+    fn recalculate_stats(&mut self) {
+        self.category_stats.clear();
+        for record in &self.records {
+            self.update_category_stats(record);
+        }
+    }
+
+    pub fn get_category_stats(&self, category: &str) -> Option<&CategoryStats> {
+        self.category_stats.get(category)
+    }
+
+    pub fn get_all_records(&self) -> &[DataRecord] {
+        &self.records
+    }
+
+    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
+        self.records
+            .iter()
+            .filter(|record| record.category == category)
+            .collect()
+    }
+
+    pub fn calculate_total_value(&self) -> f64 {
+        self.records.iter().map(|record| record.value).sum()
+    }
+
+    pub fn find_max_value_record(&self) -> Option<&DataRecord> {
+        self.records.iter().max_by(|a, b| {
+            a.value.partial_cmp(&b.value).unwrap_or(std::cmp::Ordering::Equal)
         })
     }
-
-    pub fn normalize_data(&self, key: &str) -> Result<Vec<f64>, ValidationError> {
-        let values = self.data.get(key)
-            .ok_or_else(|| ValidationError::new("Dataset not found"))?;
-
-        let stats = self.calculate_statistics(key)?;
-        
-        if stats.variance == 0.0 {
-            return Ok(vec![0.0; values.len()]);
-        }
-
-        let normalized: Vec<f64> = values.iter()
-            .map(|&x| (x - stats.mean) / stats.variance.sqrt())
-            .collect();
-
-        Ok(normalized)
-    }
-
-    pub fn merge_datasets(&self, keys: &[&str]) -> Result<Vec<f64>, ValidationError> {
-        if keys.is_empty() {
-            return Err(ValidationError::new("No datasets specified for merging"));
-        }
-
-        let mut merged = Vec::new();
-        for key in keys {
-            let values = self.data.get(*key)
-                .ok_or_else(|| ValidationError::new(&format!("Dataset '{}' not found", key)))?;
-            merged.extend(values);
-        }
-
-        Ok(merged)
-    }
-
-    pub fn list_datasets(&self) -> Vec<String> {
-        self.data.keys().cloned().collect()
-    }
 }
 
-pub struct Statistics {
-    pub count: usize,
-    pub mean: f64,
-    pub variance: f64,
-    pub median: f64,
-    pub min: f64,
-    pub max: f64,
-}
-
-impl fmt::Display for Statistics {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "Statistics: count={}, mean={:.4}, variance={:.4}, median={:.4}, min={:.4}, max={:.4}",
-            self.count, self.mean, self.variance, self.median, self.min, self.max
-        )
+impl Default for DataProcessor {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -273,52 +155,75 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_add_and_calculate_statistics() {
+    fn test_add_valid_record() {
         let mut processor = DataProcessor::new();
-        let values = vec![1.0, 2.0, 3.0, 4.0, 5.0];
-        
-        processor.add_dataset("test", values).unwrap();
-        let stats = processor.calculate_statistics("test").unwrap();
-        
-        assert_eq!(stats.count, 5);
-        assert_eq!(stats.mean, 3.0);
-        assert_eq!(stats.median, 3.0);
-        assert_eq!(stats.min, 1.0);
-        assert_eq!(stats.max, 5.0);
+        let record = DataRecord {
+            id: 1,
+            name: "Test Record".to_string(),
+            value: 100.0,
+            category: "Test".to_string(),
+        };
+
+        assert!(processor.add_record(record).is_ok());
+        assert_eq!(processor.get_all_records().len(), 1);
     }
 
     #[test]
-    fn test_normalize_data() {
+    fn test_add_invalid_record() {
         let mut processor = DataProcessor::new();
-        let values = vec![1.0, 2.0, 3.0, 4.0, 5.0];
-        
-        processor.add_dataset("test", values).unwrap();
-        let normalized = processor.normalize_data("test").unwrap();
-        
-        assert_eq!(normalized.len(), 5);
-        let sum: f64 = normalized.iter().sum();
-        assert!(sum.abs() < 1e-10);
+        let record = DataRecord {
+            id: 1,
+            name: "".to_string(),
+            value: 100.0,
+            category: "Test".to_string(),
+        };
+
+        assert!(processor.add_record(record).is_err());
     }
 
     #[test]
-    fn test_merge_datasets() {
+    fn test_category_stats() {
         let mut processor = DataProcessor::new();
         
-        processor.add_dataset("set1", vec![1.0, 2.0]).unwrap();
-        processor.add_dataset("set2", vec![3.0, 4.0]).unwrap();
-        
-        let merged = processor.merge_datasets(&["set1", "set2"]).unwrap();
-        assert_eq!(merged, vec![1.0, 2.0, 3.0, 4.0]);
+        let record1 = DataRecord {
+            id: 1,
+            name: "Record 1".to_string(),
+            value: 50.0,
+            category: "CategoryA".to_string(),
+        };
+
+        let record2 = DataRecord {
+            id: 2,
+            name: "Record 2".to_string(),
+            value: 150.0,
+            category: "CategoryA".to_string(),
+        };
+
+        processor.add_record(record1).unwrap();
+        processor.add_record(record2).unwrap();
+
+        let stats = processor.get_category_stats("CategoryA").unwrap();
+        assert_eq!(stats.total_value, 200.0);
+        assert_eq!(stats.record_count, 2);
+        assert_eq!(stats.average_value, 100.0);
     }
 
     #[test]
-    fn test_validation_error() {
+    fn test_value_transformation() {
         let mut processor = DataProcessor::new();
         
-        let result = processor.add_dataset("empty", vec![]);
-        assert!(result.is_err());
+        let record = DataRecord {
+            id: 1,
+            name: "Test Record".to_string(),
+            value: 10.0,
+            category: "Test".to_string(),
+        };
+
+        processor.add_record(record).unwrap();
         
-        let result = processor.calculate_statistics("nonexistent");
-        assert!(result.is_err());
+        processor.transform_values(|x| x * 2.0).unwrap();
+        
+        let transformed_record = &processor.get_all_records()[0];
+        assert_eq!(transformed_record.value, 20.0);
     }
 }

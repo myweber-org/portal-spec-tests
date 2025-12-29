@@ -1,159 +1,71 @@
-
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use csv::Reader;
+use serde::Deserialize;
 use std::error::Error;
-use std::fmt;
+use std::fs::File;
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct DataRecord {
-    pub id: u64,
-    pub timestamp: i64,
-    pub values: Vec<f64>,
-    pub metadata: HashMap<String, String>,
+#[derive(Debug, Deserialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
 }
 
-#[derive(Debug)]
-pub enum ProcessingError {
-    InvalidData(String),
-    TransformationError(String),
-    ValidationError(String),
+pub fn process_data_file(file_path: &str) -> Result<Vec<Record>, Box<dyn Error>> {
+    let file = File::open(file_path)?;
+    let mut rdr = Reader::from_reader(file);
+    let mut records = Vec::new();
+
+    for result in rdr.deserialize() {
+        let record: Record = result?;
+        if record.value >= 0.0 && !record.name.is_empty() {
+            records.push(record);
+        }
+    }
+
+    Ok(records)
 }
 
-impl fmt::Display for ProcessingError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ProcessingError::InvalidData(msg) => write!(f, "Invalid data: {}", msg),
-            ProcessingError::TransformationError(msg) => write!(f, "Transformation error: {}", msg),
-            ProcessingError::ValidationError(msg) => write!(f, "Validation error: {}", msg),
-        }
-    }
-}
-
-impl Error for ProcessingError {}
-
-pub struct DataProcessor {
-    validation_rules: Vec<Box<dyn Fn(&DataRecord) -> Result<(), ProcessingError>>>,
-    transformation_pipeline: Vec<Box<dyn Fn(DataRecord) -> Result<DataRecord, ProcessingError>>>,
-}
-
-impl DataProcessor {
-    pub fn new() -> Self {
-        DataProcessor {
-            validation_rules: Vec::new(),
-            transformation_pipeline: Vec::new(),
-        }
-    }
-
-    pub fn add_validation_rule<F>(&mut self, rule: F)
-    where
-        F: Fn(&DataRecord) -> Result<(), ProcessingError> + 'static,
-    {
-        self.validation_rules.push(Box::new(rule));
-    }
-
-    pub fn add_transformation<F>(&mut self, transform: F)
-    where
-        F: Fn(DataRecord) -> Result<DataRecord, ProcessingError> + 'static,
-    {
-        self.transformation_pipeline.push(Box::new(transform));
-    }
-
-    pub fn process(&self, mut record: DataRecord) -> Result<DataRecord, ProcessingError> {
-        for rule in &self.validation_rules {
-            rule(&record)?;
-        }
-
-        for transform in &self.transformation_pipeline {
-            record = transform(record)?;
-        }
-
-        Ok(record)
-    }
-
-    pub fn batch_process(&self, records: Vec<DataRecord>) -> Result<Vec<DataRecord>, ProcessingError> {
-        let mut results = Vec::with_capacity(records.len());
-        
-        for record in records {
-            match self.process(record) {
-                Ok(processed) => results.push(processed),
-                Err(e) => return Err(e),
-            }
-        }
-        
-        Ok(results)
-    }
-}
-
-pub fn create_default_processor() -> DataProcessor {
-    let mut processor = DataProcessor::new();
+pub fn calculate_statistics(records: &[Record]) -> (f64, f64, usize) {
+    let sum: f64 = records.iter().map(|r| r.value).sum();
+    let count = records.len();
+    let mean = if count > 0 { sum / count as f64 } else { 0.0 };
     
-    processor.add_validation_rule(|record| {
-        if record.values.is_empty() {
-            Err(ProcessingError::ValidationError("Empty values array".to_string()))
-        } else {
-            Ok(())
-        }
-    });
+    let active_count = records.iter().filter(|r| r.active).count();
     
-    processor.add_validation_rule(|record| {
-        if record.timestamp < 0 {
-            Err(ProcessingError::ValidationError("Negative timestamp".to_string()))
-        } else {
-            Ok(())
-        }
-    });
-    
-    processor.add_transformation(|mut record| {
-        let sum: f64 = record.values.iter().sum();
-        let avg = sum / record.values.len() as f64;
-        record.metadata.insert("average".to_string(), avg.to_string());
-        Ok(record)
-    });
-    
-    processor.add_transformation(|mut record| {
-        record.values = record.values.iter().map(|&v| v.max(0.0)).collect();
-        Ok(record)
-    });
-    
-    processor
+    (sum, mean, active_count)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+    use tempfile::NamedTempFile;
+    use std::io::Write;
+
     #[test]
-    fn test_data_processing() {
-        let processor = create_default_processor();
+    fn test_process_valid_data() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,name,value,active").unwrap();
+        writeln!(temp_file, "1,Test1,10.5,true").unwrap();
+        writeln!(temp_file, "2,Test2,20.0,false").unwrap();
         
-        let mut metadata = HashMap::new();
-        metadata.insert("source".to_string(), "test".to_string());
-        
-        let record = DataRecord {
-            id: 1,
-            timestamp: 1625097600,
-            values: vec![1.0, -2.0, 3.0, 4.0],
-            metadata,
-        };
-        
-        let result = processor.process(record).unwrap();
-        
-        assert_eq!(result.values, vec![1.0, 0.0, 3.0, 4.0]);
-        assert!(result.metadata.contains_key("average"));
+        let result = process_data_file(temp_file.path().to_str().unwrap());
+        assert!(result.is_ok());
+        let records = result.unwrap();
+        assert_eq!(records.len(), 2);
     }
-    
+
     #[test]
-    fn test_validation_error() {
-        let processor = create_default_processor();
+    fn test_statistics_calculation() {
+        let records = vec![
+            Record { id: 1, name: "A".to_string(), value: 10.0, active: true },
+            Record { id: 2, name: "B".to_string(), value: 20.0, active: false },
+            Record { id: 3, name: "C".to_string(), value: 30.0, active: true },
+        ];
         
-        let record = DataRecord {
-            id: 2,
-            timestamp: -100,
-            values: vec![1.0, 2.0],
-            metadata: HashMap::new(),
-        };
-        
-        let result = processor.process(record);
-        assert!(result.is_err());
+        let (sum, mean, active_count) = calculate_statistics(&records);
+        assert_eq!(sum, 60.0);
+        assert_eq!(mean, 20.0);
+        assert_eq!(active_count, 2);
     }
 }

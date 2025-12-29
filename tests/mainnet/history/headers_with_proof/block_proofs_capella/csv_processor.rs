@@ -325,4 +325,110 @@ mod tests {
         let result = process_csv_file(temp_file.path());
         assert!(matches!(result, Err(CsvError::ValidationError(_))));
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader, Write};
+use std::path::Path;
+
+#[derive(Debug)]
+pub struct CsvFilter {
+    pub input_path: String,
+    pub output_path: String,
+    pub column_index: usize,
+    pub filter_value: String,
+}
+
+impl CsvFilter {
+    pub fn new(input: &str, output: &str, column: usize, value: &str) -> Self {
+        CsvFilter {
+            input_path: input.to_string(),
+            output_path: output.to_string(),
+            column_index: column,
+            filter_value: value.to_string(),
+        }
+    }
+
+    pub fn process(&self) -> Result<usize, Box<dyn Error>> {
+        let input_file = File::open(&self.input_path)?;
+        let reader = BufReader::new(input_file);
+        
+        let output_file = File::create(&self.output_path)?;
+        let mut writer = std::io::BufWriter::new(output_file);
+        
+        let mut matched_count = 0;
+        
+        for (line_num, line_result) in reader.lines().enumerate() {
+            let line = line_result?;
+            
+            if line.trim().is_empty() {
+                continue;
+            }
+            
+            let columns: Vec<&str> = line.split(',').collect();
+            
+            if line_num == 0 {
+                writeln!(writer, "{}", line)?;
+                continue;
+            }
+            
+            if let Some(&cell_value) = columns.get(self.column_index) {
+                if cell_value.trim() == self.filter_value {
+                    writeln!(writer, "{}", line)?;
+                    matched_count += 1;
+                }
+            }
+        }
+        
+        writer.flush()?;
+        Ok(matched_count)
+    }
+}
+
+pub fn validate_csv_file(path: &str) -> Result<bool, Box<dyn Error>> {
+    let path_obj = Path::new(path);
+    if !path_obj.exists() {
+        return Err("File does not exist".into());
+    }
+    
+    if path_obj.extension().and_then(|ext| ext.to_str()) != Some("csv") {
+        return Err("File must have .csv extension".into());
+    }
+    
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+    
+    for line_result in reader.lines().take(5) {
+        let line = line_result?;
+        if !line.contains(',') {
+            return Err("File does not appear to be valid CSV".into());
+        }
+    }
+    
+    Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Read;
+    use tempfile::NamedTempFile;
+    
+    #[test]
+    fn test_csv_filter_creation() {
+        let filter = CsvFilter::new("input.csv", "output.csv", 2, "active");
+        assert_eq!(filter.input_path, "input.csv");
+        assert_eq!(filter.column_index, 2);
+        assert_eq!(filter.filter_value, "active");
+    }
+    
+    #[test]
+    fn test_validate_csv_file() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,name,status").unwrap();
+        writeln!(temp_file, "1,alice,active").unwrap();
+        
+        let path = temp_file.path().to_str().unwrap();
+        let result = validate_csv_file(path);
+        assert!(result.is_err());
+    }
 }

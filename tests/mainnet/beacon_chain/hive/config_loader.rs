@@ -1,61 +1,19 @@
-use std::env;
-use std::fs;
 use std::collections::HashMap;
-
-pub struct Config {
-    values: HashMap<String, String>,
-}
-
-impl Config {
-    pub fn new() -> Self {
-        Config {
-            values: HashMap::new(),
-        }
-    }
-
-    pub fn load_from_file(&mut self, path: &str) -> Result<(), Box<dyn std::error::Error>> {
-        let content = fs::read_to_string(path)?;
-        for line in content.lines() {
-            let trimmed = line.trim();
-            if trimmed.is_empty() || trimmed.starts_with('#') {
-                continue;
-            }
-            if let Some((key, value)) = trimmed.split_once('=') {
-                let key = key.trim().to_string();
-                let value = value.trim().to_string();
-                self.values.insert(key, value);
-            }
-        }
-        Ok(())
-    }
-
-    pub fn get(&self, key: &str) -> Option<String> {
-        env::var(key)
-            .ok()
-            .or_else(|| self.values.get(key).cloned())
-    }
-
-    pub fn get_with_default(&self, key: &str, default: &str) -> String {
-        self.get(key).unwrap_or_else(|| default.to_string())
-    }
-}use std::collections::HashMap;
 use std::env;
 use std::fs;
 
+#[derive(Debug)]
 pub struct Config {
-    values: HashMap<String, String>,
+    pub database_url: String,
+    pub server_port: u16,
+    pub log_level: String,
+    pub features: HashMap<String, bool>,
 }
 
 impl Config {
-    pub fn new() -> Self {
-        Config {
-            values: HashMap::new(),
-        }
-    }
-
     pub fn from_file(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
         let content = fs::read_to_string(path)?;
-        let mut config = Config::new();
+        let mut config_map: HashMap<String, String> = HashMap::new();
 
         for line in content.lines() {
             let trimmed = line.trim();
@@ -64,75 +22,42 @@ impl Config {
             }
 
             if let Some((key, value)) = trimmed.split_once('=') {
-                let key = key.trim().to_string();
-                let value = value.trim().to_string();
-                config.values.insert(key, value);
+                config_map.insert(key.trim().to_string(), value.trim().to_string());
             }
         }
 
-        Ok(config)
+        Self::from_map(config_map)
     }
 
-    pub fn get(&self, key: &str) -> Option<String> {
-        env::var(key)
-            .ok()
-            .or_else(|| self.values.get(key).cloned())
-    }
+    fn from_map(mut map: HashMap<String, String>) -> Result<Self, Box<dyn std::error::Error>> {
+        let database_url = Self::get_value(&mut map, "DATABASE_URL")?;
+        let server_port = Self::get_value(&mut map, "SERVER_PORT")?.parse()?;
+        let log_level = Self::get_value(&mut map, "LOG_LEVEL")?;
 
-    pub fn get_or_default(&self, key: &str, default: &str) -> String {
-        self.get(key).unwrap_or_else(|| default.to_string())
-    }
-
-    pub fn set(&mut self, key: &str, value: &str) {
-        self.values.insert(key.to_string(), value.to_string());
-    }
-
-    pub fn contains_key(&self, key: &str) -> bool {
-        self.values.contains_key(key) || env::var(key).is_ok()
-    }
-}use std::collections::HashMap;
-use std::env;
-use std::fs;
-
-pub struct Config {
-    values: HashMap<String, String>,
-}
-
-impl Config {
-    pub fn new() -> Self {
-        Config {
-            values: HashMap::new(),
-        }
-    }
-
-    pub fn load_from_file(&mut self, path: &str) -> Result<(), String> {
-        let contents = fs::read_to_string(path)
-            .map_err(|e| format!("Failed to read config file: {}", e))?;
-
-        for line in contents.lines() {
-            let trimmed = line.trim();
-            if trimmed.is_empty() || trimmed.starts_with('#') {
-                continue;
-            }
-
-            if let Some((key, value)) = trimmed.split_once('=') {
-                let key = key.trim().to_string();
-                let value = value.trim().to_string();
-                self.values.insert(key, value);
+        let mut features = HashMap::new();
+        for (key, value) in map {
+            if key.starts_with("FEATURE_") {
+                let feature_name = key.trim_start_matches("FEATURE_").to_lowercase();
+                let enabled = value.parse::<bool>().unwrap_or(false);
+                features.insert(feature_name, enabled);
             }
         }
 
-        Ok(())
+        Ok(Config {
+            database_url,
+            server_port,
+            log_level,
+            features,
+        })
     }
 
-    pub fn get(&self, key: &str) -> Option<String> {
-        env::var(key)
-            .ok()
-            .or_else(|| self.values.get(key).cloned())
-    }
+    fn get_value(map: &mut HashMap<String, String>, key: &str) -> Result<String, String> {
+        if let Ok(env_value) = env::var(key) {
+            return Ok(env_value);
+        }
 
-    pub fn get_with_default(&self, key: &str, default: &str) -> String {
-        self.get(key).unwrap_or_else(|| default.to_string())
+        map.remove(key)
+            .ok_or_else(|| format!("Missing required configuration: {}", key))
     }
 }
 
@@ -143,22 +68,32 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_load_from_file() {
-        let mut config = Config::new();
+    fn test_config_loading() {
         let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "DATABASE_URL=postgres://localhost").unwrap();
-        writeln!(temp_file, "# This is a comment").unwrap();
-        writeln!(temp_file, "API_KEY=secret123").unwrap();
+        writeln!(temp_file, "DATABASE_URL=postgres://localhost/db").unwrap();
+        writeln!(temp_file, "SERVER_PORT=8080").unwrap();
+        writeln!(temp_file, "LOG_LEVEL=info").unwrap();
+        writeln!(temp_file, "FEATURE_CACHE=true").unwrap();
+        writeln!(temp_file, "FEATURE_DEBUG=false").unwrap();
 
-        config.load_from_file(temp_file.path().to_str().unwrap()).unwrap();
-        assert_eq!(config.get("DATABASE_URL"), Some("postgres://localhost".to_string()));
-        assert_eq!(config.get("API_KEY"), Some("secret123".to_string()));
+        let config = Config::from_file(temp_file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.database_url, "postgres://localhost/db");
+        assert_eq!(config.server_port, 8080);
+        assert_eq!(config.log_level, "info");
+        assert_eq!(config.features.get("cache"), Some(&true));
+        assert_eq!(config.features.get("debug"), Some(&false));
     }
 
     #[test]
-    fn test_environment_override() {
-        env::set_var("OVERRIDE_KEY", "env_value");
-        let config = Config::new();
-        assert_eq!(config.get("OVERRIDE_KEY"), Some("env_value".to_string()));
+    fn test_env_override() {
+        env::set_var("SERVER_PORT", "9090");
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "DATABASE_URL=postgres://localhost/db").unwrap();
+        writeln!(temp_file, "SERVER_PORT=8080").unwrap();
+        writeln!(temp_file, "LOG_LEVEL=debug").unwrap();
+
+        let config = Config::from_file(temp_file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.server_port, 9090);
+        env::remove_var("SERVER_PORT");
     }
 }

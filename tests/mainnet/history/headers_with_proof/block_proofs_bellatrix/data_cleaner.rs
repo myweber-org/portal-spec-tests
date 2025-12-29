@@ -79,4 +79,41 @@ mod tests {
         assert!(cleaned.contains(&"banana".to_string()));
         assert!(cleaned.contains(&"cherry".to_string()));
     }
+}use csv::{ReaderBuilder, WriterBuilder};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+use std::path::Path;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    id: u32,
+    name: String,
+    age: u8,
+    active: bool,
+}
+
+fn clean_data(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
+    let input_file = File::open(Path::new(input_path))?;
+    let mut reader = ReaderBuilder::new().has_headers(true).from_reader(input_file);
+    
+    let output_file = File::create(Path::new(output_path))?;
+    let mut writer = WriterBuilder::new().has_headers(true).from_writer(output_file);
+    
+    for result in reader.deserialize() {
+        let record: Record = result?;
+        
+        if record.age >= 18 && record.active {
+            writer.serialize(&record)?;
+        }
+    }
+    
+    writer.flush()?;
+    Ok(())
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    clean_data("input.csv", "output.csv")?;
+    println!("Data cleaning completed successfully");
+    Ok(())
 }

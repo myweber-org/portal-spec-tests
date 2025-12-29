@@ -275,3 +275,83 @@ mod tests {
         assert_eq!(obj.get("active").unwrap().as_bool().unwrap(), true);
     }
 }
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::{BufReader, Write};
+use std::path::Path;
+use serde_json::{Value, Map};
+
+pub fn merge_json_files(file_paths: &[&str]) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut merged_map = Map::new();
+
+    for path_str in file_paths {
+        let path = Path::new(path_str);
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let json_value: Value = serde_json::from_reader(reader)?;
+
+        if let Value::Object(obj) = json_value {
+            for (key, value) in obj {
+                merged_map.insert(key, value);
+            }
+        } else {
+            return Err("Each JSON file must contain a JSON object".into());
+        }
+    }
+
+    Ok(Value::Object(merged_map))
+}
+
+pub fn write_merged_json(output_path: &str, value: &Value) -> Result<(), Box<dyn std::error::Error>> {
+    let mut file = File::create(output_path)?;
+    let json_string = serde_json::to_string_pretty(value)?;
+    file.write_all(json_string.as_bytes())?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_merge_json_files() {
+        let json1 = r#"{"name": "Alice", "age": 30}"#;
+        let json2 = r#"{"city": "Berlin", "country": "Germany"}"#;
+
+        let file1 = NamedTempFile::new().unwrap();
+        let file2 = NamedTempFile::new().unwrap();
+
+        fs::write(file1.path(), json1).unwrap();
+        fs::write(file2.path(), json2).unwrap();
+
+        let paths = [
+            file1.path().to_str().unwrap(),
+            file2.path().to_str().unwrap(),
+        ];
+
+        let merged = merge_json_files(&paths).unwrap();
+        let obj = merged.as_object().unwrap();
+
+        assert_eq!(obj.get("name").unwrap(), "Alice");
+        assert_eq!(obj.get("age").unwrap(), 30);
+        assert_eq!(obj.get("city").unwrap(), "Berlin");
+        assert_eq!(obj.get("country").unwrap(), "Germany");
+    }
+
+    #[test]
+    fn test_write_merged_json() {
+        let mut map = HashMap::new();
+        map.insert("key".to_string(), Value::String("value".to_string()));
+        let value = Value::Object(map.into_iter().collect());
+
+        let output_file = NamedTempFile::new().unwrap();
+        let output_path = output_file.path().to_str().unwrap();
+
+        write_merged_json(output_path, &value).unwrap();
+
+        let content = fs::read_to_string(output_path).unwrap();
+        assert!(content.contains("\"key\": \"value\""));
+    }
+}

@@ -1295,3 +1295,207 @@ mod tests {
         assert_eq!(filtered.len(), 2);
     }
 }
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum DataError {
+    #[error("Invalid input data: {0}")]
+    InvalidInput(String),
+    #[error("Processing timeout")]
+    Timeout,
+    #[error("Serialization failed")]
+    SerializationFailed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataRecord {
+    pub id: u64,
+    pub timestamp: i64,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
+}
+
+impl DataRecord {
+    pub fn new(id: u64, timestamp: i64) -> Self {
+        Self {
+            id,
+            timestamp,
+            values: Vec::new(),
+            metadata: HashMap::new(),
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), DataError> {
+        if self.id == 0 {
+            return Err(DataError::InvalidInput("ID cannot be zero".to_string()));
+        }
+        
+        if self.timestamp < 0 {
+            return Err(DataError::InvalidInput("Timestamp cannot be negative".to_string()));
+        }
+
+        if self.values.is_empty() {
+            return Err(DataError::InvalidInput("Values cannot be empty".to_string()));
+        }
+
+        for value in &self.values {
+            if !value.is_finite() {
+                return Err(DataError::InvalidInput("Values must be finite numbers".to_string()));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn add_value(&mut self, value: f64) {
+        self.values.push(value);
+    }
+
+    pub fn add_metadata(&mut self, key: String, value: String) {
+        self.metadata.insert(key, value);
+    }
+
+    pub fn calculate_statistics(&self) -> Option<DataStatistics> {
+        if self.values.is_empty() {
+            return None;
+        }
+
+        let count = self.values.len();
+        let sum: f64 = self.values.iter().sum();
+        let mean = sum / count as f64;
+        
+        let variance: f64 = self.values
+            .iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>() / count as f64;
+        
+        let std_dev = variance.sqrt();
+
+        Some(DataStatistics {
+            count,
+            sum,
+            mean,
+            variance,
+            std_dev,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataStatistics {
+    pub count: usize,
+    pub sum: f64,
+    pub mean: f64,
+    pub variance: f64,
+    pub std_dev: f64,
+}
+
+pub struct DataProcessor {
+    records: Vec<DataRecord>,
+    processing_limit: Option<u32>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        Self {
+            records: Vec::new(),
+            processing_limit: None,
+        }
+    }
+
+    pub fn with_limit(limit: u32) -> Self {
+        Self {
+            records: Vec::new(),
+            processing_limit: Some(limit),
+        }
+    }
+
+    pub fn add_record(&mut self, record: DataRecord) -> Result<(), DataError> {
+        if let Some(limit) = self.processing_limit {
+            if self.records.len() >= limit as usize {
+                return Err(DataError::InvalidInput(
+                    format!("Exceeded processing limit of {}", limit)
+                ));
+            }
+        }
+
+        record.validate()?;
+        self.records.push(record);
+        Ok(())
+    }
+
+    pub fn process_records(&mut self) -> Result<ProcessingResult, DataError> {
+        if self.records.is_empty() {
+            return Err(DataError::InvalidInput("No records to process".to_string()));
+        }
+
+        let mut total_records = 0;
+        let mut successful = 0;
+        let mut failed = 0;
+        let mut statistics = Vec::new();
+
+        for record in &self.records {
+            total_records += 1;
+            
+            match record.validate() {
+                Ok(_) => {
+                    successful += 1;
+                    if let Some(stats) = record.calculate_statistics() {
+                        statistics.push(stats);
+                    }
+                }
+                Err(_) => {
+                    failed += 1;
+                }
+            }
+        }
+
+        let success_rate = if total_records > 0 {
+            successful as f64 / total_records as f64
+        } else {
+            0.0
+        };
+
+        Ok(ProcessingResult {
+            total_records,
+            successful,
+            failed,
+            success_rate,
+            statistics,
+        })
+    }
+
+    pub fn clear(&mut self) {
+        self.records.clear();
+    }
+
+    pub fn record_count(&self) -> usize {
+        self.records.len()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProcessingResult {
+    pub total_records: usize,
+    pub successful: usize,
+    pub failed: usize,
+    pub success_rate: f64,
+    pub statistics: Vec<DataStatistics>,
+}
+
+impl ProcessingResult {
+    pub fn is_successful(&self) -> bool {
+        self.failed == 0
+    }
+
+    pub fn average_mean(&self) -> Option<f64> {
+        if self.statistics.is_empty() {
+            return None;
+        }
+
+        let sum: f64 = self.statistics.iter().map(|s| s.mean).sum();
+        Some(sum / self.statistics.len() as f64)
+    }
+}

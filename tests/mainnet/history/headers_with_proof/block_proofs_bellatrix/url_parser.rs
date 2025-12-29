@@ -1,80 +1,77 @@
+
 use std::collections::HashMap;
-use std::str::FromStr;
 
 #[derive(Debug, PartialEq)]
-pub enum QueryParam {
-    String(String),
-    Integer(i64),
-    Float(f64),
-    Boolean(bool),
+pub struct ParsedUrl {
+    pub scheme: String,
+    pub host: String,
+    pub path: String,
+    pub query_params: HashMap<String, String>,
+    pub port: Option<u16>,
 }
 
-pub struct QueryParser {
-    params: HashMap<String, QueryParam>,
-}
+impl ParsedUrl {
+    pub fn parse(url_str: &str) -> Result<Self, String> {
+        let mut scheme = String::new();
+        let mut host = String::new();
+        let mut path = String::new();
+        let mut query_params = HashMap::new();
+        let mut port = None;
 
-impl QueryParser {
-    pub fn new() -> Self {
-        Self {
-            params: HashMap::new(),
-        }
-    }
-
-    pub fn parse(&mut self, query: &str) -> Result<(), String> {
-        if query.is_empty() {
-            return Ok(());
+        let parts: Vec<&str> = url_str.split("://").collect();
+        if parts.len() != 2 {
+            return Err("Invalid URL format".to_string());
         }
 
-        for pair in query.split('&') {
-            let parts: Vec<&str> = pair.splitn(2, '=').collect();
-            if parts.len() != 2 {
-                return Err(format!("Invalid query parameter format: {}", pair));
+        scheme = parts[0].to_string();
+        let rest = parts[1];
+
+        let host_path_query: Vec<&str> = rest.splitn(2, '/').collect();
+        let authority = host_path_query[0];
+        let path_query = if host_path_query.len() > 1 {
+            format!("/{}", host_path_query[1])
+        } else {
+            "/".to_string()
+        };
+
+        let host_port: Vec<&str> = authority.split(':').collect();
+        host = host_port[0].to_string();
+        if host_port.len() == 2 {
+            port = Some(host_port[1].parse().map_err(|_| "Invalid port number")?);
+        }
+
+        let path_query_parts: Vec<&str> = path_query.splitn(2, '?').collect();
+        path = path_query_parts[0].to_string();
+
+        if path_query_parts.len() == 2 {
+            let query_str = path_query_parts[1];
+            for pair in query_str.split('&') {
+                let kv: Vec<&str> = pair.splitn(2, '=').collect();
+                if kv.len() == 2 {
+                    query_params.insert(kv[0].to_string(), kv[1].to_string());
+                }
             }
-
-            let key = parts[0].to_string();
-            let value = parts[1];
-
-            let param = self.parse_value(value)?;
-            self.params.insert(key, param);
         }
 
-        Ok(())
+        Ok(ParsedUrl {
+            scheme,
+            host,
+            path,
+            query_params,
+            port,
+        })
     }
 
-    fn parse_value(&self, value: &str) -> Result<QueryParam, String> {
-        if let Ok(int_val) = i64::from_str(value) {
-            return Ok(QueryParam::Integer(int_val));
-        }
-
-        if let Ok(float_val) = f64::from_str(value) {
-            return Ok(QueryParam::Float(float_val));
-        }
-
-        match value.to_lowercase().as_str() {
-            "true" => Ok(QueryParam::Boolean(true)),
-            "false" => Ok(QueryParam::Boolean(false)),
-            _ => Ok(QueryParam::String(value.to_string())),
-        }
+    pub fn has_query_param(&self, key: &str) -> bool {
+        self.query_params.contains_key(key)
     }
 
-    pub fn get(&self, key: &str) -> Option<&QueryParam> {
-        self.params.get(key)
+    pub fn get_query_param(&self, key: &str) -> Option<&String> {
+        self.query_params.get(key)
     }
 
-    pub fn contains_key(&self, key: &str) -> bool {
-        self.params.contains_key(key)
-    }
-
-    pub fn len(&self) -> usize {
-        self.params.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.params.is_empty()
-    }
-
-    pub fn keys(&self) -> impl Iterator<Item = &String> {
-        self.params.keys()
+    pub fn is_secure(&self) -> bool {
+        self.scheme == "https"
     }
 }
 
@@ -83,49 +80,41 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_empty_query() {
-        let mut parser = QueryParser::new();
-        assert!(parser.parse("").is_ok());
-        assert!(parser.is_empty());
+    fn test_parse_basic_url() {
+        let url = ParsedUrl::parse("https://example.com/path").unwrap();
+        assert_eq!(url.scheme, "https");
+        assert_eq!(url.host, "example.com");
+        assert_eq!(url.path, "/path");
+        assert!(url.query_params.is_empty());
+        assert_eq!(url.port, None);
+        assert!(url.is_secure());
     }
 
     #[test]
-    fn test_parse_single_param() {
-        let mut parser = QueryParser::new();
-        parser.parse("name=john").unwrap();
-        assert_eq!(parser.len(), 1);
-        
-        if let Some(QueryParam::String(val)) = parser.get("name") {
-            assert_eq!(val, "john");
-        } else {
-            panic!("Expected String parameter");
-        }
+    fn test_parse_url_with_port() {
+        let url = ParsedUrl::parse("http://localhost:8080/api").unwrap();
+        assert_eq!(url.scheme, "http");
+        assert_eq!(url.host, "localhost");
+        assert_eq!(url.port, Some(8080));
+        assert_eq!(url.path, "/api");
+        assert!(!url.is_secure());
     }
 
     #[test]
-    fn test_parse_multiple_params() {
-        let mut parser = QueryParser::new();
-        parser.parse("id=42&active=true&score=98.5").unwrap();
-        assert_eq!(parser.len(), 3);
-
-        assert!(matches!(parser.get("id"), Some(QueryParam::Integer(42))));
-        assert!(matches!(parser.get("active"), Some(QueryParam::Boolean(true))));
-        assert!(matches!(parser.get("score"), Some(QueryParam::Float(98.5))));
+    fn test_parse_url_with_query() {
+        let url = ParsedUrl::parse("https://api.example.com/search?q=rust&limit=10").unwrap();
+        assert_eq!(url.scheme, "https");
+        assert_eq!(url.host, "api.example.com");
+        assert_eq!(url.path, "/search");
+        assert_eq!(url.query_params.len(), 2);
+        assert_eq!(url.get_query_param("q"), Some(&"rust".to_string()));
+        assert_eq!(url.get_query_param("limit"), Some(&"10".to_string()));
+        assert!(url.has_query_param("q"));
     }
 
     #[test]
-    fn test_parse_invalid_format() {
-        let mut parser = QueryParser::new();
-        let result = parser.parse("key_without_value");
+    fn test_parse_invalid_url() {
+        let result = ParsedUrl::parse("invalid-url");
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_contains_key() {
-        let mut parser = QueryParser::new();
-        parser.parse("page=1&limit=10").unwrap();
-        assert!(parser.contains_key("page"));
-        assert!(parser.contains_key("limit"));
-        assert!(!parser.contains_key("offset"));
     }
 }

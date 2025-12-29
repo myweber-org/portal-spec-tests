@@ -122,4 +122,30 @@ mod tests {
         let result = DataCleaner::normalize_strings(input);
         assert_eq!(result, vec!["hello", "world", "test"]);
     }
+}use csv::{ReaderBuilder, WriterBuilder};
+use std::error::Error;
+use std::fs::File;
+
+pub fn filter_csv(input_path: &str, output_path: &str, min_value: f64) -> Result<(), Box<dyn Error>> {
+    let file = File::open(input_path)?;
+    let mut rdr = ReaderBuilder::new().has_headers(true).from_reader(file);
+    let out_file = File::create(output_path)?;
+    let mut wtr = WriterBuilder::new().from_writer(out_file);
+
+    let headers = rdr.headers()?.clone();
+    wtr.write_record(&headers)?;
+
+    for result in rdr.records() {
+        let record = result?;
+        if let Some(value_str) = record.get(2) {
+            if let Ok(value) = value_str.parse::<f64>() {
+                if value >= min_value {
+                    wtr.write_record(&record)?;
+                }
+            }
+        }
+    }
+
+    wtr.flush()?;
+    Ok(())
 }

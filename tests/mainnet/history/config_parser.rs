@@ -1,127 +1,95 @@
-use std::fs;
 use std::collections::HashMap;
-use serde::{Deserialize, Serialize};
-use toml;
+use std::fs;
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct AppConfig {
-    pub server: ServerConfig,
-    pub database: DatabaseConfig,
-    pub logging: LoggingConfig,
+#[derive(Debug, PartialEq)]
+pub struct Config {
+    pub settings: HashMap<String, String>,
+    pub thresholds: HashMap<String, f64>,
+    pub enabled_features: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ServerConfig {
-    pub host: String,
-    pub port: u16,
-    pub timeout_seconds: u64,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct DatabaseConfig {
-    pub url: String,
-    pub max_connections: u32,
-    pub pool_timeout_seconds: u32,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct LoggingConfig {
-    pub level: String,
-    pub file_path: Option<String>,
-    pub rotation: String,
-}
-
-impl AppConfig {
-    pub fn from_file(path: &str) -> Result<Self, ConfigError> {
+impl Config {
+    pub fn from_file(path: &str) -> Result<Self, String> {
         let content = fs::read_to_string(path)
-            .map_err(|e| ConfigError::IoError(e.to_string()))?;
-        
-        toml::from_str(&content)
-            .map_err(|e| ConfigError::ParseError(e.to_string()))
-    }
+            .map_err(|e| format!("Failed to read config file: {}", e))?;
 
-    pub fn to_file(&self, path: &str) -> Result<(), ConfigError> {
-        let content = toml::to_string_pretty(self)
-            .map_err(|e| ConfigError::SerializeError(e.to_string()))?;
-        
-        fs::write(path, content)
-            .map_err(|e| ConfigError::IoError(e.to_string()))
-    }
+        let mut settings = HashMap::new();
+        let mut thresholds = HashMap::new();
+        let mut enabled_features = Vec::new();
 
-    pub fn validate(&self) -> Result<(), Vec<String>> {
-        let mut errors = Vec::new();
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
 
-        if self.server.port == 0 {
-            errors.push("Server port cannot be 0".to_string());
-        }
+            let parts: Vec<&str> = line.splitn(2, '=').map(|s| s.trim()).collect();
+            if parts.len() != 2 {
+                return Err(format!("Invalid config line: {}", line));
+            }
 
-        if self.server.timeout_seconds > 3600 {
-            errors.push("Server timeout cannot exceed 1 hour".to_string());
-        }
+            let key = parts[0];
+            let value = parts[1];
 
-        if self.database.max_connections == 0 {
-            errors.push("Database max connections cannot be 0".to_string());
-        }
-
-        if !["trace", "debug", "info", "warn", "error"].contains(&self.logging.level.as_str()) {
-            errors.push(format!("Invalid log level: {}", self.logging.level));
-        }
-
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(errors)
-        }
-    }
-
-    pub fn get_env_overrides(&self) -> HashMap<String, String> {
-        let mut env_vars = HashMap::new();
-        
-        env_vars.insert("APP_HOST".to_string(), self.server.host.clone());
-        env_vars.insert("APP_PORT".to_string(), self.server.port.to_string());
-        env_vars.insert("DB_URL".to_string(), self.database.url.clone());
-        env_vars.insert("LOG_LEVEL".to_string(), self.logging.level.clone());
-        
-        env_vars
-    }
-}
-
-#[derive(Debug)]
-pub enum ConfigError {
-    IoError(String),
-    ParseError(String),
-    SerializeError(String),
-    ValidationError(Vec<String>),
-}
-
-impl std::fmt::Display for ConfigError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ConfigError::IoError(msg) => write!(f, "IO error: {}", msg),
-            ConfigError::ParseError(msg) => write!(f, "Parse error: {}", msg),
-            ConfigError::SerializeError(msg) => write!(f, "Serialize error: {}", msg),
-            ConfigError::ValidationError(errors) => {
-                write!(f, "Validation errors: {}", errors.join(", "))
+            if key.starts_with("threshold.") {
+                let threshold_key = key.trim_start_matches("threshold.").to_string();
+                let threshold_value: f64 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid threshold value: {}", value))?;
+                thresholds.insert(threshold_key, threshold_value);
+            } else if key == "enabled_features" {
+                enabled_features = value.split(',').map(|s| s.trim().to_string()).collect();
+            } else {
+                settings.insert(key.to_string(), value.to_string());
             }
         }
+
+        Ok(Config {
+            settings,
+            thresholds,
+            enabled_features,
+        })
+    }
+
+    pub fn get_setting(&self, key: &str) -> Option<&String> {
+        self.settings.get(key)
+    }
+
+    pub fn get_threshold(&self, key: &str) -> Option<&f64> {
+        self.thresholds.get(key)
+    }
+
+    pub fn is_feature_enabled(&self, feature: &str) -> bool {
+        self.enabled_features.iter().any(|f| f == feature)
     }
 }
 
-impl std::error::Error for ConfigError {}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
 
-pub fn load_config_with_fallback(paths: &[&str]) -> Result<AppConfig, ConfigError> {
-    for path in paths {
-        match AppConfig::from_file(path) {
-            Ok(config) => {
-                if let Err(validation_errors) = config.validate() {
-                    return Err(ConfigError::ValidationError(validation_errors));
-                }
-                return Ok(config);
-            }
-            Err(e) if path == paths.last().unwrap() => return Err(e),
-            _ => continue,
-        }
+    #[test]
+    fn test_config_parsing() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        let config_content = r#"
+            server_host=localhost
+            server_port=8080
+            threshold.cpu_usage=75.5
+            threshold.memory_usage=90.0
+            enabled_features=logging,monitoring,caching
+        "#;
+        write!(temp_file, "{}", config_content).unwrap();
+
+        let config = Config::from_file(temp_file.path().to_str().unwrap()).unwrap();
+
+        assert_eq!(config.get_setting("server_host"), Some(&"localhost".to_string()));
+        assert_eq!(config.get_setting("server_port"), Some(&"8080".to_string()));
+        assert_eq!(config.get_threshold("cpu_usage"), Some(&75.5));
+        assert_eq!(config.get_threshold("memory_usage"), Some(&90.0));
+        assert!(config.is_feature_enabled("logging"));
+        assert!(config.is_feature_enabled("monitoring"));
+        assert!(!config.is_feature_enabled("debug"));
     }
-    
-    Err(ConfigError::IoError("No configuration files found".to_string()))
 }

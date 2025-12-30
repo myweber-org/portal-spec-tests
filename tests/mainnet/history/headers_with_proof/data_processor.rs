@@ -1,97 +1,80 @@
 
-use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 
 #[derive(Debug, Clone)]
-pub struct DataRecord {
-    pub id: u32,
-    pub timestamp: i64,
-    pub values: Vec<f64>,
-    pub metadata: HashMap<String, String>,
+pub struct ProcessingError {
+    message: String,
 }
 
-#[derive(Debug)]
-pub enum ValidationError {
-    InvalidId,
-    InvalidTimestamp,
-    EmptyValues,
-    ValueOutOfRange(f64),
-}
-
-impl fmt::Display for ValidationError {
+impl fmt::Display for ProcessingError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ValidationError::InvalidId => write!(f, "ID must be greater than zero"),
-            ValidationError::InvalidTimestamp => write!(f, "Timestamp cannot be negative"),
-            ValidationError::EmptyValues => write!(f, "Values vector cannot be empty"),
-            ValidationError::ValueOutOfRange(val) => write!(f, "Value {} is out of acceptable range", val),
+        write!(f, "Processing error: {}", self.message)
+    }
+}
+
+impl Error for ProcessingError {}
+
+impl ProcessingError {
+    pub fn new(msg: &str) -> Self {
+        ProcessingError {
+            message: msg.to_string(),
         }
     }
 }
 
-impl Error for ValidationError {}
+pub struct DataProcessor {
+    threshold: f64,
+    multiplier: f64,
+}
 
-impl DataRecord {
-    pub fn validate(&self) -> Result<(), ValidationError> {
-        if self.id == 0 {
-            return Err(ValidationError::InvalidId);
+impl DataProcessor {
+    pub fn new(threshold: f64, multiplier: f64) -> Result<Self, ProcessingError> {
+        if threshold <= 0.0 {
+            return Err(ProcessingError::new("Threshold must be positive"));
+        }
+        if multiplier <= 0.0 {
+            return Err(ProcessingError::new("Multiplier must be positive"));
         }
         
-        if self.timestamp < 0 {
-            return Err(ValidationError::InvalidTimestamp);
+        Ok(DataProcessor {
+            threshold,
+            multiplier,
+        })
+    }
+    
+    pub fn process_value(&self, value: f64) -> Result<f64, ProcessingError> {
+        if value < 0.0 {
+            return Err(ProcessingError::new("Value cannot be negative"));
         }
         
-        if self.values.is_empty() {
-            return Err(ValidationError::EmptyValues);
+        if value > self.threshold {
+            let adjusted = value * self.multiplier;
+            if adjusted.is_infinite() {
+                return Err(ProcessingError::new("Result exceeds numerical limits"));
+            }
+            Ok(adjusted)
+        } else {
+            Ok(value)
         }
+    }
+    
+    pub fn batch_process(&self, values: &[f64]) -> Result<Vec<f64>, ProcessingError> {
+        let mut results = Vec::with_capacity(values.len());
         
-        for &value in &self.values {
-            if !value.is_finite() || value < 0.0 || value > 1000.0 {
-                return Err(ValidationError::ValueOutOfRange(value));
+        for &value in values {
+            match self.process_value(value) {
+                Ok(result) => results.push(result),
+                Err(e) => return Err(e),
             }
         }
         
-        Ok(())
-    }
-    
-    pub fn normalize_values(&mut self) {
-        if let Some(max_value) = self.values.iter().copied().reduce(f64::max) {
-            if max_value > 0.0 {
-                for value in &mut self.values {
-                    *value /= max_value;
-                }
-            }
-        }
-    }
-    
-    pub fn calculate_statistics(&self) -> (f64, f64, f64) {
-        let count = self.values.len() as f64;
-        let sum: f64 = self.values.iter().sum();
-        let mean = sum / count;
-        
-        let variance: f64 = self.values.iter()
-            .map(|&x| (x - mean).powi(2))
-            .sum::<f64>() / count;
-        
-        let std_dev = variance.sqrt();
-        
-        (mean, variance, std_dev)
+        Ok(results)
     }
 }
 
-pub fn process_records(records: &mut [DataRecord]) -> Result<Vec<(u32, f64, f64, f64)>, ValidationError> {
-    let mut results = Vec::new();
-    
-    for record in records.iter_mut() {
-        record.validate()?;
-        record.normalize_values();
-        
-        let (mean, variance, std_dev) = record.calculate_statistics();
-        results.push((record.id, mean, variance, std_dev));
-    }
-    
-    Ok(results)
+pub fn validate_input_range(values: &[f64], min: f64, max: f64) -> bool {
+    values.iter().all(|&v| v >= min && v <= max)
 }
 
 #[cfg(test)]
@@ -99,57 +82,38 @@ mod tests {
     use super::*;
     
     #[test]
-    fn test_valid_record() {
-        let mut record = DataRecord {
-            id: 1,
-            timestamp: 1625097600,
-            values: vec![10.0, 20.0, 30.0],
-            metadata: HashMap::new(),
-        };
+    fn test_processor_creation() {
+        let processor = DataProcessor::new(10.0, 2.0);
+        assert!(processor.is_ok());
         
-        assert!(record.validate().is_ok());
-        
-        record.normalize_values();
-        assert_eq!(record.values, vec![0.3333333333333333, 0.6666666666666666, 1.0]);
-        
-        let (mean, variance, std_dev) = record.calculate_statistics();
-        assert!((mean - 0.6666666666666666).abs() < 1e-10);
-        assert!((variance - 0.1111111111111111).abs() < 1e-10);
-        assert!((std_dev - 0.3333333333333333).abs() < 1e-10);
+        let invalid = DataProcessor::new(0.0, 2.0);
+        assert!(invalid.is_err());
     }
     
     #[test]
-    fn test_invalid_id() {
-        let record = DataRecord {
-            id: 0,
-            timestamp: 1625097600,
-            values: vec![10.0],
-            metadata: HashMap::new(),
-        };
+    fn test_value_processing() {
+        let processor = DataProcessor::new(10.0, 2.0).unwrap();
         
-        assert!(matches!(record.validate(), Err(ValidationError::InvalidId)));
+        assert_eq!(processor.process_value(5.0).unwrap(), 5.0);
+        assert_eq!(processor.process_value(15.0).unwrap(), 30.0);
+        
+        let negative_result = processor.process_value(-5.0);
+        assert!(negative_result.is_err());
     }
     
     #[test]
-    fn test_process_multiple_records() {
-        let mut records = vec![
-            DataRecord {
-                id: 1,
-                timestamp: 1625097600,
-                values: vec![1.0, 2.0, 3.0],
-                metadata: HashMap::new(),
-            },
-            DataRecord {
-                id: 2,
-                timestamp: 1625184000,
-                values: vec![4.0, 5.0, 6.0],
-                metadata: HashMap::new(),
-            },
-        ];
+    fn test_batch_processing() {
+        let processor = DataProcessor::new(10.0, 2.0).unwrap();
+        let values = vec![5.0, 15.0, 8.0, 20.0];
         
-        let results = process_records(&mut records).unwrap();
-        assert_eq!(results.len(), 2);
-        assert_eq!(results[0].0, 1);
-        assert_eq!(results[1].0, 2);
+        let results = processor.batch_process(&values).unwrap();
+        assert_eq!(results, vec![5.0, 30.0, 8.0, 40.0]);
+    }
+    
+    #[test]
+    fn test_validation() {
+        let values = vec![1.0, 2.0, 3.0, 4.0];
+        assert!(validate_input_range(&values, 0.0, 5.0));
+        assert!(!validate_input_range(&values, 2.0, 5.0));
     }
 }

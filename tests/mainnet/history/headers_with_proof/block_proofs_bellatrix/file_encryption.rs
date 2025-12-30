@@ -150,4 +150,64 @@ pub fn decrypt_file(input_path: &str, key_path: &str, output_path: &str) -> Resu
     fs::write(output_path, decrypted_data)?;
     
     Ok(())
+}use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce
+};
+use std::fs;
+use std::io::{self, Write};
+
+const NONCE_SIZE: usize = 12;
+
+pub fn encrypt_file(input_path: &str, output_path: &str, password: &str) -> io::Result<()> {
+    let data = fs::read(input_path)?;
+    
+    let key = derive_key(password);
+    let cipher = Aes256Gcm::new(&key);
+    
+    let mut nonce_bytes = [0u8; NONCE_SIZE];
+    OsRng.fill_bytes(&mut nonce_bytes);
+    let nonce = Nonce::from_slice(&nonce_bytes);
+    
+    let ciphertext = cipher.encrypt(nonce, data.as_ref())
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    
+    let mut output = fs::File::create(output_path)?;
+    output.write_all(&nonce_bytes)?;
+    output.write_all(&ciphertext)?;
+    
+    Ok(())
+}
+
+pub fn decrypt_file(input_path: &str, output_path: &str, password: &str) -> io::Result<()> {
+    let encrypted_data = fs::read(input_path)?;
+    
+    if encrypted_data.len() < NONCE_SIZE {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "File too short"));
+    }
+    
+    let (nonce_bytes, ciphertext) = encrypted_data.split_at(NONCE_SIZE);
+    let nonce = Nonce::from_slice(nonce_bytes);
+    
+    let key = derive_key(password);
+    let cipher = Aes256Gcm::new(&key);
+    
+    let plaintext = cipher.decrypt(nonce, ciphertext)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    
+    fs::write(output_path, plaintext)?;
+    Ok(())
+}
+
+fn derive_key(password: &str) -> Key<Aes256Gcm> {
+    let mut key = [0u8; 32];
+    let password_bytes = password.as_bytes();
+    
+    for i in 0..32 {
+        key[i] = password_bytes[i % password_bytes.len()]
+            .wrapping_add((i * 7) as u8)
+            .rotate_left(3);
+    }
+    
+    *Key::<Aes256Gcm>::from_slice(&key)
 }

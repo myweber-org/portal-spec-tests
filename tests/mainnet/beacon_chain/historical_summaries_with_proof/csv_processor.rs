@@ -68,4 +68,118 @@ pub fn execute_processing(
     processor.validate()?;
     let count = processor.process()?;
     Ok(format!("Processed {} matching records", count))
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+pub struct CsvProcessor {
+    delimiter: char,
+    has_header: bool,
+}
+
+impl CsvProcessor {
+    pub fn new(delimiter: char, has_header: bool) -> Self {
+        CsvProcessor {
+            delimiter,
+            has_header,
+        }
+    }
+
+    pub fn validate_file<P: AsRef<Path>>(&self, file_path: P) -> Result<usize, Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        let mut line_count = 0;
+        let mut column_count: Option<usize> = None;
+
+        for (index, line) in reader.lines().enumerate() {
+            let line = line?;
+            let columns: Vec<&str> = line.split(self.delimiter).collect();
+            
+            if index == 0 && self.has_header {
+                continue;
+            }
+
+            if let Some(expected) = column_count {
+                if columns.len() != expected {
+                    return Err(format!("Line {} has {} columns, expected {}", 
+                        index + 1, columns.len(), expected).into());
+                }
+            } else {
+                column_count = Some(columns.len());
+            }
+
+            for (col_idx, value) in columns.iter().enumerate() {
+                if value.trim().is_empty() {
+                    return Err(format!("Empty value at line {}, column {}", 
+                        index + 1, col_idx + 1).into());
+                }
+            }
+
+            line_count += 1;
+        }
+
+        if line_count == 0 {
+            return Err("File contains no data rows".into());
+        }
+
+        Ok(line_count)
+    }
+
+    pub fn extract_column<P: AsRef<Path>>(&self, file_path: P, column_index: usize) -> Result<Vec<String>, Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        let mut result = Vec::new();
+
+        for (index, line) in reader.lines().enumerate() {
+            let line = line?;
+            
+            if index == 0 && self.has_header {
+                continue;
+            }
+
+            let columns: Vec<&str> = line.split(self.delimiter).collect();
+            
+            if column_index >= columns.len() {
+                return Err(format!("Column index {} out of bounds on line {}", 
+                    column_index, index + 1).into());
+            }
+
+            result.push(columns[column_index].trim().to_string());
+        }
+
+        Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_csv_validation() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,city").unwrap();
+        writeln!(temp_file, "Alice,30,New York").unwrap();
+        writeln!(temp_file, "Bob,25,London").unwrap();
+        
+        let processor = CsvProcessor::new(',', true);
+        let result = processor.validate_file(temp_file.path());
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 2);
+    }
+
+    #[test]
+    fn test_column_extraction() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,city").unwrap();
+        writeln!(temp_file, "Alice,30,New York").unwrap();
+        writeln!(temp_file, "Bob,25,London").unwrap();
+        
+        let processor = CsvProcessor::new(',', true);
+        let column_data = processor.extract_column(temp_file.path(), 0).unwrap();
+        assert_eq!(column_data, vec!["Alice", "Bob"]);
+    }
 }

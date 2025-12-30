@@ -327,4 +327,102 @@ mod tests {
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Duplicate key"));
     }
+}use std::collections::HashMap;
+use std::fs::File;
+use std::io::BufReader;
+use std::path::Path;
+
+use serde_json::{Map, Value};
+
+pub fn merge_json_files(file_paths: &[impl AsRef<Path>]) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut merged_map = Map::new();
+
+    for path in file_paths {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let json_value: Value = serde_json::from_reader(reader)?;
+
+        if let Value::Object(map) = json_value {
+            for (key, value) in map {
+                merged_map.insert(key, value);
+            }
+        } else {
+            return Err("Each JSON file must contain an object at the root".into());
+        }
+    }
+
+    Ok(Value::Object(merged_map))
+}
+
+pub fn merge_json_with_strategy(
+    file_paths: &[impl AsRef<Path>],
+    conflict_strategy: fn(&str, &Value, &Value) -> Value,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut accumulator: HashMap<String, Value> = HashMap::new();
+
+    for path in file_paths {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let json_value: Value = serde_json::from_reader(reader)?;
+
+        if let Value::Object(map) = json_value {
+            for (key, value) in map {
+                match accumulator.get_mut(&key) {
+                    Some(existing_value) => {
+                        let resolved_value = conflict_strategy(&key, existing_value, &value);
+                        accumulator.insert(key, resolved_value);
+                    }
+                    None => {
+                        accumulator.insert(key, value);
+                    }
+                }
+            }
+        } else {
+            return Err("Each JSON file must contain an object at the root".into());
+        }
+    }
+
+    let final_map: Map<String, Value> = accumulator.into_iter().collect();
+    Ok(Value::Object(final_map))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    fn create_temp_json(content: &str) -> NamedTempFile {
+        let mut file = NamedTempFile::new().unwrap();
+        write!(file, "{}", content).unwrap();
+        file
+    }
+
+    #[test]
+    fn test_basic_merge() {
+        let file1 = create_temp_json(r#"{"a": 1, "b": 2}"#);
+        let file2 = create_temp_json(r#"{"c": 3, "d": 4}"#);
+
+        let result = merge_json_files(&[file1.path(), file2.path()]).unwrap();
+        let expected = json!({
+            "a": 1,
+            "b": 2,
+            "c": 3,
+            "d": 4
+        });
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_merge_with_conflict_strategy() {
+        let file1 = create_temp_json(r#"{"common": "first"}"#);
+        let file2 = create_temp_json(r#"{"common": "second"}"#);
+
+        let strategy = |_key: &str, _v1: &Value, v2: &Value| v2.clone();
+        let result = merge_json_with_strategy(&[file1.path(), file2.path()], strategy).unwrap();
+
+        assert_eq!(result["common"], "second");
+    }
 }

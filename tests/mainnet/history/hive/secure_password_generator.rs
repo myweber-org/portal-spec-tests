@@ -11,7 +11,7 @@ pub struct PasswordGenerator {
 
 impl PasswordGenerator {
     pub fn new(length: usize) -> Self {
-        PasswordGenerator {
+        Self {
             length,
             use_lowercase: true,
             use_uppercase: true,
@@ -45,10 +45,6 @@ impl PasswordGenerator {
             return Err("Password length must be greater than zero");
         }
 
-        if !self.use_lowercase && !self.use_uppercase && !self.use_digits && !self.use_special {
-            return Err("At least one character set must be enabled");
-        }
-
         let mut character_pool = Vec::new();
         let mut required_chars = HashSet::new();
 
@@ -68,42 +64,44 @@ impl PasswordGenerator {
         }
 
         if self.use_special {
-            let special_chars = b"!@#$%^&*()_+-=[]{}|;:,.<>?";
-            character_pool.extend_from_slice(special_chars);
-            required_chars.insert(self.random_char_from_slice(special_chars));
+            character_pool.extend(b'!'..=b'/');
+            character_pool.extend(b':'..=b'@');
+            character_pool.extend(b'['..=b'`');
+            character_pool.extend(b'{'..=b'~');
+            required_chars.insert(self.random_special_char());
+        }
+
+        if character_pool.is_empty() {
+            return Err("At least one character set must be enabled");
         }
 
         let mut rng = rand::thread_rng();
-        let mut password_chars: Vec<char> = Vec::with_capacity(self.length);
-
-        for required_char in required_chars {
-            password_chars.push(required_char as char);
-        }
+        let mut password_chars: Vec<char> = required_chars.into_iter().collect();
 
         while password_chars.len() < self.length {
-            let random_index = rng.gen_range(0..character_pool.len());
-            password_chars.push(character_pool[random_index] as char);
+            let idx = rng.gen_range(0..character_pool.len());
+            password_chars.push(character_pool[idx] as char);
         }
 
-        for i in (1..password_chars.len()).rev() {
-            let j = rng.gen_range(0..=i);
-            password_chars.swap(i, j);
-        }
-
+        password_chars.shuffle(&mut rng);
         Ok(password_chars.into_iter().collect())
     }
 
-    fn random_char_from_range<R: rand::distributions::uniform::SampleRange<u8>>(
-        &self,
-        range: R,
-    ) -> u8 {
+    fn random_char_from_range<R: rand::distributions::uniform::SampleRange<u8>>(&self, range: R) -> char {
         let mut rng = rand::thread_rng();
-        rng.gen_range(range)
+        rng.gen_range(range) as char
     }
 
-    fn random_char_from_slice(&self, slice: &[u8]) -> u8 {
+    fn random_special_char(&self) -> char {
+        let special_ranges = [
+            b'!'..=b'/',
+            b':'..=b'@',
+            b'['..=b'`',
+            b'{'..=b'~',
+        ];
         let mut rng = rand::thread_rng();
-        slice[rng.gen_range(0..slice.len())]
+        let range_idx = rng.gen_range(0..special_ranges.len());
+        rng.gen_range(special_ranges[range_idx].clone()) as char
     }
 }
 
@@ -124,8 +122,7 @@ mod tests {
             .uppercase(false)
             .special(false);
         let password = generator.generate().unwrap();
-        
-        assert!(password.chars().all(|c| c.is_lowercase() || c.is_digit(10)));
+        assert!(password.chars().all(|c| c.is_lowercase() || c.is_digit()));
     }
 
     #[test]
@@ -135,7 +132,6 @@ mod tests {
             .uppercase(false)
             .digits(false)
             .special(false);
-        
         assert!(generator.generate().is_err());
     }
 }

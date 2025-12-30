@@ -247,3 +247,84 @@ mod tests {
         Ok(())
     }
 }
+use serde_json::{Map, Value};
+use std::collections::HashSet;
+use std::fs;
+use std::path::Path;
+
+pub fn merge_json_files<P: AsRef<Path>>(paths: &[P]) -> Result<Value, String> {
+    if paths.is_empty() {
+        return Err("No input files provided".to_string());
+    }
+
+    let mut merged = Map::new();
+    let mut processed_keys = HashSet::new();
+
+    for path in paths {
+        let content = fs::read_to_string(path).map_err(|e| {
+            format!("Failed to read {}: {}", path.as_ref().display(), e)
+        })?;
+
+        let json: Value = serde_json::from_str(&content).map_err(|e| {
+            format!("Invalid JSON in {}: {}", path.as_ref().display(), e)
+        })?;
+
+        if let Value::Object(obj) = json {
+            for (key, value) in obj {
+                if processed_keys.contains(&key) {
+                    return Err(format!("Duplicate key '{}' found in multiple files", key));
+                }
+                merged.insert(key.clone(), value);
+                processed_keys.insert(key);
+            }
+        } else {
+            return Err("Top-level JSON must be an object".to_string());
+        }
+    }
+
+    Ok(Value::Object(merged))
+}
+
+pub fn write_merged_json<P: AsRef<Path>>(output_path: P, value: &Value) -> Result<(), String> {
+    let json_str = serde_json::to_string_pretty(value)
+        .map_err(|e| format!("Failed to serialize JSON: {}", e))?;
+
+    fs::write(output_path, json_str)
+        .map_err(|e| format!("Failed to write output file: {}", e))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_merge_json_files() {
+        let file1 = NamedTempFile::new().unwrap();
+        let file2 = NamedTempFile::new().unwrap();
+
+        fs::write(&file1, r#"{"a": 1, "b": "test"}"#).unwrap();
+        fs::write(&file2, r#"{"c": true, "d": [1,2,3]}"#).unwrap();
+
+        let result = merge_json_files(&[file1.path(), file2.path()]).unwrap();
+        let obj = result.as_object().unwrap();
+
+        assert_eq!(obj.len(), 4);
+        assert_eq!(obj["a"], 1);
+        assert_eq!(obj["b"], "test");
+        assert_eq!(obj["c"], true);
+    }
+
+    #[test]
+    fn test_duplicate_key_error() {
+        let file1 = NamedTempFile::new().unwrap();
+        let file2 = NamedTempFile::new().unwrap();
+
+        fs::write(&file1, r#"{"key": "value1"}"#).unwrap();
+        fs::write(&file2, r#"{"key": "value2"}"#).unwrap();
+
+        let result = merge_json_files(&[file1.path(), file2.path()]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Duplicate key"));
+    }
+}

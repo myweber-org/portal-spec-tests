@@ -274,3 +274,127 @@ mod tests {
         assert_eq!(processor.count_records(), 0);
     }
 }
+use std::collections::HashMap;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub tags: Vec<String>,
+}
+
+impl DataRecord {
+    pub fn new(id: u32, name: String, value: f64) -> Self {
+        Self {
+            id,
+            name,
+            value,
+            tags: Vec::new(),
+        }
+    }
+
+    pub fn is_valid(&self) -> bool {
+        !self.name.is_empty() && self.value >= 0.0
+    }
+
+    pub fn add_tag(&mut self, tag: String) {
+        if !self.tags.contains(&tag) {
+            self.tags.push(tag);
+        }
+    }
+}
+
+pub struct DataProcessor {
+    records: HashMap<u32, DataRecord>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        Self {
+            records: HashMap::new(),
+        }
+    }
+
+    pub fn add_record(&mut self, record: DataRecord) -> Result<(), String> {
+        if !record.is_valid() {
+            return Err("Invalid record data".to_string());
+        }
+
+        if self.records.contains_key(&record.id) {
+            return Err("Record ID already exists".to_string());
+        }
+
+        self.records.insert(record.id, record);
+        Ok(())
+    }
+
+    pub fn get_record(&self, id: u32) -> Option<&DataRecord> {
+        self.records.get(&id)
+    }
+
+    pub fn calculate_average(&self) -> f64 {
+        if self.records.is_empty() {
+            return 0.0;
+        }
+
+        let sum: f64 = self.records.values().map(|r| r.value).sum();
+        sum / self.records.len() as f64
+    }
+
+    pub fn filter_by_threshold(&self, threshold: f64) -> Vec<&DataRecord> {
+        self.records
+            .values()
+            .filter(|r| r.value >= threshold)
+            .collect()
+    }
+
+    pub fn process_all(&mut self) -> HashMap<String, f64> {
+        let mut results = HashMap::new();
+        
+        for record in self.records.values_mut() {
+            if record.value > 100.0 {
+                record.add_tag("high_value".to_string());
+            }
+            
+            if record.name.contains("test") {
+                record.add_tag("test_data".to_string());
+            }
+            
+            let processed_value = record.value * 1.1;
+            results.insert(record.name.clone(), processed_value);
+        }
+        
+        results
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_record_validation() {
+        let valid_record = DataRecord::new(1, "test".to_string(), 50.0);
+        assert!(valid_record.is_valid());
+
+        let invalid_record = DataRecord::new(2, "".to_string(), -10.0);
+        assert!(!invalid_record.is_valid());
+    }
+
+    #[test]
+    fn test_data_processor() {
+        let mut processor = DataProcessor::new();
+        
+        let record1 = DataRecord::new(1, "data1".to_string(), 75.0);
+        let record2 = DataRecord::new(2, "data2".to_string(), 125.0);
+        
+        assert!(processor.add_record(record1).is_ok());
+        assert!(processor.add_record(record2).is_ok());
+        
+        assert_eq!(processor.calculate_average(), 100.0);
+        
+        let high_value_records = processor.filter_by_threshold(100.0);
+        assert_eq!(high_value_records.len(), 1);
+    }
+}

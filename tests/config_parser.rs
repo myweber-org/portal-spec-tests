@@ -123,4 +123,120 @@ mod tests {
         assert!(toml_str.contains("server_port = 8080"));
         assert!(toml_str.contains("log_level = \"info\""));
     }
+}use std::collections::HashMap;
+use std::env;
+use std::fs;
+
+pub struct ConfigParser {
+    values: HashMap<String, String>,
+}
+
+impl ConfigParser {
+    pub fn new() -> Self {
+        ConfigParser {
+            values: HashMap::new(),
+        }
+    }
+
+    pub fn load_from_file(&mut self, path: &str) -> Result<(), String> {
+        let content = fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read config file: {}", e))?;
+
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+
+            if let Some((key, value)) = trimmed.split_once('=') {
+                let key = key.trim().to_string();
+                let value = self.resolve_value(value.trim());
+                self.values.insert(key, value);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn resolve_value(&self, raw_value: &str) -> String {
+        if raw_value.starts_with('$') {
+            let var_name = &raw_value[1..];
+            env::var(var_name).unwrap_or_else(|_| raw_value.to_string())
+        } else {
+            raw_value.to_string()
+        }
+    }
+
+    pub fn get(&self, key: &str) -> Option<&String> {
+        self.values.get(key)
+    }
+
+    pub fn get_or_default(&self, key: &str, default: &str) -> String {
+        self.values
+            .get(key)
+            .map(|s| s.as_str())
+            .unwrap_or(default)
+            .to_string()
+    }
+
+    pub fn set(&mut self, key: &str, value: &str) {
+        self.values.insert(key.to_string(), value.to_string());
+    }
+
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.values.contains_key(key)
+    }
+
+    pub fn keys(&self) -> impl Iterator<Item = &String> {
+        self.values.keys()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_basic_parsing() {
+        let mut config = ConfigParser::new();
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "HOST=localhost").unwrap();
+        writeln!(temp_file, "PORT=8080").unwrap();
+        writeln!(temp_file, "# This is a comment").unwrap();
+        writeln!(temp_file, "").unwrap();
+        writeln!(temp_file, "TIMEOUT=30").unwrap();
+
+        config.load_from_file(temp_file.path().to_str().unwrap()).unwrap();
+
+        assert_eq!(config.get("HOST"), Some(&"localhost".to_string()));
+        assert_eq!(config.get("PORT"), Some(&"8080".to_string()));
+        assert_eq!(config.get("TIMEOUT"), Some(&"30".to_string()));
+        assert_eq!(config.get("MISSING"), None);
+    }
+
+    #[test]
+    fn test_environment_substitution() {
+        env::set_var("APP_SECRET", "my_secret_key");
+        
+        let mut config = ConfigParser::new();
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "SECRET=$APP_SECRET").unwrap();
+        writeln!(temp_file, "NORMAL=value").unwrap();
+
+        config.load_from_file(temp_file.path().to_str().unwrap()).unwrap();
+
+        assert_eq!(config.get("SECRET"), Some(&"my_secret_key".to_string()));
+        assert_eq!(config.get("NORMAL"), Some(&"value".to_string()));
+    }
+
+    #[test]
+    fn test_get_or_default() {
+        let mut config = ConfigParser::new();
+        config.set("EXISTING", "actual_value");
+
+        assert_eq!(config.get_or_default("EXISTING", "default"), "actual_value");
+        assert_eq!(config.get_or_default("MISSING", "default_value"), "default_value");
+    }
 }

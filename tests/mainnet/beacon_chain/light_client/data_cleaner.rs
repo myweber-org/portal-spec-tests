@@ -122,4 +122,98 @@ mod tests {
         let result = clean_and_sort_data(&input);
         assert_eq!(result, vec!["apple", "banana", "zebra"]);
     }
+}use std::collections::HashSet;
+use std::hash::Hash;
+
+pub struct DataCleaner<T> {
+    seen: HashSet<T>,
+    normalized: Vec<T>,
+}
+
+impl<T> DataCleaner<T>
+where
+    T: Eq + Hash + Clone,
+{
+    pub fn new() -> Self {
+        DataCleaner {
+            seen: HashSet::new(),
+            normalized: Vec::new(),
+        }
+    }
+
+    pub fn add(&mut self, item: T) -> bool {
+        if self.seen.insert(item.clone()) {
+            self.normalized.push(item);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn normalize(&mut self) -> &[T] {
+        self.normalized.sort();
+        &self.normalized
+    }
+
+    pub fn deduplicate(&mut self) -> Vec<T> {
+        let mut result = Vec::new();
+        std::mem::swap(&mut result, &mut self.normalized);
+        self.seen.clear();
+        result
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.normalized.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.normalized.len()
+    }
+}
+
+impl<T> Default for DataCleaner<T>
+where
+    T: Eq + Hash + Clone,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_deduplication() {
+        let mut cleaner = DataCleaner::new();
+        assert!(cleaner.add("apple"));
+        assert!(cleaner.add("banana"));
+        assert!(!cleaner.add("apple"));
+        assert_eq!(cleaner.len(), 2);
+    }
+
+    #[test]
+    fn test_normalization() {
+        let mut cleaner = DataCleaner::new();
+        cleaner.add("zebra");
+        cleaner.add("apple");
+        cleaner.add("banana");
+        
+        let normalized = cleaner.normalize();
+        assert_eq!(normalized, &["apple", "banana", "zebra"]);
+    }
+
+    #[test]
+    fn test_deduplicate_output() {
+        let mut cleaner = DataCleaner::new();
+        cleaner.add("duplicate");
+        cleaner.add("duplicate");
+        cleaner.add("unique");
+        
+        let result = cleaner.deduplicate();
+        assert_eq!(result.len(), 2);
+        assert!(result.contains(&"duplicate"));
+        assert!(result.contains(&"unique"));
+    }
 }

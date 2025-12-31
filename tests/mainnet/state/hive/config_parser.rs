@@ -311,4 +311,186 @@ mod tests {
         let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
         assert!(config.is_empty());
     }
+}use serde::{Deserialize, Serialize};
+use std::env;
+use std::fs;
+use std::path::Path;
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DatabaseConfig {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: String,
+    pub database_name: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ServerConfig {
+    pub address: String,
+    pub port: u16,
+    pub max_connections: u32,
+    pub enable_ssl: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AppConfig {
+    pub database: DatabaseConfig,
+    pub server: ServerConfig,
+    pub log_level: String,
+    pub cache_ttl: u64,
+}
+
+impl AppConfig {
+    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
+        let config_str = fs::read_to_string(path)?;
+        let mut config: AppConfig = serde_yaml::from_str(&config_str)?;
+        
+        config.apply_environment_overrides();
+        config.validate()?;
+        
+        Ok(config)
+    }
+    
+    fn apply_environment_overrides(&mut self) {
+        if let Ok(host) = env::var("DB_HOST") {
+            self.database.host = host;
+        }
+        
+        if let Ok(port) = env::var("DB_PORT") {
+            if let Ok(port_num) = port.parse::<u16>() {
+                self.database.port = port_num;
+            }
+        }
+        
+        if let Ok(log_level) = env::var("LOG_LEVEL") {
+            self.log_level = log_level;
+        }
+        
+        if let Ok(cache_ttl) = env::var("CACHE_TTL") {
+            if let Ok(ttl) = cache_ttl.parse::<u64>() {
+                self.cache_ttl = ttl;
+            }
+        }
+    }
+    
+    fn validate(&self) -> Result<(), Box<dyn std::error::Error>> {
+        if self.database.port == 0 {
+            return Err("Database port cannot be zero".into());
+        }
+        
+        if self.server.port == 0 {
+            return Err("Server port cannot be zero".into());
+        }
+        
+        if self.server.max_connections == 0 {
+            return Err("Max connections must be greater than zero".into());
+        }
+        
+        if self.cache_ttl > 86400 {
+            return Err("Cache TTL cannot exceed 24 hours".into());
+        }
+        
+        Ok(())
+    }
+    
+    pub fn database_url(&self) -> String {
+        format!(
+            "postgres://{}:{}@{}:{}/{}",
+            self.database.username,
+            self.database.password,
+            self.database.host,
+            self.database.port,
+            self.database.database_name
+        )
+    }
+    
+    pub fn server_address(&self) -> String {
+        format!("{}:{}", self.server.address, self.server.port)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+    
+    #[test]
+    fn test_config_loading() {
+        let config_yaml = r#"
+database:
+  host: localhost
+  port: 5432
+  username: postgres
+  password: secret
+  database_name: mydb
+server:
+  address: 0.0.0.0
+  port: 8080
+  max_connections: 100
+  enable_ssl: false
+log_level: info
+cache_ttl: 3600
+"#;
+        
+        let temp_file = NamedTempFile::new().unwrap();
+        fs::write(temp_file.path(), config_yaml).unwrap();
+        
+        let config = AppConfig::from_file(temp_file.path()).unwrap();
+        
+        assert_eq!(config.database.host, "localhost");
+        assert_eq!(config.database.port, 5432);
+        assert_eq!(config.server.port, 8080);
+        assert_eq!(config.log_level, "info");
+        assert_eq!(config.cache_ttl, 3600);
+    }
+    
+    #[test]
+    fn test_database_url() {
+        let config = AppConfig {
+            database: DatabaseConfig {
+                host: "localhost".to_string(),
+                port: 5432,
+                username: "user".to_string(),
+                password: "pass".to_string(),
+                database_name: "db".to_string(),
+            },
+            server: ServerConfig {
+                address: "0.0.0.0".to_string(),
+                port: 8080,
+                max_connections: 100,
+                enable_ssl: false,
+            },
+            log_level: "info".to_string(),
+            cache_ttl: 3600,
+        };
+        
+        assert_eq!(
+            config.database_url(),
+            "postgres://user:pass@localhost:5432/db"
+        );
+    }
+    
+    #[test]
+    fn test_validation() {
+        let invalid_config = AppConfig {
+            database: DatabaseConfig {
+                host: "localhost".to_string(),
+                port: 0,
+                username: "user".to_string(),
+                password: "pass".to_string(),
+                database_name: "db".to_string(),
+            },
+            server: ServerConfig {
+                address: "0.0.0.0".to_string(),
+                port: 8080,
+                max_connections: 100,
+                enable_ssl: false,
+            },
+            log_level: "info".to_string(),
+            cache_ttl: 3600,
+        };
+        
+        assert!(invalid_config.validate().is_err());
+    }
 }

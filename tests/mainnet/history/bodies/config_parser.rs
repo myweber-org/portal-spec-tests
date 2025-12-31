@@ -1,54 +1,46 @@
 use std::collections::HashMap;
 use std::env;
-use std::fs;
+use regex::Regex;
 
-pub struct Config {
+pub struct ConfigParser {
     values: HashMap<String, String>,
 }
 
-impl Config {
-    pub fn from_file(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
-        let content = fs::read_to_string(path)?;
-        let mut values = HashMap::new();
+impl ConfigParser {
+    pub fn new() -> Self {
+        ConfigParser {
+            values: HashMap::new(),
+        }
+    }
 
-        for line in content.lines() {
-            let trimmed = line.trim();
-            if trimmed.is_empty() || trimmed.starts_with('#') {
+    pub fn load_from_str(&mut self, content: &str) -> Result<(), String> {
+        let re = Regex::new(r"^\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*(.*?)\s*$").unwrap();
+        let var_re = Regex::new(r"\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}").unwrap();
+
+        for (line_num, line) in content.lines().enumerate() {
+            if line.trim().is_empty() || line.trim().starts_with('#') {
                 continue;
             }
 
-            if let Some((key, value)) = trimmed.split_once('=') {
-                let key = key.trim().to_string();
-                let processed_value = Self::process_value(value.trim());
-                values.insert(key, processed_value);
-            }
-        }
+            if let Some(caps) = re.captures(line) {
+                let key = caps[1].to_string();
+                let mut value = caps[2].to_string();
 
-        Ok(Config { values })
-    }
-
-    fn process_value(raw: &str) -> String {
-        let mut result = String::new();
-        let mut chars = raw.chars().peekable();
-
-        while let Some(ch) = chars.next() {
-            if ch == '$' && chars.peek() == Some(&'{') {
-                chars.next(); // Skip '{'
-                let mut var_name = String::new();
-                while let Some(ch) = chars.next() {
-                    if ch == '}' {
-                        break;
+                // Replace environment variables
+                for var_caps in var_re.captures_iter(&value) {
+                    let var_name = &var_caps[1];
+                    if let Ok(var_value) = env::var(var_name) {
+                        value = value.replace(&var_caps[0], &var_value);
                     }
-                    var_name.push(ch);
                 }
-                let env_value = env::var(&var_name).unwrap_or_default();
-                result.push_str(&env_value);
+
+                self.values.insert(key, value);
             } else {
-                result.push(ch);
+                return Err(format!("Invalid syntax at line {}", line_num + 1));
             }
         }
 
-        result
+        Ok(())
     }
 
     pub fn get(&self, key: &str) -> Option<&String> {
@@ -58,45 +50,60 @@ impl Config {
     pub fn get_or_default(&self, key: &str, default: &str) -> String {
         self.values.get(key).cloned().unwrap_or(default.to_string())
     }
+
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.values.contains_key(key)
+    }
+
+    pub fn keys(&self) -> impl Iterator<Item = &String> {
+        self.values.keys()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
 
     #[test]
     fn test_basic_parsing() {
-        let mut file = NamedTempFile::new().unwrap();
-        writeln!(file, "HOST=localhost").unwrap();
-        writeln!(file, "PORT=8080").unwrap();
-        writeln!(file, "# This is a comment").unwrap();
-        writeln!(file, "").unwrap();
-        writeln!(file, "TIMEOUT=30").unwrap();
+        let mut parser = ConfigParser::new();
+        let config = r#"
+            database_host = localhost
+            database_port = 5432
+            # This is a comment
+            api_key = secret_value
+        "#;
 
-        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
-        assert_eq!(config.get("HOST"), Some(&"localhost".to_string()));
-        assert_eq!(config.get("PORT"), Some(&"8080".to_string()));
-        assert_eq!(config.get("TIMEOUT"), Some(&"30".to_string()));
-        assert_eq!(config.get("MISSING"), None);
+        assert!(parser.load_from_str(config).is_ok());
+        assert_eq!(parser.get("database_host"), Some(&"localhost".to_string()));
+        assert_eq!(parser.get("database_port"), Some(&"5432".to_string()));
+        assert_eq!(parser.get("api_key"), Some(&"secret_value".to_string()));
+        assert_eq!(parser.get("nonexistent"), None);
     }
 
     #[test]
-    fn test_env_substitution() {
-        env::set_var("DB_PASSWORD", "secret123");
+    fn test_env_var_substitution() {
+        env::set_var("APP_MODE", "production");
         
-        let mut file = NamedTempFile::new().unwrap();
-        writeln!(file, "DB_HOST=localhost").unwrap();
-        writeln!(file, "DB_PASS=${{DB_PASSWORD}}").unwrap();
-        writeln!(file, "CONNECTION=postgres://user:${{DB_PASSWORD}}@localhost").unwrap();
+        let mut parser = ConfigParser::new();
+        let config = r#"
+            mode = ${APP_MODE}
+            path = /home/${USER}/data
+        "#;
 
-        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
-        assert_eq!(config.get("DB_HOST"), Some(&"localhost".to_string()));
-        assert_eq!(config.get("DB_PASS"), Some(&"secret123".to_string()));
-        assert_eq!(
-            config.get("CONNECTION"), 
-            Some(&"postgres://user:secret123@localhost".to_string())
-        );
+        assert!(parser.load_from_str(config).is_ok());
+        assert_eq!(parser.get("mode"), Some(&"production".to_string()));
+    }
+
+    #[test]
+    fn test_invalid_syntax() {
+        let mut parser = ConfigParser::new();
+        let config = r#"
+            valid_key = valid_value
+            invalid line without equals
+            another_valid = value
+        "#;
+
+        assert!(parser.load_from_str(config).is_err());
     }
 }

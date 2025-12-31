@@ -111,4 +111,140 @@ mod tests {
         let missing = result.unwrap_err();
         assert_eq!(missing, vec!["nonexistent"]);
     }
+}use std::collections::HashMap;
+use std::fs;
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppConfig {
+    pub server: ServerConfig,
+    pub database: DatabaseConfig,
+    pub logging: LoggingConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServerConfig {
+    pub host: String,
+    pub port: u16,
+    pub timeout_seconds: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DatabaseConfig {
+    pub url: String,
+    pub max_connections: u32,
+    pub min_connections: u32,
+    pub connect_timeout: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoggingConfig {
+    pub level: String,
+    pub file_path: Option<String>,
+    pub max_files: usize,
+}
+
+#[derive(Debug, Error)]
+pub enum ConfigError {
+    #[error("File not found: {0}")]
+    FileNotFound(String),
+    
+    #[error("Invalid configuration: {0}")]
+    InvalidConfig(String),
+    
+    #[error("IO error: {0}")]
+    IoError(#[from] std::io::Error),
+    
+    #[error("Parse error: {0}")]
+    ParseError(#[from] serde_json::Error),
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        AppConfig {
+            server: ServerConfig {
+                host: "127.0.0.1".to_string(),
+                port: 8080,
+                timeout_seconds: 30,
+            },
+            database: DatabaseConfig {
+                url: "postgresql://localhost:5432/mydb".to_string(),
+                max_connections: 10,
+                min_connections: 2,
+                connect_timeout: 10,
+            },
+            logging: LoggingConfig {
+                level: "info".to_string(),
+                file_path: Some("/var/log/app.log".to_string()),
+                max_files: 5,
+            },
+        }
+    }
+}
+
+impl AppConfig {
+    pub fn from_file(path: &str) -> Result<Self, ConfigError> {
+        let content = fs::read_to_string(path)
+            .map_err(|_| ConfigError::FileNotFound(path.to_string()))?;
+        
+        let mut config: AppConfig = serde_json::from_str(&content)?;
+        config.validate()?;
+        
+        Ok(config)
+    }
+    
+    pub fn from_env() -> Result<Self, ConfigError> {
+        let mut config = AppConfig::default();
+        
+        if let Ok(host) = std::env::var("SERVER_HOST") {
+            config.server.host = host;
+        }
+        
+        if let Ok(port_str) = std::env::var("SERVER_PORT") {
+            config.server.port = port_str.parse()
+                .map_err(|e| ConfigError::InvalidConfig(format!("Invalid port: {}", e)))?;
+        }
+        
+        config.validate()?;
+        Ok(config)
+    }
+    
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        if self.server.port == 0 {
+            return Err(ConfigError::InvalidConfig("Port cannot be 0".to_string()));
+        }
+        
+        if self.database.max_connections < self.database.min_connections {
+            return Err(ConfigError::InvalidConfig(
+                "max_connections must be >= min_connections".to_string()
+            ));
+        }
+        
+        let valid_log_levels = ["error", "warn", "info", "debug", "trace"];
+        if !valid_log_levels.contains(&self.logging.level.as_str()) {
+            return Err(ConfigError::InvalidConfig(
+                format!("Invalid log level: {}", self.logging.level)
+            ));
+        }
+        
+        Ok(())
+    }
+    
+    pub fn to_env_vars(&self) -> HashMap<String, String> {
+        let mut vars = HashMap::new();
+        
+        vars.insert("SERVER_HOST".to_string(), self.server.host.clone());
+        vars.insert("SERVER_PORT".to_string(), self.server.port.to_string());
+        vars.insert("DATABASE_URL".to_string(), self.database.url.clone());
+        
+        vars
+    }
+}
+
+pub fn load_config(config_path: Option<&str>) -> Result<AppConfig, ConfigError> {
+    match config_path {
+        Some(path) => AppConfig::from_file(path),
+        None => AppConfig::from_env(),
+    }
 }

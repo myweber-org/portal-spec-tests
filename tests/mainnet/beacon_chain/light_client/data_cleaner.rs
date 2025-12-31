@@ -98,4 +98,28 @@ mod tests {
         let items = cleaner.get_unique_items();
         assert_eq!(items, vec!["apple", "banana", "orange"]);
     }
+}use std::collections::HashSet;
+
+pub fn clean_and_sort_data(data: &[String]) -> Vec<String> {
+    let unique_set: HashSet<_> = data.iter().collect();
+    let mut unique_vec: Vec<String> = unique_set.into_iter().cloned().collect();
+    unique_vec.sort();
+    unique_vec
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_clean_and_sort() {
+        let input = vec![
+            "zebra".to_string(),
+            "apple".to_string(),
+            "zebra".to_string(),
+            "banana".to_string(),
+        ];
+        let result = clean_and_sort_data(&input);
+        assert_eq!(result, vec!["apple", "banana", "zebra"]);
+    }
 }

@@ -1,98 +1,142 @@
 
 use std::error::Error;
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 
 pub struct CsvProcessor {
-    delimiter: char,
-    has_header: bool,
+    input_path: String,
+    output_path: String,
+    filter_column: Option<usize>,
+    filter_value: Option<String>,
 }
 
 impl CsvProcessor {
-    pub fn new(delimiter: char, has_header: bool) -> Self {
+    pub fn new(input_path: &str, output_path: &str) -> Self {
         CsvProcessor {
-            delimiter,
-            has_header,
+            input_path: input_path.to_string(),
+            output_path: output_path.to_string(),
+            filter_column: None,
+            filter_value: None,
         }
     }
 
-    pub fn read_file<P: AsRef<Path>>(&self, path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
-        let file = File::open(path)?;
-        let reader = BufReader::new(file);
-        let mut records = Vec::new();
-        let mut lines = reader.lines();
+    pub fn set_filter(&mut self, column: usize, value: &str) -> &mut Self {
+        self.filter_column = Some(column);
+        self.filter_value = Some(value.to_string());
+        self
+    }
 
-        if self.has_header {
-            lines.next();
-        }
+    pub fn process(&self) -> Result<usize, Box<dyn Error>> {
+        let input_file = File::open(&self.input_path)?;
+        let reader = BufReader::new(input_file);
+        let mut output_file = File::create(&self.output_path)?;
 
-        for line_result in lines {
+        let mut processed_count = 0;
+
+        for (line_num, line_result) in reader.lines().enumerate() {
             let line = line_result?;
-            let fields: Vec<String> = line
-                .split(self.delimiter)
-                .map(|s| s.trim().to_string())
-                .collect();
-            
-            if !fields.is_empty() {
-                records.push(fields);
+            let columns: Vec<&str> = line.split(',').collect();
+
+            if line_num == 0 {
+                writeln!(output_file, "{}", line)?;
+                continue;
+            }
+
+            let should_include = match (self.filter_column, &self.filter_value) {
+                (Some(col), Some(val)) if col < columns.len() => columns[col] == val,
+                _ => true,
+            };
+
+            if should_include {
+                let transformed_line = self.transform_row(&columns);
+                writeln!(output_file, "{}", transformed_line)?;
+                processed_count += 1;
             }
         }
 
-        Ok(records)
+        Ok(processed_count)
     }
 
-    pub fn filter_records<F>(&self, records: Vec<Vec<String>>, predicate: F) -> Vec<Vec<String>>
-    where
-        F: Fn(&[String]) -> bool,
-    {
-        records
-            .into_iter()
-            .filter(|record| predicate(record))
-            .collect()
-    }
-
-    pub fn transform_column<F>(&self, records: Vec<Vec<String>>, col_index: usize, transformer: F) -> Vec<Vec<String>>
-    where
-        F: Fn(&str) -> String,
-    {
-        records
-            .into_iter()
-            .map(|mut record| {
-                if col_index < record.len() {
-                    record[col_index] = transformer(&record[col_index]);
+    fn transform_row(&self, columns: &[&str]) -> String {
+        let transformed: Vec<String> = columns
+            .iter()
+            .enumerate()
+            .map(|(idx, &col)| {
+                if idx == 0 {
+                    col.to_uppercase()
+                } else {
+                    col.replace('"', "'")
                 }
-                record
             })
-            .collect()
+            .collect();
+        transformed.join(",")
     }
+}
+
+pub fn validate_csv_format(path: &str) -> Result<bool, Box<dyn Error>> {
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+    
+    for line_result in reader.lines().take(5) {
+        let line = line_result?;
+        if line.split(',').count() < 2 {
+            return Ok(false);
+        }
+    }
+    
+    Ok(true)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
+    use std::io::Read;
     use tempfile::NamedTempFile;
 
     #[test]
     fn test_csv_processing() {
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "name,age,city").unwrap();
-        writeln!(temp_file, "Alice,30,New York").unwrap();
-        writeln!(temp_file, "Bob,25,London").unwrap();
-        writeln!(temp_file, "Charlie,35,Paris").unwrap();
+        let input_data = "name,age,city\njohn,25,new york\njane,30,london\njack,25,paris";
+        
+        let mut input_file = NamedTempFile::new().unwrap();
+        write!(input_file, "{}", input_data).unwrap();
+        
+        let output_file = NamedTempFile::new().unwrap();
+        
+        let mut processor = CsvProcessor::new(
+            input_file.path().to_str().unwrap(),
+            output_file.path().to_str().unwrap()
+        );
+        
+        processor.set_filter(1, "25");
+        let result = processor.process();
+        
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 2);
+        
+        let mut output_content = String::new();
+        File::open(output_file.path())
+            .unwrap()
+            .read_to_string(&mut output_content)
+            .unwrap();
+        
+        assert!(output_content.contains("JOHN"));
+        assert!(output_content.contains("JACK"));
+        assert!(!output_content.contains("JANE"));
+    }
 
-        let processor = CsvProcessor::new(',', true);
-        let records = processor.read_file(temp_file.path()).unwrap();
+    #[test]
+    fn test_validation() {
+        let valid_data = "field1,field2,field3\nvalue1,value2,value3";
+        let invalid_data = "single_field\nanother_field";
         
-        assert_eq!(records.len(), 3);
-        assert_eq!(records[0], vec!["Alice", "30", "New York"]);
+        let mut valid_file = NamedTempFile::new().unwrap();
+        write!(valid_file, "{}", valid_data).unwrap();
         
-        let filtered = processor.filter_records(records, |record| {
-            record.get(1).and_then(|age| age.parse::<i32>().ok()).map_or(false, |age| age > 30)
-        });
+        let mut invalid_file = NamedTempFile::new().unwrap();
+        write!(invalid_file, "{}", invalid_data).unwrap();
         
-        assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0][0], "Charlie");
+        assert!(validate_csv_format(valid_file.path().to_str().unwrap()).unwrap());
+        assert!(!validate_csv_format(invalid_file.path().to_str().unwrap()).unwrap());
     }
 }

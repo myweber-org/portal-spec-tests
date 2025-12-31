@@ -377,3 +377,154 @@ mod tests {
         assert_eq!(filtered.len(), 2);
     }
 }
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::error::Error;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataRecord {
+    pub id: u64,
+    pub timestamp: i64,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum ValidationError {
+    InvalidId,
+    InvalidTimestamp,
+    EmptyValues,
+    MetadataTooLarge,
+}
+
+pub fn validate_record(record: &DataRecord) -> Result<(), ValidationError> {
+    if record.id == 0 {
+        return Err(ValidationError::InvalidId);
+    }
+    
+    if record.timestamp < 0 {
+        return Err(ValidationError::InvalidTimestamp);
+    }
+    
+    if record.values.is_empty() {
+        return Err(ValidationError::EmptyValues);
+    }
+    
+    if record.metadata.len() > 100 {
+        return Err(ValidationError::MetadataTooLarge);
+    }
+    
+    Ok(())
+}
+
+pub fn transform_values(record: &mut DataRecord, multiplier: f64) {
+    for value in record.values.iter_mut() {
+        *value *= multiplier;
+    }
+}
+
+pub fn calculate_statistics(records: &[DataRecord]) -> HashMap<String, f64> {
+    let mut stats = HashMap::new();
+    
+    if records.is_empty() {
+        return stats;
+    }
+    
+    let total_records = records.len() as f64;
+    let mut sum_all_values = 0.0;
+    let mut value_count = 0;
+    
+    for record in records {
+        for &value in &record.values {
+            sum_all_values += value;
+            value_count += 1;
+        }
+    }
+    
+    if value_count > 0 {
+        let average = sum_all_values / value_count as f64;
+        stats.insert("average".to_string(), average);
+    }
+    
+    stats.insert("total_records".to_string(), total_records);
+    stats.insert("total_values".to_string(), value_count as f64);
+    
+    stats
+}
+
+pub fn process_records(records: Vec<DataRecord>) -> Result<Vec<DataRecord>, Box<dyn Error>> {
+    let mut processed_records = Vec::new();
+    
+    for mut record in records {
+        validate_record(&record)?;
+        transform_values(&mut record, 2.0);
+        processed_records.push(record);
+    }
+    
+    Ok(processed_records)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_validate_record_valid() {
+        let record = DataRecord {
+            id: 1,
+            timestamp: 1000,
+            values: vec![1.0, 2.0, 3.0],
+            metadata: HashMap::new(),
+        };
+        
+        assert!(validate_record(&record).is_ok());
+    }
+    
+    #[test]
+    fn test_validate_record_invalid_id() {
+        let record = DataRecord {
+            id: 0,
+            timestamp: 1000,
+            values: vec![1.0],
+            metadata: HashMap::new(),
+        };
+        
+        assert_eq!(validate_record(&record), Err(ValidationError::InvalidId));
+    }
+    
+    #[test]
+    fn test_transform_values() {
+        let mut record = DataRecord {
+            id: 1,
+            timestamp: 1000,
+            values: vec![1.0, 2.0, 3.0],
+            metadata: HashMap::new(),
+        };
+        
+        transform_values(&mut record, 2.0);
+        assert_eq!(record.values, vec![2.0, 4.0, 6.0]);
+    }
+    
+    #[test]
+    fn test_calculate_statistics() {
+        let records = vec![
+            DataRecord {
+                id: 1,
+                timestamp: 1000,
+                values: vec![1.0, 2.0],
+                metadata: HashMap::new(),
+            },
+            DataRecord {
+                id: 2,
+                timestamp: 2000,
+                values: vec![3.0, 4.0],
+                metadata: HashMap::new(),
+            },
+        ];
+        
+        let stats = calculate_statistics(&records);
+        assert_eq!(stats.get("total_records"), Some(&2.0));
+        assert_eq!(stats.get("total_values"), Some(&4.0));
+        assert_eq!(stats.get("average"), Some(&2.5));
+    }
+}

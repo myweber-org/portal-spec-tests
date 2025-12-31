@@ -148,4 +148,58 @@ pub fn filter_csv(input_path: &str, output_path: &str, min_value: f64) -> Result
 
     wtr.flush()?;
     Ok(())
+}use regex::Regex;
+use std::collections::HashSet;
+
+pub fn clean_text(input: &str, remove_stopwords: bool) -> String {
+    let stopwords: HashSet<&str> = [
+        "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for",
+    ]
+    .iter()
+    .cloned()
+    .collect();
+
+    let re = Regex::new(r"[^\w\s]").unwrap();
+    let mut cleaned = re.replace_all(input, "").to_lowercase();
+
+    if remove_stopwords {
+        cleaned = cleaned
+            .split_whitespace()
+            .filter(|word| !stopwords.contains(word))
+            .collect::<Vec<&str>>()
+            .join(" ");
+    }
+
+    cleaned.trim().to_string()
+}
+
+pub fn normalize_whitespace(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<&str>>().join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_clean_text() {
+        let input = "Hello, World! This is a test.";
+        let expected = "hello world this is a test";
+        assert_eq!(clean_text(input, false), expected);
+    }
+
+    #[test]
+    fn test_clean_text_with_stopwords() {
+        let input = "The quick brown fox jumps over a lazy dog";
+        let result = clean_text(input, true);
+        assert!(!result.contains("the"));
+        assert!(!result.contains("a"));
+    }
+
+    #[test]
+    fn test_normalize_whitespace() {
+        let input = "  Multiple   spaces   and\t tabs  ";
+        let expected = "Multiple spaces and tabs";
+        assert_eq!(normalize_whitespace(input), expected);
+    }
 }

@@ -330,4 +330,163 @@ mod tests {
         assert!((mean - 15.333).abs() < 0.001);
         assert!((std_dev - 4.041).abs() < 0.001);
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::collections::HashMap;
+
+pub struct DataSet {
+    records: Vec<Vec<String>>,
+    headers: Vec<String>,
+}
+
+impl DataSet {
+    pub fn from_csv(file_path: &str) -> Result<Self, Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        let mut lines = reader.lines();
+        
+        let headers = if let Some(first_line) = lines.next() {
+            first_line?
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .collect()
+        } else {
+            return Err("Empty CSV file".into());
+        };
+        
+        let mut records = Vec::new();
+        for line in lines {
+            let record: Vec<String> = line?
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .collect();
+            if record.len() == headers.len() {
+                records.push(record);
+            }
+        }
+        
+        Ok(DataSet { records, headers })
+    }
+    
+    pub fn column_stats(&self, column_index: usize) -> Option<ColumnStatistics> {
+        if column_index >= self.headers.len() {
+            return None;
+        }
+        
+        let mut values = Vec::new();
+        let mut frequency_map = HashMap::new();
+        
+        for record in &self.records {
+            if let Some(value) = record.get(column_index) {
+                values.push(value.clone());
+                *frequency_map.entry(value.clone()).or_insert(0) += 1;
+            }
+        }
+        
+        if values.is_empty() {
+            return None;
+        }
+        
+        let numeric_values: Vec<f64> = values
+            .iter()
+            .filter_map(|v| v.parse().ok())
+            .collect();
+        
+        Some(ColumnStatistics {
+            column_name: self.headers[column_index].clone(),
+            total_count: values.len(),
+            unique_count: frequency_map.len(),
+            numeric_count: numeric_values.len(),
+            frequency_map,
+            numeric_values,
+        })
+    }
+    
+    pub fn filter_records<F>(&self, predicate: F) -> Vec<&Vec<String>>
+    where
+        F: Fn(&Vec<String>) -> bool,
+    {
+        self.records.iter().filter(|r| predicate(r)).collect()
+    }
+}
+
+pub struct ColumnStatistics {
+    column_name: String,
+    total_count: usize,
+    unique_count: usize,
+    numeric_count: usize,
+    frequency_map: HashMap<String, usize>,
+    numeric_values: Vec<f64>,
+}
+
+impl ColumnStatistics {
+    pub fn mean(&self) -> Option<f64> {
+        if self.numeric_values.is_empty() {
+            return None;
+        }
+        let sum: f64 = self.numeric_values.iter().sum();
+        Some(sum / self.numeric_values.len() as f64)
+    }
+    
+    pub fn min_max(&self) -> Option<(f64, f64)> {
+        if self.numeric_values.is_empty() {
+            return None;
+        }
+        let min = self.numeric_values.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+        let max = self.numeric_values.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+        Some((min, max))
+    }
+    
+    pub fn most_frequent(&self, n: usize) -> Vec<(&String, &usize)> {
+        let mut items: Vec<_> = self.frequency_map.iter().collect();
+        items.sort_by(|a, b| b.1.cmp(a.1));
+        items.into_iter().take(n).collect()
+    }
+    
+    pub fn summary(&self) -> String {
+        let mut result = format!("Column: {}\n", self.column_name);
+        result += &format!("Total values: {}\n", self.total_count);
+        result += &format!("Unique values: {}\n", self.unique_count);
+        result += &format!("Numeric values: {}\n", self.numeric_count);
+        
+        if let Some(mean) = self.mean() {
+            result += &format!("Mean: {:.2}\n", mean);
+        }
+        
+        if let Some((min, max)) = self.min_max() {
+            result += &format!("Range: [{:.2}, {:.2}]\n", min, max);
+        }
+        
+        let top_frequent = self.most_frequent(3);
+        if !top_frequent.is_empty() {
+            result += "Most frequent values:\n";
+            for (value, count) in top_frequent {
+                result += &format!("  {}: {}\n", value, count);
+            }
+        }
+        
+        result
+    }
+}
+
+pub fn process_csv_file(input_path: &str) -> Result<String, Box<dyn Error>> {
+    let dataset = DataSet::from_csv(input_path)?;
+    let mut output = String::new();
+    
+    output += "Dataset Summary:\n";
+    output += &format!("Columns: {}\n", dataset.headers.len());
+    output += &format!("Records: {}\n\n", dataset.records.len());
+    
+    for (i, header) in dataset.headers.iter().enumerate() {
+        output += &format!("Analyzing column '{}':\n", header);
+        if let Some(stats) = dataset.column_stats(i) {
+            output += &stats.summary();
+            output += "\n";
+        } else {
+            output += "  No data available\n\n";
+        }
+    }
+    
+    Ok(output)
 }

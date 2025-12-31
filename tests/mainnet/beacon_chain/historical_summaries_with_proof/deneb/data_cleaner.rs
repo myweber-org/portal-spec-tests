@@ -1,66 +1,35 @@
-
-use std::collections::HashMap;
+use std::collections::HashSet;
 
 pub struct DataCleaner {
-    pub remove_nulls: bool,
-    pub normalize_strings: bool,
-    pub string_normalization_rules: HashMap<String, String>,
+    pub data: Vec<Vec<Option<String>>>,
 }
 
 impl DataCleaner {
-    pub fn new() -> Self {
-        DataCleaner {
-            remove_nulls: true,
-            normalize_strings: false,
-            string_normalization_rules: HashMap::new(),
-        }
+    pub fn new(data: Vec<Vec<Option<String>>>) -> Self {
+        DataCleaner { data }
     }
 
-    pub fn clean_dataset<T>(&self, data: Vec<Option<T>>) -> Vec<T>
-    where
-        T: Clone,
-    {
-        if self.remove_nulls {
-            data.into_iter().filter_map(|x| x).collect()
-        } else {
-            data.into_iter()
-                .map(|x| x.unwrap_or_else(|| panic!("Null value found")))
-                .collect()
-        }
+    pub fn remove_null_rows(&mut self) {
+        self.data.retain(|row| {
+            row.iter().all(|cell| cell.is_some())
+        });
     }
 
-    pub fn normalize_text(&self, text: &str) -> String {
-        if !self.normalize_strings {
-            return text.to_string();
-        }
-
-        let mut result = text.to_lowercase().trim().to_string();
-        
-        for (pattern, replacement) in &self.string_normalization_rules {
-            result = result.replace(pattern, replacement);
-        }
-
-        result
+    pub fn deduplicate(&mut self) {
+        let mut seen = HashSet::new();
+        self.data.retain(|row| {
+            let key: Vec<String> = row
+                .iter()
+                .map(|cell| cell.as_ref().unwrap_or(&"".to_string()).to_string())
+                .collect();
+            seen.insert(key)
+        });
     }
 
-    pub fn add_normalization_rule(&mut self, pattern: &str, replacement: &str) {
-        self.string_normalization_rules
-            .insert(pattern.to_string(), replacement.to_string());
+    pub fn clean(&mut self) {
+        self.remove_null_rows();
+        self.deduplicate();
     }
-}
-
-pub fn process_records(records: Vec<Option<String>>) -> Vec<String> {
-    let mut cleaner = DataCleaner::new();
-    cleaner.normalize_strings = true;
-    cleaner.add_normalization_rule("  ", " ");
-    cleaner.add_normalization_rule("\t", " ");
-    
-    let cleaned_data = cleaner.clean_dataset(records);
-    
-    cleaned_data
-        .iter()
-        .map(|record| cleaner.normalize_text(record))
-        .collect()
 }
 
 #[cfg(test)]
@@ -68,21 +37,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_clean_dataset() {
-        let cleaner = DataCleaner::new();
-        let data = vec![Some("value1"), None, Some("value2"), Some("value3")];
-        let cleaned = cleaner.clean_dataset(data);
-        assert_eq!(cleaned.len(), 3);
-        assert_eq!(cleaned, vec!["value1", "value2", "value3"]);
-    }
+    fn test_data_cleaner() {
+        let mut raw_data = vec![
+            vec![Some("A".to_string()), Some("1".to_string())],
+            vec![Some("B".to_string()), None],
+            vec![Some("A".to_string()), Some("1".to_string())],
+            vec![Some("C".to_string()), Some("3".to_string())],
+        ];
 
-    #[test]
-    fn test_normalize_text() {
-        let mut cleaner = DataCleaner::new();
-        cleaner.normalize_strings = true;
-        cleaner.add_normalization_rule("test", "check");
-        
-        let result = cleaner.normalize_text("  TEST Example  ");
-        assert_eq!(result, "check example");
+        let mut cleaner = DataCleaner::new(raw_data);
+        cleaner.clean();
+
+        assert_eq!(cleaner.data.len(), 2);
+        assert_eq!(cleaner.data[0][0], Some("A".to_string()));
+        assert_eq!(cleaner.data[1][0], Some("C".to_string()));
     }
 }

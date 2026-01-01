@@ -262,4 +262,54 @@ mod tests {
         let average = processor.calculate_average();
         assert_eq!(average, Some(20.0));
     }
+}use csv::{ReaderBuilder, WriterBuilder};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
+}
+
+impl Record {
+    fn is_valid(&self) -> bool {
+        !self.name.is_empty() && self.value >= 0.0
+    }
+}
+
+fn process_csv(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
+    let input_file = File::open(input_path)?;
+    let mut reader = ReaderBuilder::new()
+        .has_headers(true)
+        .from_reader(input_file);
+
+    let output_file = File::create(output_path)?;
+    let mut writer = WriterBuilder::new()
+        .has_headers(true)
+        .from_writer(output_file);
+
+    let mut valid_count = 0;
+    let mut invalid_count = 0;
+
+    for result in reader.deserialize() {
+        let record: Record = result?;
+        
+        if record.is_valid() {
+            writer.serialize(&record)?;
+            valid_count += 1;
+        } else {
+            invalid_count += 1;
+        }
+    }
+
+    println!("Processing complete. Valid records: {}, Invalid records: {}", valid_count, invalid_count);
+    Ok(())
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    process_csv("input.csv", "output.csv")
 }

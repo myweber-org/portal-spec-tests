@@ -62,4 +62,44 @@ mod tests {
         
         assert!(validate_json(schema, invalid_data).is_err());
     }
+}use serde_json::{Result, Value};
+use std::fs;
+
+pub fn validate_json_file(file_path: &str) -> Result<Value> {
+    let content = fs::read_to_string(file_path)
+        .unwrap_or_else(|_| panic!("Failed to read file: {}", file_path));
+    
+    let parsed: Value = serde_json::from_str(&content)?;
+    
+    Ok(parsed)
+}
+
+pub fn validate_json_string(json_str: &str) -> Result<Value> {
+    let parsed: Value = serde_json::from_str(json_str)?;
+    
+    Ok(parsed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_valid_json_string() {
+        let valid_json = r#"{"name": "test", "value": 42}"#;
+        let result = validate_json_string(valid_json);
+        assert!(result.is_ok());
+        
+        let parsed = result.unwrap();
+        assert_eq!(parsed["name"], "test");
+        assert_eq!(parsed["value"], 42);
+    }
+
+    #[test]
+    fn test_invalid_json_string() {
+        let invalid_json = r#"{"name": "test", "value": }"#;
+        let result = validate_json_string(invalid_json);
+        assert!(result.is_err());
+    }
 }

@@ -425,4 +425,44 @@ mod tests {
 
         assert_eq!(result["common"], "second");
     }
+}use serde_json::{Map, Value};
+use std::env;
+use std::fs;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<String> = env::args().collect();
+    if args.len() < 3 {
+        eprintln!("Usage: {} <output_file> <input_file1> [input_file2 ...]", args[0]);
+        std::process::exit(1);
+    }
+
+    let output_path = &args[1];
+    let input_paths = &args[2..];
+
+    let mut merged_map = Map::new();
+
+    for (index, input_path) in input_paths.iter().enumerate() {
+        let content = fs::read_to_string(input_path)?;
+        let parsed: Value = serde_json::from_str(&content)?;
+
+        if let Value::Object(map) = parsed {
+            for (key, value) in map {
+                let unique_key = if merged_map.contains_key(&key) {
+                    format!("{}_{}", key, index)
+                } else {
+                    key
+                };
+                merged_map.insert(unique_key, value);
+            }
+        } else {
+            eprintln!("Warning: File '{}' does not contain a JSON object at root. Skipping.", input_path);
+        }
+    }
+
+    let merged_value = Value::Object(merged_map);
+    let json_string = serde_json::to_string_pretty(&merged_value)?;
+    fs::write(output_path, json_string)?;
+
+    println!("Successfully merged {} files into '{}'", input_paths.len(), output_path);
+    Ok(())
 }

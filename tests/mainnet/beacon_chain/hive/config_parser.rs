@@ -1,24 +1,17 @@
-
 use std::collections::HashMap;
+use std::env;
 use std::fs;
 
-#[derive(Debug)]
 pub struct Config {
     values: HashMap<String, String>,
 }
 
 impl Config {
-    pub fn new() -> Self {
-        Config {
-            values: HashMap::new(),
-        }
-    }
-
     pub fn from_file(path: &str) -> Result<Self, String> {
         let content = fs::read_to_string(path)
             .map_err(|e| format!("Failed to read config file: {}", e))?;
 
-        let mut config = Config::new();
+        let mut values = HashMap::new();
         for line in content.lines() {
             let trimmed = line.trim();
             if trimmed.is_empty() || trimmed.starts_with('#') {
@@ -26,21 +19,42 @@ impl Config {
             }
 
             let parts: Vec<&str> = trimmed.splitn(2, '=').collect();
-            if parts.len() != 2 {
-                return Err(format!("Invalid config line: {}", line));
+            if parts.len() == 2 {
+                let key = parts[0].trim().to_string();
+                let raw_value = parts[1].trim().to_string();
+                let value = Self::resolve_env_vars(&raw_value);
+                values.insert(key, value);
             }
-
-            let key = parts[0].trim().to_string();
-            let value = parts[1].trim().to_string();
-            
-            if key.is_empty() {
-                return Err(format!("Empty key in line: {}", line));
-            }
-
-            config.values.insert(key, value);
         }
 
-        Ok(config)
+        Ok(Config { values })
+    }
+
+    fn resolve_env_vars(input: &str) -> String {
+        let mut result = String::new();
+        let mut chars = input.chars().peekable();
+        
+        while let Some(c) = chars.next() {
+            if c == '$' && chars.peek() == Some(&'{') {
+                chars.next();
+                let mut var_name = String::new();
+                while let Some(c) = chars.next() {
+                    if c == '}' {
+                        break;
+                    }
+                    var_name.push(c);
+                }
+                
+                match env::var(&var_name) {
+                    Ok(val) => result.push_str(&val),
+                    Err(_) => result.push_str(&format!("${{{}}}", var_name)),
+                }
+            } else {
+                result.push(c);
+            }
+        }
+        
+        result
     }
 
     pub fn get(&self, key: &str) -> Option<&String> {
@@ -53,30 +67,6 @@ impl Config {
             .unwrap_or(default)
             .to_string()
     }
-
-    pub fn validate_required(&self, required_keys: &[&str]) -> Result<(), Vec<String>> {
-        let mut missing = Vec::new();
-        
-        for key in required_keys {
-            if !self.values.contains_key(*key) {
-                missing.push(key.to_string());
-            }
-        }
-
-        if missing.is_empty() {
-            Ok(())
-        } else {
-            Err(missing)
-        }
-    }
-
-    pub fn len(&self) -> usize {
-        self.values.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.values.is_empty()
-    }
 }
 
 #[cfg(test)]
@@ -86,50 +76,31 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_empty_config() {
-        let config = Config::new();
-        assert!(config.is_empty());
-        assert_eq!(config.len(), 0);
-    }
-
-    #[test]
-    fn test_valid_config_parsing() {
+    fn test_basic_parsing() {
         let mut file = NamedTempFile::new().unwrap();
-        writeln!(file, "host=localhost").unwrap();
-        writeln!(file, "port=8080").unwrap();
+        writeln!(file, "HOST=localhost").unwrap();
+        writeln!(file, "PORT=8080").unwrap();
         writeln!(file, "# This is a comment").unwrap();
-        writeln!(file, "").unwrap();
-        writeln!(file, "timeout=30").unwrap();
+        writeln!(file, "  TIMEOUT = 30  ").unwrap();
 
         let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
-        assert_eq!(config.len(), 3);
-        assert_eq!(config.get("host").unwrap(), "localhost");
-        assert_eq!(config.get("port").unwrap(), "8080");
-        assert_eq!(config.get("timeout").unwrap(), "30");
-        assert_eq!(config.get_or_default("missing", "default"), "default");
+        assert_eq!(config.get("HOST"), Some(&"localhost".to_string()));
+        assert_eq!(config.get("PORT"), Some(&"8080".to_string()));
+        assert_eq!(config.get("TIMEOUT"), Some(&"30".to_string()));
+        assert_eq!(config.get("MISSING"), None);
     }
 
     #[test]
-    fn test_invalid_config() {
+    fn test_env_substitution() {
+        env::set_var("APP_SECRET", "mysecret123");
+        
         let mut file = NamedTempFile::new().unwrap();
-        writeln!(file, "invalid_line").unwrap();
-        
-        let result = Config::from_file(file.path().to_str().unwrap());
-        assert!(result.is_err());
-    }
+        writeln!(file, "SECRET=${{APP_SECRET}}").unwrap();
+        writeln!(file, "PATH=/home/${{USER}}/data").unwrap();
+        writeln!(file, "MISSING=${{UNDEFINED_VAR}}").unwrap();
 
-    #[test]
-    fn test_validation() {
-        let mut config = Config::new();
-        config.values.insert("host".to_string(), "localhost".to_string());
-        config.values.insert("port".to_string(), "8080".to_string());
-
-        let required = vec!["host", "port", "timeout"];
-        let result = config.validate_required(&required);
-        assert!(result.is_err());
-        
-        let missing = result.unwrap_err();
-        assert_eq!(missing.len(), 1);
-        assert_eq!(missing[0], "timeout");
+        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.get("SECRET"), Some(&"mysecret123".to_string()));
+        assert_eq!(config.get("MISSING"), Some(&"${UNDEFINED_VAR}".to_string()));
     }
 }

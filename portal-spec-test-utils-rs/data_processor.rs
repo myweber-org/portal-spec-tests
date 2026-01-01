@@ -314,4 +314,125 @@ mod tests {
         assert!(processor.transform_values(transform).is_ok());
         assert_eq!(processor.records[0].value, 20.0);
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+pub struct DataProcessor {
+    delimiter: char,
+    has_header: bool,
+}
+
+impl DataProcessor {
+    pub fn new(delimiter: char, has_header: bool) -> Self {
+        DataProcessor {
+            delimiter,
+            has_header,
+        }
+    }
+
+    pub fn process_csv<P: AsRef<Path>>(&self, file_path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        let mut records = Vec::new();
+        let mut lines = reader.lines();
+
+        if self.has_header {
+            let _ = lines.next();
+        }
+
+        for line_result in lines {
+            let line = line_result?;
+            let fields: Vec<String> = line
+                .split(self.delimiter)
+                .map(|s| s.trim().to_string())
+                .collect();
+            
+            if !fields.is_empty() {
+                records.push(fields);
+            }
+        }
+
+        Ok(records)
+    }
+
+    pub fn validate_numeric_fields(&self, data: &[Vec<String>], column_index: usize) -> Result<Vec<f64>, Box<dyn Error>> {
+        let mut numeric_values = Vec::new();
+        
+        for (row_idx, row) in data.iter().enumerate() {
+            if column_index >= row.len() {
+                return Err(format!("Row {}: Column index {} out of bounds", row_idx, column_index).into());
+            }
+            
+            match row[column_index].parse::<f64>() {
+                Ok(value) => numeric_values.push(value),
+                Err(_) => return Err(format!("Row {}: Invalid numeric value '{}'", row_idx, row[column_index]).into()),
+            }
+        }
+        
+        Ok(numeric_values)
+    }
+
+    pub fn calculate_statistics(&self, numeric_data: &[f64]) -> (f64, f64, f64) {
+        if numeric_data.is_empty() {
+            return (0.0, 0.0, 0.0);
+        }
+
+        let sum: f64 = numeric_data.iter().sum();
+        let mean = sum / numeric_data.len() as f64;
+        
+        let variance: f64 = numeric_data.iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>() / numeric_data.len() as f64;
+        
+        let std_dev = variance.sqrt();
+        
+        (mean, variance, std_dev)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_csv_processing() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,salary").unwrap();
+        writeln!(temp_file, "Alice,30,50000.5").unwrap();
+        writeln!(temp_file, "Bob,25,45000.0").unwrap();
+        
+        let processor = DataProcessor::new(',', true);
+        let result = processor.process_csv(temp_file.path()).unwrap();
+        
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], vec!["Alice", "30", "50000.5"]);
+    }
+
+    #[test]
+    fn test_numeric_validation() {
+        let data = vec![
+            vec!["10.5".to_string(), "text".to_string()],
+            vec!["20.0".to_string(), "more".to_string()],
+        ];
+        
+        let processor = DataProcessor::new(',', false);
+        let numeric = processor.validate_numeric_fields(&data, 0).unwrap();
+        
+        assert_eq!(numeric, vec![10.5, 20.0]);
+    }
+
+    #[test]
+    fn test_statistics_calculation() {
+        let processor = DataProcessor::new(',', false);
+        let data = vec![2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0];
+        let (mean, variance, std_dev) = processor.calculate_statistics(&data);
+        
+        assert!((mean - 5.0).abs() < 0.001);
+        assert!((variance - 4.0).abs() < 0.001);
+        assert!((std_dev - 2.0).abs() < 0.001);
+    }
 }

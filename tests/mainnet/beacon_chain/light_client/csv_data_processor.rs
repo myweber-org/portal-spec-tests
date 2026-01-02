@@ -2,7 +2,7 @@ use std::error::Error;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Record {
     pub id: u32,
     pub name: String,
@@ -10,117 +10,101 @@ pub struct Record {
     pub category: String,
 }
 
-pub struct DataProcessor {
-    records: Vec<Record>,
+pub fn load_csv(file_path: &str) -> Result<Vec<Record>, Box<dyn Error>> {
+    let file = File::open(file_path)?;
+    let reader = BufReader::new(file);
+    let mut records = Vec::new();
+
+    for (index, line) in reader.lines().enumerate() {
+        if index == 0 {
+            continue;
+        }
+
+        let line = line?;
+        let parts: Vec<&str> = line.split(',').collect();
+        
+        if parts.len() == 4 {
+            let record = Record {
+                id: parts[0].parse()?,
+                name: parts[1].to_string(),
+                value: parts[2].parse()?,
+                category: parts[3].to_string(),
+            };
+            records.push(record);
+        }
+    }
+
+    Ok(records)
 }
 
-impl DataProcessor {
-    pub fn new() -> Self {
-        DataProcessor {
-            records: Vec::new(),
-        }
+pub fn filter_by_category(records: &[Record], category: &str) -> Vec<&Record> {
+    records
+        .iter()
+        .filter(|record| record.category == category)
+        .collect()
+}
+
+pub fn calculate_average(records: &[&Record]) -> Option<f64> {
+    if records.is_empty() {
+        return None;
     }
 
-    pub fn load_from_csv(&mut self, filepath: &str) -> Result<usize, Box<dyn Error>> {
-        let file = File::open(filepath)?;
-        let reader = BufReader::new(file);
-        let mut count = 0;
+    let sum: f64 = records.iter().map(|r| r.value).sum();
+    Some(sum / records.len() as f64)
+}
 
-        for (index, line) in reader.lines().enumerate() {
-            let line = line?;
-            
-            if index == 0 {
-                continue;
-            }
-
-            let parts: Vec<&str> = line.split(',').collect();
-            if parts.len() >= 4 {
-                let record = Record {
-                    id: parts[0].parse()?,
-                    name: parts[1].to_string(),
-                    value: parts[2].parse()?,
-                    category: parts[3].to_string(),
-                };
-                self.records.push(record);
-                count += 1;
-            }
-        }
-
-        Ok(count)
-    }
-
-    pub fn filter_by_category(&self, category: &str) -> Vec<Record> {
-        self.records
-            .iter()
-            .filter(|r| r.category == category)
-            .cloned()
-            .collect()
-    }
-
-    pub fn calculate_average(&self) -> f64 {
-        if self.records.is_empty() {
-            return 0.0;
-        }
-
-        let sum: f64 = self.records.iter().map(|r| r.value).sum();
-        sum / self.records.len() as f64
-    }
-
-    pub fn find_max_value(&self) -> Option<&Record> {
-        self.records.iter().max_by(|a, b| {
-            a.value.partial_cmp(&b.value).unwrap()
-        })
-    }
-
-    pub fn get_statistics(&self) -> (usize, f64, f64, f64) {
-        let count = self.records.len();
-        let avg = self.calculate_average();
-        
-        let min = self.records
-            .iter()
-            .map(|r| r.value)
-            .min_by(|a, b| a.partial_cmp(b).unwrap())
-            .unwrap_or(0.0);
-            
-        let max = self.records
-            .iter()
-            .map(|r| r.value)
-            .max_by(|a, b| a.partial_cmp(b).unwrap())
-            .unwrap_or(0.0);
-
-        (count, avg, min, max)
-    }
+pub fn find_max_value(records: &[Record]) -> Option<&Record> {
+    records.iter().max_by(|a, b| a.value.partial_cmp(&b.value).unwrap())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn create_test_records() -> Vec<Record> {
+        vec![
+            Record {
+                id: 1,
+                name: "ItemA".to_string(),
+                value: 10.5,
+                category: "Electronics".to_string(),
+            },
+            Record {
+                id: 2,
+                name: "ItemB".to_string(),
+                value: 25.0,
+                category: "Books".to_string(),
+            },
+            Record {
+                id: 3,
+                name: "ItemC".to_string(),
+                value: 15.75,
+                category: "Electronics".to_string(),
+            },
+        ]
+    }
+
     #[test]
-    fn test_data_processor() {
-        let mut processor = DataProcessor::new();
-        
-        let test_data = "id,name,value,category\n\
-                        1,ItemA,10.5,Electronics\n\
-                        2,ItemB,15.0,Electronics\n\
-                        3,ItemC,8.75,Books";
-        
-        let temp_file = "test_data.csv";
-        std::fs::write(temp_file, test_data).unwrap();
-        
-        let result = processor.load_from_csv(temp_file);
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), 3);
-        
-        let electronics = processor.filter_by_category("Electronics");
-        assert_eq!(electronics.len(), 2);
-        
-        let avg = processor.calculate_average();
-        assert!((avg - 11.416666).abs() < 0.001);
-        
-        let stats = processor.get_statistics();
-        assert_eq!(stats.0, 3);
-        
-        std::fs::remove_file(temp_file).unwrap();
+    fn test_filter_by_category() {
+        let records = create_test_records();
+        let filtered = filter_by_category(&records, "Electronics");
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered.iter().all(|r| r.category == "Electronics"));
+    }
+
+    #[test]
+    fn test_calculate_average() {
+        let records = create_test_records();
+        let filtered = filter_by_category(&records, "Electronics");
+        let avg = calculate_average(&filtered).unwrap();
+        assert!((avg - 13.125).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_find_max_value() {
+        let records = create_test_records();
+        let max_record = find_max_value(&records).unwrap();
+        assert_eq!(max_record.id, 2);
+        assert!((max_record.value - 25.0).abs() < 0.001);
     }
 }

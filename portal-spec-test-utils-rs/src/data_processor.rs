@@ -103,3 +103,108 @@ fn process_data_sample() -> Result<(), Box<dyn Error>> {
     
     Ok(())
 }
+use csv::Reader;
+use serde::Deserialize;
+use std::error::Error;
+use std::fs::File;
+
+#[derive(Debug, Deserialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    category: String,
+}
+
+pub struct DataProcessor {
+    records: Vec<Record>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let mut rdr = Reader::from_reader(file);
+
+        for result in rdr.deserialize() {
+            let record: Record = result?;
+            self.records.push(record);
+        }
+
+        Ok(())
+    }
+
+    pub fn validate_data(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+
+        for (index, record) in self.records.iter().enumerate() {
+            if record.name.is_empty() {
+                errors.push(format!("Record {}: Name is empty", index));
+            }
+            if record.value < 0.0 {
+                errors.push(format!("Record {}: Value is negative", index));
+            }
+            if record.category.is_empty() {
+                errors.push(format!("Record {}: Category is empty", index));
+            }
+        }
+
+        errors
+    }
+
+    pub fn calculate_average(&self) -> Option<f64> {
+        if self.records.is_empty() {
+            return None;
+        }
+
+        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        Some(sum / self.records.len() as f64)
+    }
+
+    pub fn filter_by_category(&self, category: &str) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|record| record.category == category)
+            .collect()
+    }
+
+    pub fn get_record_count(&self) -> usize {
+        self.records.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_data_processing() {
+        let mut processor = DataProcessor::new();
+        
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,name,value,category").unwrap();
+        writeln!(temp_file, "1,ItemA,10.5,Category1").unwrap();
+        writeln!(temp_file, "2,ItemB,20.0,Category2").unwrap();
+        writeln!(temp_file, "3,ItemC,15.75,Category1").unwrap();
+
+        let result = processor.load_from_csv(temp_file.path().to_str().unwrap());
+        assert!(result.is_ok());
+        assert_eq!(processor.get_record_count(), 3);
+
+        let avg = processor.calculate_average().unwrap();
+        assert!((avg - 15.416666666666666).abs() < 0.0001);
+
+        let filtered = processor.filter_by_category("Category1");
+        assert_eq!(filtered.len(), 2);
+
+        let errors = processor.validate_data();
+        assert!(errors.is_empty());
+    }
+}

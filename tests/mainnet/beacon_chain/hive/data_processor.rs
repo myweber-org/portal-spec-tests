@@ -280,3 +280,123 @@ mod tests {
         assert!(std_dev > 8.16 && std_dev < 8.17);
     }
 }
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug)]
+pub enum ProcessingError {
+    InvalidInput(String),
+    TransformationFailed(String),
+    ValidationError(String),
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProcessingError::InvalidInput(msg) => write!(f, "Invalid input: {}", msg),
+            ProcessingError::TransformationFailed(msg) => write!(f, "Transformation failed: {}", msg),
+            ProcessingError::ValidationError(msg) => write!(f, "Validation error: {}", msg),
+        }
+    }
+}
+
+impl Error for ProcessingError {}
+
+pub struct DataProcessor {
+    validation_rules: Vec<Box<dyn Fn(&str) -> Result<(), ProcessingError>>>,
+    transformation_rules: Vec<Box<dyn Fn(String) -> Result<String, ProcessingError>>>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            validation_rules: Vec::new(),
+            transformation_rules: Vec::new(),
+        }
+    }
+
+    pub fn add_validation_rule<F>(&mut self, rule: F)
+    where
+        F: Fn(&str) -> Result<(), ProcessingError> + 'static,
+    {
+        self.validation_rules.push(Box::new(rule));
+    }
+
+    pub fn add_transformation_rule<F>(&mut self, rule: F)
+    where
+        F: Fn(String) -> Result<String, ProcessingError> + 'static,
+    {
+        self.transformation_rules.push(Box::new(rule));
+    }
+
+    pub fn process(&self, input: &str) -> Result<String, ProcessingError> {
+        for rule in &self.validation_rules {
+            rule(input)?;
+        }
+
+        let mut result = input.to_string();
+        for rule in &self.transformation_rules {
+            result = rule(result)?;
+        }
+
+        Ok(result)
+    }
+}
+
+pub fn create_default_processor() -> DataProcessor {
+    let mut processor = DataProcessor::new();
+
+    processor.add_validation_rule(|input| {
+        if input.is_empty() {
+            Err(ProcessingError::InvalidInput("Input cannot be empty".to_string()))
+        } else {
+            Ok(())
+        }
+    });
+
+    processor.add_validation_rule(|input| {
+        if input.len() > 1000 {
+            Err(ProcessingError::InvalidInput("Input too long".to_string()))
+        } else {
+            Ok(())
+        }
+    });
+
+    processor.add_transformation_rule(|input| {
+        Ok(input.trim().to_string())
+    });
+
+    processor.add_transformation_rule(|input| {
+        Ok(input.to_uppercase())
+    });
+
+    processor
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_empty_input() {
+        let processor = create_default_processor();
+        let result = processor.process("");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_valid_processing() {
+        let processor = create_default_processor();
+        let result = processor.process("  hello world  ");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "HELLO WORLD");
+    }
+
+    #[test]
+    fn test_long_input() {
+        let processor = create_default_processor();
+        let long_input = "a".repeat(1001);
+        let result = processor.process(&long_input);
+        assert!(result.is_err());
+    }
+}

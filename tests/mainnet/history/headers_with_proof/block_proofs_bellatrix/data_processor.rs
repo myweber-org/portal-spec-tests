@@ -1,121 +1,40 @@
-
+use csv::Reader;
+use serde::Deserialize;
 use std::error::Error;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
-use std::path::Path;
 
-#[derive(Debug, PartialEq)]
-pub struct Record {
-    pub id: u32,
-    pub name: String,
-    pub value: f64,
-    pub active: bool,
+#[derive(Debug, Deserialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    category: String,
 }
 
-pub struct DataProcessor {
-    records: Vec<Record>,
-}
+pub fn process_csv_data(input_path: &str) -> Result<Vec<Record>, Box<dyn Error>> {
+    let mut reader = Reader::from_path(input_path)?;
+    let mut records = Vec::new();
 
-impl DataProcessor {
-    pub fn new() -> Self {
-        DataProcessor {
-            records: Vec::new(),
+    for result in reader.deserialize() {
+        let record: Record = result?;
+        if record.value >= 0.0 {
+            records.push(record);
         }
     }
 
-    pub fn load_from_csv(&mut self, file_path: &str) -> Result<usize, Box<dyn Error>> {
-        let path = Path::new(file_path);
-        let file = File::open(path)?;
-        let reader = BufReader::new(file);
-        
-        let mut count = 0;
-        for (index, line) in reader.lines().enumerate() {
-            let line = line?;
-            
-            if index == 0 {
-                continue;
-            }
-            
-            let parts: Vec<&str> = line.split(',').collect();
-            if parts.len() != 4 {
-                continue;
-            }
-            
-            let id = parts[0].parse::<u32>()?;
-            let name = parts[1].to_string();
-            let value = parts[2].parse::<f64>()?;
-            let active = parts[3].parse::<bool>()?;
-            
-            let record = Record {
-                id,
-                name,
-                value,
-                active,
-            };
-            
-            self.records.push(record);
-            count += 1;
-        }
-        
-        Ok(count)
-    }
-
-    pub fn filter_active(&self) -> Vec<&Record> {
-        self.records
-            .iter()
-            .filter(|record| record.active)
-            .collect()
-    }
-
-    pub fn calculate_average(&self) -> Option<f64> {
-        if self.records.is_empty() {
-            return None;
-        }
-        
-        let sum: f64 = self.records.iter().map(|r| r.value).sum();
-        Some(sum / self.records.len() as f64)
-    }
-
-    pub fn find_by_id(&self, target_id: u32) -> Option<&Record> {
-        self.records.iter().find(|record| record.id == target_id)
-    }
-
-    pub fn get_records(&self) -> &Vec<Record> {
-        &self.records
-    }
+    Ok(records)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
+pub fn filter_by_category(records: Vec<Record>, category: &str) -> Vec<Record> {
+    records
+        .into_iter()
+        .filter(|r| r.category == category)
+        .collect()
+}
 
-    #[test]
-    fn test_data_processor() {
-        let mut processor = DataProcessor::new();
-        
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "id,name,value,active").unwrap();
-        writeln!(temp_file, "1,ItemA,10.5,true").unwrap();
-        writeln!(temp_file, "2,ItemB,20.0,false").unwrap();
-        writeln!(temp_file, "3,ItemC,15.75,true").unwrap();
-        
-        let result = processor.load_from_csv(temp_file.path().to_str().unwrap());
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), 3);
-        
-        assert_eq!(processor.records.len(), 3);
-        
-        let active_records = processor.filter_active();
-        assert_eq!(active_records.len(), 2);
-        
-        let average = processor.calculate_average();
-        assert!(average.is_some());
-        assert!((average.unwrap() - 15.416666666666666).abs() < 0.0001);
-        
-        let found = processor.find_by_id(2);
-        assert!(found.is_some());
-        assert_eq!(found.unwrap().name, "ItemB");
+pub fn calculate_average(records: &[Record]) -> f64 {
+    if records.is_empty() {
+        return 0.0;
     }
+    let sum: f64 = records.iter().map(|r| r.value).sum();
+    sum / records.len() as f64
 }

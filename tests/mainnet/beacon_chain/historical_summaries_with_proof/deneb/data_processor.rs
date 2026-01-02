@@ -574,3 +574,86 @@ mod tests {
         assert!(!processor.validate_record(&invalid_record));
     }
 }
+use csv::Reader;
+use serde::Deserialize;
+use std::error::Error;
+use std::fs::File;
+
+#[derive(Debug, Deserialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
+}
+
+pub fn process_csv_file(file_path: &str) -> Result<Vec<Record>, Box<dyn Error>> {
+    let file = File::open(file_path)?;
+    let mut reader = Reader::from_reader(file);
+    let mut records = Vec::new();
+
+    for result in reader.deserialize() {
+        let record: Record = result?;
+        if record.value >= 0.0 {
+            records.push(record);
+        }
+    }
+
+    Ok(records)
+}
+
+pub fn calculate_average(records: &[Record]) -> f64 {
+    if records.is_empty() {
+        return 0.0;
+    }
+    
+    let sum: f64 = records.iter().map(|r| r.value).sum();
+    sum / records.len() as f64
+}
+
+pub fn filter_active_records(records: Vec<Record>) -> Vec<Record> {
+    records.into_iter().filter(|r| r.active).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+    use std::io::Write;
+
+    #[test]
+    fn test_process_csv() {
+        let csv_data = "id,name,value,active\n1,Test1,10.5,true\n2,Test2,-5.0,false\n3,Test3,20.0,true";
+        let mut temp_file = NamedTempFile::new().unwrap();
+        write!(temp_file, "{}", csv_data).unwrap();
+        
+        let result = process_csv_file(temp_file.path().to_str().unwrap());
+        assert!(result.is_ok());
+        let records = result.unwrap();
+        assert_eq!(records.len(), 2);
+    }
+
+    #[test]
+    fn test_calculate_average() {
+        let records = vec![
+            Record { id: 1, name: "A".to_string(), value: 10.0, active: true },
+            Record { id: 2, name: "B".to_string(), value: 20.0, active: false },
+            Record { id: 3, name: "C".to_string(), value: 30.0, active: true },
+        ];
+        
+        assert_eq!(calculate_average(&records), 20.0);
+    }
+
+    #[test]
+    fn test_filter_active() {
+        let records = vec![
+            Record { id: 1, name: "A".to_string(), value: 10.0, active: true },
+            Record { id: 2, name: "B".to_string(), value: 20.0, active: false },
+            Record { id: 3, name: "C".to_string(), value: 30.0, active: true },
+        ];
+        
+        let filtered = filter_active_records(records);
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered.iter().all(|r| r.active));
+    }
+}

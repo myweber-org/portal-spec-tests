@@ -1,43 +1,88 @@
 
-use csv::Reader;
-use serde::Deserialize;
 use std::error::Error;
 use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
 
-#[derive(Debug, Deserialize)]
-struct Record {
-    id: u32,
-    name: String,
-    value: f64,
-    active: bool,
+#[derive(Debug, PartialEq)]
+pub struct Record {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub active: bool,
 }
 
-pub fn process_csv_file(file_path: &str) -> Result<Vec<Record>, Box<dyn Error>> {
-    let file = File::open(file_path)?;
-    let mut reader = Reader::from_reader(file);
-    let mut records = Vec::new();
+pub struct DataProcessor {
+    records: Vec<Record>,
+}
 
-    for result in reader.deserialize() {
-        let record: Record = result?;
-        if record.value >= 0.0 {
-            records.push(record);
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
         }
     }
 
-    Ok(records)
-}
-
-pub fn calculate_statistics(records: &[Record]) -> (f64, f64, usize) {
-    let count = records.len();
-    if count == 0 {
-        return (0.0, 0.0, 0);
+    pub fn load_from_csv(&mut self, file_path: &str) -> Result<usize, Box<dyn Error>> {
+        let path = Path::new(file_path);
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        
+        let mut count = 0;
+        for (index, line) in reader.lines().enumerate() {
+            let line = line?;
+            
+            if index == 0 {
+                continue;
+            }
+            
+            let parts: Vec<&str> = line.split(',').collect();
+            if parts.len() != 4 {
+                continue;
+            }
+            
+            let id = parts[0].parse::<u32>()?;
+            let name = parts[1].to_string();
+            let value = parts[2].parse::<f64>()?;
+            let active = parts[3].parse::<bool>()?;
+            
+            let record = Record {
+                id,
+                name,
+                value,
+                active,
+            };
+            
+            self.records.push(record);
+            count += 1;
+        }
+        
+        Ok(count)
     }
 
-    let sum: f64 = records.iter().map(|r| r.value).sum();
-    let average = sum / count as f64;
-    let max_value = records.iter().map(|r| r.value).fold(0.0, f64::max);
+    pub fn filter_active(&self) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|record| record.active)
+            .collect()
+    }
 
-    (average, max_value, count)
+    pub fn calculate_average(&self) -> Option<f64> {
+        if self.records.is_empty() {
+            return None;
+        }
+        
+        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        Some(sum / self.records.len() as f64)
+    }
+
+    pub fn find_by_id(&self, target_id: u32) -> Option<&Record> {
+        self.records.iter().find(|record| record.id == target_id)
+    }
+
+    pub fn get_records(&self) -> &Vec<Record> {
+        &self.records
+    }
 }
 
 #[cfg(test)]
@@ -47,30 +92,30 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_process_valid_csv() {
+    fn test_data_processor() {
+        let mut processor = DataProcessor::new();
+        
         let mut temp_file = NamedTempFile::new().unwrap();
         writeln!(temp_file, "id,name,value,active").unwrap();
         writeln!(temp_file, "1,ItemA,10.5,true").unwrap();
-        writeln!(temp_file, "2,ItemB,-3.2,false").unwrap();
-        writeln!(temp_file, "3,ItemC,7.8,true").unwrap();
-
-        let records = process_csv_file(temp_file.path().to_str().unwrap()).unwrap();
-        assert_eq!(records.len(), 2);
-        assert_eq!(records[0].name, "ItemA");
-        assert_eq!(records[1].name, "ItemC");
-    }
-
-    #[test]
-    fn test_calculate_statistics() {
-        let records = vec![
-            Record { id: 1, name: "Test1".to_string(), value: 5.0, active: true },
-            Record { id: 2, name: "Test2".to_string(), value: 15.0, active: false },
-            Record { id: 3, name: "Test3".to_string(), value: 10.0, active: true },
-        ];
-
-        let (avg, max, count) = calculate_statistics(&records);
-        assert_eq!(avg, 10.0);
-        assert_eq!(max, 15.0);
-        assert_eq!(count, 3);
+        writeln!(temp_file, "2,ItemB,20.0,false").unwrap();
+        writeln!(temp_file, "3,ItemC,15.75,true").unwrap();
+        
+        let result = processor.load_from_csv(temp_file.path().to_str().unwrap());
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 3);
+        
+        assert_eq!(processor.records.len(), 3);
+        
+        let active_records = processor.filter_active();
+        assert_eq!(active_records.len(), 2);
+        
+        let average = processor.calculate_average();
+        assert!(average.is_some());
+        assert!((average.unwrap() - 15.416666666666666).abs() < 0.0001);
+        
+        let found = processor.find_by_id(2);
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().name, "ItemB");
     }
 }

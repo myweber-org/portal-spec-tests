@@ -64,3 +64,54 @@ mod tests {
         assert!(result.get("non_existent").is_none());
     }
 }
+use serde_json::{Value, Map};
+use std::fs;
+use std::path::Path;
+
+pub fn merge_json_files<P: AsRef<Path>>(paths: &[P], output_path: P) -> Result<(), Box<dyn std::error::Error>> {
+    let mut merged_map = Map::new();
+
+    for path in paths {
+        let content = fs::read_to_string(path)?;
+        let json_value: Value = serde_json::from_str(&content)?;
+
+        if let Value::Object(map) = json_value {
+            for (key, value) in map {
+                merge_value(&mut merged_map, key, value);
+            }
+        }
+    }
+
+    let merged_json = Value::Object(merged_map);
+    let serialized = serde_json::to_string_pretty(&merged_json)?;
+    fs::write(output_path, serialized)?;
+
+    Ok(())
+}
+
+fn merge_value(map: &mut Map<String, Value>, key: String, new_value: Value) {
+    match map.get(&key) {
+        Some(existing_value) => {
+            if existing_value.is_object() && new_value.is_object() {
+                let mut existing_obj = existing_value.as_object().unwrap().clone();
+                let new_obj = new_value.as_object().unwrap();
+
+                for (nested_key, nested_value) in new_obj {
+                    merge_value(&mut existing_obj, nested_key.clone(), nested_value.clone());
+                }
+
+                map.insert(key, Value::Object(existing_obj));
+            } else if existing_value.is_array() && new_value.is_array() {
+                let mut existing_arr = existing_value.as_array().unwrap().clone();
+                let new_arr = new_value.as_array().unwrap();
+                existing_arr.extend(new_arr.clone());
+                map.insert(key, Value::Array(existing_arr));
+            } else {
+                map.insert(key, new_value);
+            }
+        }
+        None => {
+            map.insert(key, new_value);
+        }
+    }
+}

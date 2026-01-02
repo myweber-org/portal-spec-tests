@@ -145,3 +145,140 @@ mod tests {
         assert_eq!(stats, (0.0, 0.0, 0));
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+pub struct CsvProcessor {
+    delimiter: char,
+    has_headers: bool,
+}
+
+impl CsvProcessor {
+    pub fn new(delimiter: char, has_headers: bool) -> Self {
+        CsvProcessor {
+            delimiter,
+            has_headers,
+        }
+    }
+
+    pub fn read_file<P: AsRef<Path>>(&self, path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut records = Vec::new();
+        let mut lines = reader.lines();
+
+        if self.has_headers {
+            let _ = lines.next();
+        }
+
+        for line_result in lines {
+            let line = line_result?;
+            let fields: Vec<String> = line
+                .split(self.delimiter)
+                .map(|s| s.trim().to_string())
+                .collect();
+            if !fields.is_empty() {
+                records.push(fields);
+            }
+        }
+
+        Ok(records)
+    }
+
+    pub fn filter_records<F>(&self, records: Vec<Vec<String>>, predicate: F) -> Vec<Vec<String>>
+    where
+        F: Fn(&[String]) -> bool,
+    {
+        records
+            .into_iter()
+            .filter(|record| predicate(record))
+            .collect()
+    }
+
+    pub fn transform_column<F>(
+        &self,
+        records: Vec<Vec<String>>,
+        column_index: usize,
+        transformer: F,
+    ) -> Vec<Vec<String>>
+    where
+        F: Fn(&str) -> String,
+    {
+        records
+            .into_iter()
+            .map(|mut record| {
+                if column_index < record.len() {
+                    record[column_index] = transformer(&record[column_index]);
+                }
+                record
+            })
+            .collect()
+    }
+}
+
+pub fn calculate_column_average(records: &[Vec<String>], column_index: usize) -> Option<f64> {
+    let mut sum = 0.0;
+    let mut count = 0;
+
+    for record in records {
+        if column_index < record.len() {
+            if let Ok(value) = record[column_index].parse::<f64>() {
+                sum += value;
+                count += 1;
+            }
+        }
+    }
+
+    if count > 0 {
+        Some(sum / count as f64)
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_csv_processing() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,city").unwrap();
+        writeln!(temp_file, "Alice,25,New York").unwrap();
+        writeln!(temp_file, "Bob,30,London").unwrap();
+        writeln!(temp_file, "Charlie,35,Paris").unwrap();
+
+        let processor = CsvProcessor::new(',', true);
+        let records = processor.read_file(temp_file.path()).unwrap();
+
+        assert_eq!(records.len(), 3);
+        assert_eq!(records[0], vec!["Alice", "25", "New York"]);
+
+        let filtered = processor.filter_records(records, |record| {
+            record.get(1).and_then(|age| age.parse::<i32>().ok()) > Some(30)
+        });
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0], vec!["Charlie", "35", "Paris"]);
+
+        let transformed = processor.transform_column(filtered, 2, |city| city.to_uppercase());
+        assert_eq!(transformed[0], vec!["Charlie", "35", "PARIS"]);
+    }
+
+    #[test]
+    fn test_average_calculation() {
+        let records = vec![
+            vec!["10.5".to_string(), "20.0".to_string()],
+            vec!["15.5".to_string(), "25.0".to_string()],
+            vec!["12.0".to_string(), "30.0".to_string()],
+        ];
+
+        let avg = calculate_column_average(&records, 0);
+        assert!(avg.is_some());
+        assert!((avg.unwrap() - 12.666).abs() < 0.001);
+    }
+}

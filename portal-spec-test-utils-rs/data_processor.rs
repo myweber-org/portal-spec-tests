@@ -435,4 +435,72 @@ mod tests {
         assert!((variance - 4.0).abs() < 0.001);
         assert!((std_dev - 2.0).abs() < 0.001);
     }
+}use csv::Reader;
+use serde::Deserialize;
+use std::error::Error;
+use std::fs::File;
+
+#[derive(Debug, Deserialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    category: String,
+}
+
+pub fn process_data_file(file_path: &str) -> Result<Vec<Record>, Box<dyn Error>> {
+    let file = File::open(file_path)?;
+    let mut reader = Reader::from_reader(file);
+    let mut records = Vec::new();
+
+    for result in reader.deserialize() {
+        let record: Record = result?;
+        validate_record(&record)?;
+        records.push(record);
+    }
+
+    Ok(records)
+}
+
+fn validate_record(record: &Record) -> Result<(), Box<dyn Error>> {
+    if record.name.is_empty() {
+        return Err("Name cannot be empty".into());
+    }
+    if record.value < 0.0 {
+        return Err("Value must be non-negative".into());
+    }
+    if !["A", "B", "C"].contains(&record.category.as_str()) {
+        return Err("Category must be A, B, or C".into());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_valid_data_processing() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,name,value,category").unwrap();
+        writeln!(temp_file, "1,Test Item,42.5,A").unwrap();
+        writeln!(temp_file, "2,Another Item,100.0,B").unwrap();
+
+        let records = process_data_file(temp_file.path().to_str().unwrap()).unwrap();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].name, "Test Item");
+        assert_eq!(records[1].category, "B");
+    }
+
+    #[test]
+    fn test_invalid_category() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,name,value,category").unwrap();
+        writeln!(temp_file, "1,Invalid,10.0,X").unwrap();
+
+        let result = process_data_file(temp_file.path().to_str().unwrap());
+        assert!(result.is_err());
+    }
 }

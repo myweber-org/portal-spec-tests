@@ -255,4 +255,148 @@ mod tests {
         assert_eq!(config.get("API_KEY"), Some(&"abc123".to_string()));
         assert_eq!(config.get("NONEXISTENT"), None);
     }
+}use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::Path;
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DatabaseConfig {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: String,
+    pub database: String,
+    pub pool_size: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ServerConfig {
+    pub address: String,
+    pub port: u16,
+    pub enable_ssl: bool,
+    pub timeout_seconds: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AppConfig {
+    pub database: DatabaseConfig,
+    pub server: ServerConfig,
+    pub log_level: String,
+    pub cache_ttl: u64,
+}
+
+impl Default for DatabaseConfig {
+    fn default() -> Self {
+        DatabaseConfig {
+            host: "localhost".to_string(),
+            port: 5432,
+            username: "postgres".to_string(),
+            password: "".to_string(),
+            database: "app_db".to_string(),
+            pool_size: 10,
+        }
+    }
+}
+
+impl Default for ServerConfig {
+    fn default() -> Self {
+        ServerConfig {
+            address: "0.0.0.0".to_string(),
+            port: 8080,
+            enable_ssl: false,
+            timeout_seconds: 30,
+        }
+    }
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        AppConfig {
+            database: DatabaseConfig::default(),
+            server: ServerConfig::default(),
+            log_level: "info".to_string(),
+            cache_ttl: 3600,
+        }
+    }
+}
+
+impl AppConfig {
+    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
+        let content = fs::read_to_string(path)?;
+        let config: AppConfig = serde_yaml::from_str(&content)?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    pub fn validate(&self) -> Result<(), Box<dyn std::error::Error>> {
+        if self.database.host.is_empty() {
+            return Err("Database host cannot be empty".into());
+        }
+        
+        if self.database.port == 0 {
+            return Err("Database port must be greater than 0".into());
+        }
+        
+        if self.server.port == 0 {
+            return Err("Server port must be greater than 0".into());
+        }
+        
+        if self.cache_ttl > 86400 {
+            return Err("Cache TTL cannot exceed 24 hours".into());
+        }
+        
+        Ok(())
+    }
+
+    pub fn to_yaml(&self) -> Result<String, Box<dyn std::error::Error>> {
+        let yaml = serde_yaml::to_string(self)?;
+        Ok(yaml)
+    }
+
+    pub fn generate_default_config<P: AsRef<Path>>(path: P) -> Result<(), Box<dyn std::error::Error>> {
+        let default_config = AppConfig::default();
+        let yaml = default_config.to_yaml()?;
+        fs::write(path, yaml)?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_default_config() {
+        let config = AppConfig::default();
+        assert_eq!(config.database.host, "localhost");
+        assert_eq!(config.server.port, 8080);
+        assert_eq!(config.log_level, "info");
+    }
+
+    #[test]
+    fn test_config_validation() {
+        let mut config = AppConfig::default();
+        config.database.host = String::new();
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_config_serialization() {
+        let config = AppConfig::default();
+        let yaml = config.to_yaml().unwrap();
+        assert!(yaml.contains("database:"));
+        assert!(yaml.contains("server:"));
+    }
+
+    #[test]
+    fn test_config_from_file() {
+        let temp_file = NamedTempFile::new().unwrap();
+        let config = AppConfig::default();
+        let yaml = config.to_yaml().unwrap();
+        fs::write(temp_file.path(), yaml).unwrap();
+        
+        let loaded_config = AppConfig::from_file(temp_file.path()).unwrap();
+        assert_eq!(loaded_config.database.host, "localhost");
+    }
 }

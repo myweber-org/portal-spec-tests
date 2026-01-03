@@ -751,3 +751,208 @@ impl ValidationRule {
         }
     }
 }
+use std::collections::HashMap;
+use std::error::Error;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub timestamp: i64,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum ValidationError {
+    InvalidId,
+    InvalidTimestamp,
+    EmptyValues,
+    MetadataTooLarge,
+}
+
+pub struct DataProcessor {
+    max_metadata_size: usize,
+    min_values_count: usize,
+}
+
+impl DataProcessor {
+    pub fn new(max_metadata_size: usize, min_values_count: usize) -> Self {
+        DataProcessor {
+            max_metadata_size,
+            min_values_count,
+        }
+    }
+
+    pub fn validate_record(&self, record: &DataRecord) -> Result<(), ValidationError> {
+        if record.id == 0 {
+            return Err(ValidationError::InvalidId);
+        }
+
+        if record.timestamp <= 0 {
+            return Err(ValidationError::InvalidTimestamp);
+        }
+
+        if record.values.len() < self.min_values_count {
+            return Err(ValidationError::EmptyValues);
+        }
+
+        let total_metadata_size: usize = record.metadata
+            .iter()
+            .map(|(k, v)| k.len() + v.len())
+            .sum();
+
+        if total_metadata_size > self.max_metadata_size {
+            return Err(ValidationError::MetadataTooLarge);
+        }
+
+        Ok(())
+    }
+
+    pub fn transform_values(&self, record: &mut DataRecord, transform_fn: fn(f64) -> f64) {
+        record.values = record.values
+            .iter()
+            .map(|&value| transform_fn(value))
+            .collect();
+    }
+
+    pub fn calculate_statistics(&self, records: &[DataRecord]) -> HashMap<String, f64> {
+        let mut stats = HashMap::new();
+        
+        if records.is_empty() {
+            return stats;
+        }
+
+        let all_values: Vec<f64> = records
+            .iter()
+            .flat_map(|r| r.values.clone())
+            .collect();
+
+        if !all_values.is_empty() {
+            let sum: f64 = all_values.iter().sum();
+            let count = all_values.len() as f64;
+            let mean = sum / count;
+            
+            let variance: f64 = all_values
+                .iter()
+                .map(|&value| (value - mean).powi(2))
+                .sum::<f64>() / count;
+
+            stats.insert("mean".to_string(), mean);
+            stats.insert("variance".to_string(), variance);
+            stats.insert("count".to_string(), count);
+            stats.insert("sum".to_string(), sum);
+            
+            if let Some(min) = all_values.iter().copied().reduce(f64::min) {
+                stats.insert("min".to_string(), min);
+            }
+            
+            if let Some(max) = all_values.iter().copied().reduce(f64::max) {
+                stats.insert("max".to_string(), max);
+            }
+        }
+
+        stats
+    }
+
+    pub fn filter_records<F>(&self, records: Vec<DataRecord>, predicate: F) -> Vec<DataRecord>
+    where
+        F: Fn(&DataRecord) -> bool,
+    {
+        records.into_iter().filter(predicate).collect()
+    }
+}
+
+pub fn normalize_value(value: f64, min: f64, max: f64) -> Result<f64, Box<dyn Error>> {
+    if min >= max {
+        return Err("Invalid range: min must be less than max".into());
+    }
+    
+    if value < min || value > max {
+        return Err("Value out of range".into());
+    }
+    
+    Ok((value - min) / (max - min))
+}
+
+pub fn exponential_transform(x: f64) -> f64 {
+    x.exp()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_test_record() -> DataRecord {
+        let mut metadata = HashMap::new();
+        metadata.insert("source".to_string(), "test".to_string());
+        
+        DataRecord {
+            id: 1,
+            timestamp: 1234567890,
+            values: vec![1.0, 2.0, 3.0, 4.0, 5.0],
+            metadata,
+        }
+    }
+
+    #[test]
+    fn test_validation_success() {
+        let processor = DataProcessor::new(100, 3);
+        let record = create_test_record();
+        assert!(processor.validate_record(&record).is_ok());
+    }
+
+    #[test]
+    fn test_validation_invalid_id() {
+        let processor = DataProcessor::new(100, 3);
+        let mut record = create_test_record();
+        record.id = 0;
+        assert_eq!(processor.validate_record(&record), Err(ValidationError::InvalidId));
+    }
+
+    #[test]
+    fn test_transform_values() {
+        let processor = DataProcessor::new(100, 3);
+        let mut record = create_test_record();
+        
+        processor.transform_values(&mut record, |x| x * 2.0);
+        
+        assert_eq!(record.values, vec![2.0, 4.0, 6.0, 8.0, 10.0]);
+    }
+
+    #[test]
+    fn test_calculate_statistics() {
+        let processor = DataProcessor::new(100, 3);
+        let records = vec![create_test_record()];
+        let stats = processor.calculate_statistics(&records);
+        
+        assert!(stats.contains_key("mean"));
+        assert!(stats.contains_key("variance"));
+        assert_eq!(stats.get("count"), Some(&5.0));
+    }
+
+    #[test]
+    fn test_normalize_value() {
+        let result = normalize_value(5.0, 0.0, 10.0);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 0.5);
+    }
+
+    #[test]
+    fn test_normalize_value_invalid_range() {
+        let result = normalize_value(5.0, 10.0, 0.0);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_filter_records() {
+        let processor = DataProcessor::new(100, 3);
+        let records = vec![create_test_record()];
+        
+        let filtered = processor.filter_records(records, |r| r.id == 1);
+        assert_eq!(filtered.len(), 1);
+        
+        let filtered = processor.filter_records(filtered, |r| r.id == 2);
+        assert_eq!(filtered.len(), 0);
+    }
+}

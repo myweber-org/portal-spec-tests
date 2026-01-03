@@ -74,4 +74,54 @@ mod tests {
         assert_eq!(config.get("PASSWORD"), Some(&"secret123".to_string()));
         assert_eq!(config.get("NORMAL"), Some(&"value".to_string()));
     }
+}use std::collections::HashMap;
+use std::env;
+use regex::Regex;
+
+pub struct Config {
+    values: HashMap<String, String>,
+}
+
+impl Config {
+    pub fn from_file(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let content = std::fs::read_to_string(path)?;
+        Self::from_str(&content)
+    }
+
+    pub fn from_str(content: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let mut values = HashMap::new();
+        let var_regex = Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}").unwrap();
+
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+
+            if let Some((key, mut value)) = line.split_once('=') {
+                let key = key.trim().to_string();
+                value = value.trim();
+
+                for cap in var_regex.captures_iter(value) {
+                    if let Some(var_name) = cap.get(1) {
+                        if let Ok(env_value) = env::var(var_name.as_str()) {
+                            value = value.replace(&cap[0], &env_value);
+                        }
+                    }
+                }
+
+                values.insert(key, value.to_string());
+            }
+        }
+
+        Ok(Config { values })
+    }
+
+    pub fn get(&self, key: &str) -> Option<&String> {
+        self.values.get(key)
+    }
+
+    pub fn get_or_default(&self, key: &str, default: &str) -> String {
+        self.values.get(key).cloned().unwrap_or(default.to_string())
+    }
 }

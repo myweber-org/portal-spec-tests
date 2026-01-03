@@ -169,3 +169,152 @@ mod tests {
         assert_eq!(domain, None);
     }
 }
+use std::collections::HashMap;
+use std::str::FromStr;
+
+#[derive(Debug, PartialEq)]
+pub struct ParsedUrl {
+    pub scheme: String,
+    pub domain: String,
+    pub path: String,
+    pub query_params: HashMap<String, String>,
+    pub fragment: Option<String>,
+}
+
+impl ParsedUrl {
+    pub fn extract_domain_parts(&self) -> Option<(String, String)> {
+        let parts: Vec<&str> = self.domain.split('.').collect();
+        if parts.len() >= 2 {
+            let tld = parts.last().unwrap().to_string();
+            let name = parts[parts.len() - 2].to_string();
+            Some((name, tld))
+        } else {
+            None
+        }
+    }
+
+    pub fn get_query_value(&self, key: &str) -> Option<&String> {
+        self.query_params.get(key)
+    }
+}
+
+#[derive(Debug)]
+pub enum UrlParseError {
+    InvalidFormat,
+    MissingScheme,
+    MissingDomain,
+}
+
+impl FromStr for ParsedUrl {
+    type Err = UrlParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut scheme = String::new();
+        let mut domain = String::new();
+        let mut path = String::new();
+        let mut query_params = HashMap::new();
+        let mut fragment = None;
+
+        let parts: Vec<&str> = s.split("://").collect();
+        if parts.len() != 2 {
+            return Err(UrlParseError::MissingScheme);
+        }
+
+        scheme = parts[0].to_string();
+        let rest = parts[1];
+
+        let fragment_split: Vec<&str> = rest.split('#').collect();
+        let before_fragment = fragment_split[0];
+        if fragment_split.len() > 1 {
+            fragment = Some(fragment_split[1].to_string());
+        }
+
+        let query_split: Vec<&str> = before_fragment.split('?').collect();
+        let path_and_domain = query_split[0];
+        if query_split.len() > 1 {
+            for param in query_split[1].split('&') {
+                let pair: Vec<&str> = param.split('=').collect();
+                if pair.len() == 2 {
+                    query_params.insert(pair[0].to_string(), pair[1].to_string());
+                }
+            }
+        }
+
+        let domain_split: Vec<&str> = path_and_domain.split('/').collect();
+        if domain_split.is_empty() {
+            return Err(UrlParseError::MissingDomain);
+        }
+
+        domain = domain_split[0].to_string();
+        if domain.is_empty() {
+            return Err(UrlParseError::MissingDomain);
+        }
+
+        if domain_split.len() > 1 {
+            path = domain_split[1..].join("/");
+        }
+
+        Ok(ParsedUrl {
+            scheme,
+            domain,
+            path,
+            query_params,
+            fragment,
+        })
+    }
+}
+
+pub fn parse_url(url: &str) -> Result<ParsedUrl, UrlParseError> {
+    ParsedUrl::from_str(url)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_basic_url() {
+        let url = "https://example.com/path/to/resource";
+        let parsed = parse_url(url).unwrap();
+        
+        assert_eq!(parsed.scheme, "https");
+        assert_eq!(parsed.domain, "example.com");
+        assert_eq!(parsed.path, "path/to/resource");
+        assert!(parsed.query_params.is_empty());
+        assert_eq!(parsed.fragment, None);
+    }
+
+    #[test]
+    fn test_parse_url_with_query() {
+        let url = "https://api.service.com/data?page=2&limit=50&sort=desc";
+        let parsed = parse_url(url).unwrap();
+        
+        assert_eq!(parsed.scheme, "https");
+        assert_eq!(parsed.domain, "api.service.com");
+        assert_eq!(parsed.path, "data");
+        assert_eq!(parsed.get_query_value("page"), Some(&"2".to_string()));
+        assert_eq!(parsed.get_query_value("limit"), Some(&"50".to_string()));
+        assert_eq!(parsed.get_query_value("sort"), Some(&"desc".to_string()));
+    }
+
+    #[test]
+    fn test_extract_domain_parts() {
+        let url = "https://subdomain.example.co.uk/path";
+        let parsed = parse_url(url).unwrap();
+        let domain_parts = parsed.extract_domain_parts().unwrap();
+        
+        assert_eq!(domain_parts.0, "co");
+        assert_eq!(domain_parts.1, "uk");
+    }
+
+    #[test]
+    fn test_parse_url_with_fragment() {
+        let url = "https://docs.rs/regex/1.5.4/regex/#syntax";
+        let parsed = parse_url(url).unwrap();
+        
+        assert_eq!(parsed.scheme, "https");
+        assert_eq!(parsed.domain, "docs.rs");
+        assert_eq!(parsed.path, "regex/1.5.4/regex/");
+        assert_eq!(parsed.fragment, Some("syntax".to_string()));
+    }
+}

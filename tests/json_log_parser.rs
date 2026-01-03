@@ -92,4 +92,85 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug, Serialize, Deserialize)]
+struct LogEntry {
+    timestamp: String,
+    level: String,
+    service: String,
+    message: String,
+    metadata: Option<serde_json::Value>,
+}
+
+#[derive(Debug)]
+struct LogParser {
+    file_path: String,
+}
+
+impl LogParser {
+    fn new(file_path: &str) -> Self {
+        LogParser {
+            file_path: file_path.to_string(),
+        }
+    }
+
+    fn parse(&self) -> Result<Vec<LogEntry>, Box<dyn Error>> {
+        let path = Path::new(&self.file_path);
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut entries = Vec::new();
+
+        for line in reader.lines() {
+            let line = line?;
+            if line.trim().is_empty() {
+                continue;
+            }
+
+            match serde_json::from_str::<LogEntry>(&line) {
+                Ok(entry) => entries.push(entry),
+                Err(e) => eprintln!("Failed to parse line: {} - Error: {}", line, e),
+            }
+        }
+
+        Ok(entries)
+    }
+
+    fn filter_by_level(&self, level: &str) -> Result<Vec<LogEntry>, Box<dyn Error>> {
+        let entries = self.parse()?;
+        let filtered: Vec<LogEntry> = entries
+            .into_iter()
+            .filter(|entry| entry.level.to_lowercase() == level.to_lowercase())
+            .collect();
+        Ok(filtered)
+    }
+
+    fn count_entries(&self) -> Result<usize, Box<dyn Error>> {
+        let entries = self.parse()?;
+        Ok(entries.len())
+    }
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let parser = LogParser::new("application.log");
+    
+    match parser.parse() {
+        Ok(entries) => {
+            println!("Total entries parsed: {}", entries.len());
+            
+            if let Ok(error_logs) = parser.filter_by_level("error") {
+                println!("Error entries: {}", error_logs.len());
+                for log in error_logs.iter().take(3) {
+                    println!("  - {}: {}", log.timestamp, log.message);
+                }
+            }
+        }
+        Err(e) => eprintln!("Parser error: {}", e),
+    }
+
+    Ok(())
 }

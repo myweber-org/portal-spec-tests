@@ -571,3 +571,152 @@ mod tests {
         assert_eq!(filtered[0].id, 2);
     }
 }
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProcessedData {
+    pub id: u32,
+    pub value: f64,
+    pub is_valid: bool,
+    pub metadata: String,
+}
+
+#[derive(Debug)]
+pub enum DataError {
+    InvalidValue(f64),
+    EmptyMetadata,
+    ProcessingFailed(String),
+}
+
+impl fmt::Display for DataError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DataError::InvalidValue(v) => write!(f, "Invalid value: {}", v),
+            DataError::EmptyMetadata => write!(f, "Metadata cannot be empty"),
+            DataError::ProcessingFailed(msg) => write!(f, "Processing failed: {}", msg),
+        }
+    }
+}
+
+impl Error for DataError {}
+
+pub struct DataProcessor {
+    threshold: f64,
+    transformation_factor: f64,
+}
+
+impl DataProcessor {
+    pub fn new(threshold: f64, transformation_factor: f64) -> Self {
+        DataProcessor {
+            threshold,
+            transformation_factor,
+        }
+    }
+
+    pub fn validate_value(&self, value: f64) -> Result<f64, DataError> {
+        if value < 0.0 || value > self.threshold {
+            Err(DataError::InvalidValue(value))
+        } else {
+            Ok(value)
+        }
+    }
+
+    pub fn transform_value(&self, value: f64) -> f64 {
+        value * self.transformation_factor
+    }
+
+    pub fn process_data(
+        &self,
+        id: u32,
+        raw_value: f64,
+        metadata: &str,
+    ) -> Result<ProcessedData, DataError> {
+        if metadata.trim().is_empty() {
+            return Err(DataError::EmptyMetadata);
+        }
+
+        let validated_value = self.validate_value(raw_value)?;
+        let transformed_value = self.transform_value(validated_value);
+        let is_valid = transformed_value > 0.0 && transformed_value < 100.0;
+
+        Ok(ProcessedData {
+            id,
+            value: transformed_value,
+            is_valid,
+            metadata: metadata.to_string(),
+        })
+    }
+
+    pub fn batch_process(
+        &self,
+        items: Vec<(u32, f64, String)>,
+    ) -> (Vec<ProcessedData>, Vec<DataError>) {
+        let mut processed = Vec::new();
+        let mut errors = Vec::new();
+
+        for (id, value, metadata) in items {
+            match self.process_data(id, value, &metadata) {
+                Ok(data) => processed.push(data),
+                Err(err) => errors.push(err),
+            }
+        }
+
+        (processed, errors)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validation_success() {
+        let processor = DataProcessor::new(100.0, 2.0);
+        assert!(processor.validate_value(50.0).is_ok());
+    }
+
+    #[test]
+    fn test_validation_failure() {
+        let processor = DataProcessor::new(100.0, 2.0);
+        assert!(processor.validate_value(150.0).is_err());
+    }
+
+    #[test]
+    fn test_transformation() {
+        let processor = DataProcessor::new(100.0, 2.5);
+        assert_eq!(processor.transform_value(10.0), 25.0);
+    }
+
+    #[test]
+    fn test_process_data_success() {
+        let processor = DataProcessor::new(100.0, 1.5);
+        let result = processor.process_data(1, 50.0, "test_metadata");
+        assert!(result.is_ok());
+        let data = result.unwrap();
+        assert_eq!(data.id, 1);
+        assert_eq!(data.value, 75.0);
+        assert_eq!(data.metadata, "test_metadata");
+    }
+
+    #[test]
+    fn test_process_data_empty_metadata() {
+        let processor = DataProcessor::new(100.0, 1.5);
+        let result = processor.process_data(1, 50.0, "");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_batch_processing() {
+        let processor = DataProcessor::new(100.0, 2.0);
+        let items = vec![
+            (1, 10.0, "meta1".to_string()),
+            (2, 150.0, "meta2".to_string()),
+            (3, 30.0, "".to_string()),
+        ];
+
+        let (processed, errors) = processor.batch_process(items);
+        assert_eq!(processed.len(), 1);
+        assert_eq!(errors.len(), 2);
+    }
+}

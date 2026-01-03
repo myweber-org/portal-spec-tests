@@ -427,4 +427,117 @@ mod tests {
         let decrypted_data = fs::read(decrypted_file.path()).unwrap();
         assert_eq!(decrypted_data, test_data);
     }
+}use std::fs;
+use std::io::{self, Read, Write};
+use std::path::Path;
+
+const BUFFER_SIZE: usize = 8192;
+
+pub struct XorCipher {
+    key: Vec<u8>,
+    key_index: usize,
+}
+
+impl XorCipher {
+    pub fn new(key: &str) -> Self {
+        XorCipher {
+            key: key.as_bytes().to_vec(),
+            key_index: 0,
+        }
+    }
+
+    pub fn encrypt_file(&mut self, source_path: &Path, dest_path: &Path) -> io::Result<()> {
+        self.process_file(source_path, dest_path)
+    }
+
+    pub fn decrypt_file(&mut self, source_path: &Path, dest_path: &Path) -> io::Result<()> {
+        self.process_file(source_path, dest_path)
+    }
+
+    fn process_file(&mut self, source_path: &Path, dest_path: &Path) -> io::Result<()> {
+        let mut source_file = fs::File::open(source_path)?;
+        let mut dest_file = fs::File::create(dest_path)?;
+
+        let mut buffer = [0u8; BUFFER_SIZE];
+
+        loop {
+            let bytes_read = source_file.read(&mut buffer)?;
+            if bytes_read == 0 {
+                break;
+            }
+
+            self.xor_buffer(&mut buffer[..bytes_read]);
+            dest_file.write_all(&buffer[..bytes_read])?;
+        }
+
+        dest_file.flush()?;
+        Ok(())
+    }
+
+    fn xor_buffer(&mut self, buffer: &mut [u8]) {
+        for byte in buffer.iter_mut() {
+            *byte ^= self.key[self.key_index];
+            self.key_index = (self.key_index + 1) % self.key.len();
+        }
+    }
+}
+
+pub fn validate_key(key: &str) -> Result<(), &'static str> {
+    if key.is_empty() {
+        return Err("Encryption key cannot be empty");
+    }
+    if key.len() < 8 {
+        return Err("Encryption key must be at least 8 characters");
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_xor_cipher_symmetry() {
+        let original_text = b"Hello, this is a secret message!";
+        let key = "my_strong_password_123";
+        
+        let mut cipher = XorCipher::new(key);
+        let mut encrypted = original_text.to_vec();
+        cipher.xor_buffer(&mut encrypted);
+        
+        let mut cipher2 = XorCipher::new(key);
+        cipher2.xor_buffer(&mut encrypted);
+        
+        assert_eq!(original_text, encrypted.as_slice());
+    }
+
+    #[test]
+    fn test_file_encryption() {
+        let key = "test_encryption_key";
+        let test_data = b"Sample data for encryption test";
+        
+        let mut source_file = NamedTempFile::new().unwrap();
+        source_file.write_all(test_data).unwrap();
+        
+        let dest_file = NamedTempFile::new().unwrap();
+        
+        let mut cipher = XorCipher::new(key);
+        cipher.encrypt_file(source_file.path(), dest_file.path()).unwrap();
+        
+        let mut cipher2 = XorCipher::new(key);
+        let final_file = NamedTempFile::new().unwrap();
+        cipher2.decrypt_file(dest_file.path(), final_file.path()).unwrap();
+        
+        let restored_data = fs::read(final_file.path()).unwrap();
+        assert_eq!(test_data, restored_data.as_slice());
+    }
+
+    #[test]
+    fn test_key_validation() {
+        assert!(validate_key("").is_err());
+        assert!(validate_key("short").is_err());
+        assert!(validate_key("valid_key_123").is_ok());
+    }
 }

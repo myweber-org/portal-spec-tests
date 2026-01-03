@@ -1,142 +1,91 @@
 
+use csv::Reader;
+use serde::Deserialize;
 use std::error::Error;
 use std::fs::File;
-use std::io::{BufRead, BufReader};
-use std::path::Path;
 
-#[derive(Debug)]
-pub struct DataRecord {
-    pub id: u32,
-    pub value: f64,
-    pub category: String,
-    pub valid: bool,
+#[derive(Debug, Deserialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
 }
 
-pub struct DataProcessor {
-    records: Vec<DataRecord>,
+pub fn process_data_file(file_path: &str) -> Result<Vec<Record>, Box<dyn Error>> {
+    let file = File::open(file_path)?;
+    let mut rdr = Reader::from_reader(file);
+    
+    let mut records = Vec::new();
+    for result in rdr.deserialize() {
+        let record: Record = result?;
+        
+        if record.value < 0.0 {
+            return Err(format!("Invalid value for record {}: {}", record.id, record.value).into());
+        }
+        
+        records.push(record);
+    }
+    
+    Ok(records)
 }
 
-impl DataProcessor {
-    pub fn new() -> Self {
-        DataProcessor {
-            records: Vec::new(),
-        }
+pub fn calculate_statistics(records: &[Record]) -> (f64, f64, usize) {
+    let active_records: Vec<&Record> = records.iter()
+        .filter(|r| r.active)
+        .collect();
+    
+    if active_records.is_empty() {
+        return (0.0, 0.0, 0);
     }
-
-    pub fn load_from_csv(&mut self, file_path: &str) -> Result<usize, Box<dyn Error>> {
-        let path = Path::new(file_path);
-        let file = File::open(path)?;
-        let reader = BufReader::new(file);
-        
-        let mut count = 0;
-        for (line_num, line) in reader.lines().enumerate() {
-            let line = line?;
-            
-            if line_num == 0 {
-                continue;
-            }
-            
-            let parts: Vec<&str> = line.split(',').collect();
-            if parts.len() != 4 {
-                continue;
-            }
-            
-            let id = match parts[0].parse::<u32>() {
-                Ok(val) => val,
-                Err(_) => continue,
-            };
-            
-            let value = match parts[1].parse::<f64>() {
-                Ok(val) => val,
-                Err(_) => continue,
-            };
-            
-            let category = parts[2].to_string();
-            let valid = match parts[3].to_lowercase().as_str() {
-                "true" => true,
-                "false" => false,
-                _ => continue,
-            };
-            
-            self.records.push(DataRecord {
-                id,
-                value,
-                category,
-                valid,
-            });
-            
-            count += 1;
-        }
-        
-        Ok(count)
-    }
-
-    pub fn filter_valid(&self) -> Vec<&DataRecord> {
-        self.records
-            .iter()
-            .filter(|record| record.valid)
-            .collect()
-    }
-
-    pub fn calculate_average(&self) -> Option<f64> {
-        let valid_records: Vec<&DataRecord> = self.filter_valid();
-        
-        if valid_records.is_empty() {
-            return None;
-        }
-        
-        let sum: f64 = valid_records.iter().map(|r| r.value).sum();
-        Some(sum / valid_records.len() as f64)
-    }
-
-    pub fn group_by_category(&self) -> std::collections::HashMap<String, Vec<&DataRecord>> {
-        let mut groups = std::collections::HashMap::new();
-        
-        for record in &self.records {
-            groups
-                .entry(record.category.clone())
-                .or_insert_with(Vec::new)
-                .push(record);
-        }
-        
-        groups
-    }
-
-    pub fn count_records(&self) -> usize {
-        self.records.len()
-    }
+    
+    let sum: f64 = active_records.iter()
+        .map(|r| r.value)
+        .sum();
+    
+    let count = active_records.len();
+    let average = sum / count as f64;
+    
+    let variance: f64 = active_records.iter()
+        .map(|r| (r.value - average).powi(2))
+        .sum::<f64>() / count as f64;
+    
+    (average, variance.sqrt(), count)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
     use tempfile::NamedTempFile;
-
+    use std::io::Write;
+    
     #[test]
-    fn test_data_processor() {
-        let mut processor = DataProcessor::new();
+    fn test_valid_data_processing() {
+        let data = "id,name,value,active\n1,Test1,10.5,true\n2,Test2,20.0,false\n3,Test3,15.75,true\n";
         
         let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "id,value,category,valid").unwrap();
-        writeln!(temp_file, "1,10.5,category_a,true").unwrap();
-        writeln!(temp_file, "2,20.3,category_b,false").unwrap();
-        writeln!(temp_file, "3,15.7,category_a,true").unwrap();
+        write!(temp_file, "{}", data).unwrap();
         
-        let result = processor.load_from_csv(temp_file.path().to_str().unwrap());
+        let result = process_data_file(temp_file.path().to_str().unwrap());
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), 3);
-        assert_eq!(processor.count_records(), 3);
         
-        let valid_records = processor.filter_valid();
-        assert_eq!(valid_records.len(), 2);
+        let records = result.unwrap();
+        assert_eq!(records.len(), 3);
         
-        let average = processor.calculate_average();
-        assert!(average.is_some());
-        assert!((average.unwrap() - 13.1).abs() < 0.001);
+        let (avg, std_dev, count) = calculate_statistics(&records);
+        assert_eq!(count, 2);
+        assert!((avg - 13.125).abs() < 0.001);
+        assert!((std_dev - 2.625).abs() < 0.001);
+    }
+    
+    #[test]
+    fn test_invalid_negative_value() {
+        let data = "id,name,value,active\n1,Test1,-10.5,true\n";
         
-        let groups = processor.group_by_category();
-        assert_eq!(groups.get("category_a").unwrap().len(), 2);
-        assert_eq!(groups.get("category_b").unwrap().len(), 1);
+        let mut temp_file = NamedTempFile::new().unwrap();
+        write!(temp_file, "{}", data).unwrap();
+        
+        let result = process_data_file(temp_file.path().to_str().unwrap());
+        assert!(result.is_err());
     }
 }

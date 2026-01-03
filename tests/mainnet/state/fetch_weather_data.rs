@@ -38,4 +38,53 @@ pub fn extract_weather_description(weather_data: &Value) -> Option<String> {
         .get("description")?
         .as_str()
         .map(|s| s.to_string())
+}use reqwest;
+use serde::Deserialize;
+use std::error::Error;
+
+#[derive(Debug, Deserialize)]
+struct WeatherResponse {
+    main: MainData,
+    name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct MainData {
+    temp: f64,
+    humidity: u8,
+}
+
+pub async fn get_weather(api_key: &str, city: &str) -> Result<WeatherResponse, Box<dyn Error>> {
+    let url = format!(
+        "https://api.openweathermap.org/data/2.5/weather?q={}&appid={}&units=metric",
+        city, api_key
+    );
+    
+    let response = reqwest::get(&url).await?;
+    
+    if !response.status().is_success() {
+        return Err(format!("API request failed with status: {}", response.status()).into());
+    }
+    
+    let weather_data: WeatherResponse = response.json().await?;
+    Ok(weather_data)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mockito;
+
+    #[tokio::test]
+    async fn test_weather_fetch_success() {
+        let mut server = mockito::Server::new();
+        let mock = server.mock("GET", "/data/2.5/weather")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"name":"London","main":{"temp":15.5,"humidity":65}}"#)
+            .create();
+
+        let _weather = get_weather("test_key", "London").await.unwrap();
+        mock.assert();
+    }
 }

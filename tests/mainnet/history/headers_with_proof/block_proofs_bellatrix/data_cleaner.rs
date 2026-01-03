@@ -1,60 +1,52 @@
-use csv::{ReaderBuilder, WriterBuilder};
-use serde::{Deserialize, Serialize};
-use std::error::Error;
-use std::fs::File;
-use std::path::Path;
 
-#[derive(Debug, Deserialize, Serialize)]
-struct CleanRecord {
-    id: u32,
-    name: String,
-    value: f64,
-    category: String,
+use std::collections::HashSet;
+
+pub struct DataCleaner {
+    entries: Vec<String>,
 }
 
-fn clean_csv_data(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
-    let input_file = File::open(Path::new(input_path))?;
-    let mut reader = ReaderBuilder::new()
-        .has_headers(true)
-        .flexible(true)
-        .from_reader(input_file);
-
-    let output_file = File::create(Path::new(output_path))?;
-    let mut writer = WriterBuilder::new()
-        .has_headers(true)
-        .from_writer(output_file);
-
-    for result in reader.deserialize() {
-        let record: CleanRecord = match result {
-            Ok(r) => r,
-            Err(e) => {
-                eprintln!("Skipping invalid record: {}", e);
-                continue;
-            }
-        };
-
-        let cleaned_record = CleanRecord {
-            id: record.id,
-            name: record.name.trim().to_string(),
-            value: if record.value.is_nan() { 0.0 } else { record.value },
-            category: record.category.to_uppercase(),
-        };
-
-        writer.serialize(cleaned_record)?;
+impl DataCleaner {
+    pub fn new() -> Self {
+        DataCleaner {
+            entries: Vec::new(),
+        }
     }
 
-    writer.flush()?;
-    Ok(())
+    pub fn add_entry(&mut self, entry: &str) {
+        self.entries.push(entry.to_string());
+    }
+
+    pub fn clean(&mut self) -> Vec<String> {
+        let unique_set: HashSet<String> = self.entries.drain(..).collect();
+        let mut unique_vec: Vec<String> = unique_set.into_iter().collect();
+        unique_vec.sort();
+        unique_vec
+    }
+
+    pub fn process_raw_data(raw_data: &[&str]) -> Vec<String> {
+        let mut cleaner = DataCleaner::new();
+        for entry in raw_data {
+            cleaner.add_entry(entry);
+        }
+        cleaner.clean()
+    }
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
-    let input = "raw_data.csv";
-    let output = "cleaned_data.csv";
-    
-    match clean_csv_data(input, output) {
-        Ok(_) => println!("Data cleaning completed successfully"),
-        Err(e) => eprintln!("Error during data cleaning: {}", e),
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cleaner_removes_duplicates() {
+        let raw_data = vec!["apple", "banana", "apple", "cherry", "banana"];
+        let cleaned = DataCleaner::process_raw_data(&raw_data);
+        assert_eq!(cleaned, vec!["apple", "banana", "cherry"]);
     }
-    
-    Ok(())
+
+    #[test]
+    fn test_cleaner_sorts_entries() {
+        let raw_data = vec!["zebra", "apple", "mango"];
+        let cleaned = DataCleaner::process_raw_data(&raw_data);
+        assert_eq!(cleaned, vec!["apple", "mango", "zebra"]);
+    }
 }

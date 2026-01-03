@@ -78,3 +78,52 @@ mod tests {
         assert_eq!(record.get("city").unwrap(), "new york");
     }
 }
+use csv::{Reader, Writer};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::io;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
+}
+
+fn is_valid_record(record: &Record) -> bool {
+    !record.name.is_empty() && record.value >= 0.0
+}
+
+fn clean_data<R: io::Read, W: io::Write>(
+    input: R,
+    output: W,
+) -> Result<usize, Box<dyn Error>> {
+    let mut reader = Reader::from_reader(input);
+    let mut writer = Writer::from_writer(output);
+    let mut valid_count = 0;
+
+    for result in reader.deserialize() {
+        let record: Record = result?;
+        if is_valid_record(&record) {
+            writer.serialize(&record)?;
+            valid_count += 1;
+        }
+    }
+
+    writer.flush()?;
+    Ok(valid_count)
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let input_data = b"id,name,value,active\n1,Alice,42.5,true\n2,, -1.0,false\n3,Bob,0.0,true";
+    let mut output = Vec::new();
+
+    let valid_records = clean_data(&input_data[..], &mut output)?;
+    println!("Processed {} valid records", valid_records);
+
+    let output_str = String::from_utf8(output)?;
+    println!("Cleaned data:\n{}", output_str);
+
+    Ok(())
+}

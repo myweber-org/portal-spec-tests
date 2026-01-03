@@ -632,4 +632,76 @@ fn main() -> io::Result<()> {
             std::process::exit(1);
         }
     }
+}use std::fs;
+use std::io::{self, Read, Write};
+
+pub struct XorCipher {
+    key: Vec<u8>,
+}
+
+impl XorCipher {
+    pub fn new(key: &str) -> Self {
+        XorCipher {
+            key: key.as_bytes().to_vec(),
+        }
+    }
+
+    pub fn encrypt_file(&self, input_path: &str, output_path: &str) -> io::Result<()> {
+        let mut input_file = fs::File::open(input_path)?;
+        let mut buffer = Vec::new();
+        input_file.read_to_end(&mut buffer)?;
+
+        let encrypted_data = self.xor_transform(&buffer);
+
+        let mut output_file = fs::File::create(output_path)?;
+        output_file.write_all(&encrypted_data)?;
+
+        Ok(())
+    }
+
+    pub fn decrypt_file(&self, input_path: &str, output_path: &str) -> io::Result<()> {
+        self.encrypt_file(input_path, output_path)
+    }
+
+    fn xor_transform(&self, data: &[u8]) -> Vec<u8> {
+        let key_len = self.key.len();
+        data.iter()
+            .enumerate()
+            .map(|(i, &byte)| byte ^ self.key[i % key_len])
+            .collect()
+    }
+}
+
+pub fn process_files() -> Result<(), Box<dyn std::error::Error>> {
+    let cipher = XorCipher::new("secure_key_123");
+    
+    let test_data = b"Hello, this is a secret message!";
+    let encrypted = cipher.xor_transform(test_data);
+    println!("Encrypted bytes: {:?}", &encrypted[..10]);
+    
+    let decrypted = cipher.xor_transform(&encrypted);
+    println!("Decrypted text: {}", String::from_utf8(decrypted)?);
+    
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_xor_symmetry() {
+        let cipher = XorCipher::new("test_key");
+        let original = b"Test data for encryption";
+        let encrypted = cipher.xor_transform(original);
+        let decrypted = cipher.xor_transform(&encrypted);
+        assert_eq!(original.to_vec(), decrypted);
+    }
+
+    #[test]
+    fn test_empty_data() {
+        let cipher = XorCipher::new("key");
+        let result = cipher.xor_transform(b"");
+        assert!(result.is_empty());
+    }
 }

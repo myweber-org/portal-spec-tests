@@ -604,3 +604,122 @@ mod tests {
         assert_eq!(original_content.to_vec(), decrypted_content);
     }
 }
+use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce
+};
+use pbkdf2::{
+    password_hash::{
+        rand_core::RngCore,
+        PasswordHasher, SaltString
+    },
+    Pbkdf2
+};
+use std::fs;
+use std::io::{self, Write};
+
+const SALT_LENGTH: usize = 16;
+const NONCE_LENGTH: usize = 12;
+
+pub struct FileEncryptor {
+    cipher: Aes256Gcm,
+}
+
+impl FileEncryptor {
+    pub fn new(password: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let salt = SaltString::generate(&mut OsRng);
+        let password_hash = Pbkdf2.hash_password(password.as_bytes(), &salt)?;
+        let key_material = password_hash.hash.ok_or("Hash generation failed")?;
+        
+        let mut key_bytes = [0u8; 32];
+        key_bytes.copy_from_slice(&key_material.as_bytes()[..32]);
+        let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
+        
+        Ok(Self {
+            cipher: Aes256Gcm::new(key),
+        })
+    }
+    
+    pub fn encrypt_file(&self, input_path: &str, output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let plaintext = fs::read(input_path)?;
+        
+        let mut nonce_bytes = [0u8; NONCE_LENGTH];
+        OsRng.fill_bytes(&mut nonce_bytes);
+        let nonce = Nonce::from_slice(&nonce_bytes);
+        
+        let ciphertext = self.cipher.encrypt(nonce, plaintext.as_ref())
+            .map_err(|e| format!("Encryption failed: {}", e))?;
+        
+        let mut output_data = Vec::with_capacity(NONCE_LENGTH + ciphertext.len());
+        output_data.extend_from_slice(&nonce_bytes);
+        output_data.extend_from_slice(&ciphertext);
+        
+        fs::write(output_path, output_data)?;
+        Ok(())
+    }
+    
+    pub fn decrypt_file(&self, input_path: &str, output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let encrypted_data = fs::read(input_path)?;
+        
+        if encrypted_data.len() < NONCE_LENGTH {
+            return Err("Invalid encrypted file format".into());
+        }
+        
+        let nonce = Nonce::from_slice(&encrypted_data[..NONCE_LENGTH]);
+        let ciphertext = &encrypted_data[NONCE_LENGTH..];
+        
+        let plaintext = self.cipher.decrypt(nonce, ciphertext)
+            .map_err(|e| format!("Decryption failed: {}", e))?;
+        
+        fs::write(output_path, plaintext)?;
+        Ok(())
+    }
+}
+
+pub fn process_encryption() -> Result<(), Box<dyn std::error::Error>> {
+    print!("Enter password: ");
+    io::stdout().flush()?;
+    
+    let mut password = String::new();
+    io::stdin().read_line(&mut password)?;
+    let password = password.trim();
+    
+    let encryptor = FileEncryptor::new(password)?;
+    
+    println!("Select operation:");
+    println!("1. Encrypt file");
+    println!("2. Decrypt file");
+    
+    let mut choice = String::new();
+    io::stdin().read_line(&mut choice)?;
+    
+    match choice.trim() {
+        "1" => {
+            println!("Enter input file path:");
+            let mut input = String::new();
+            io::stdin().read_line(&mut input)?;
+            
+            println!("Enter output file path:");
+            let mut output = String::new();
+            io::stdin().read_line(&mut output)?;
+            
+            encryptor.encrypt_file(input.trim(), output.trim())?;
+            println!("File encrypted successfully");
+        }
+        "2" => {
+            println!("Enter input file path:");
+            let mut input = String::new();
+            io::stdin().read_line(&mut input)?;
+            
+            println!("Enter output file path:");
+            let mut output = String::new();
+            io::stdin().read_line(&mut output)?;
+            
+            encryptor.decrypt_file(input.trim(), output.trim())?;
+            println!("File decrypted successfully");
+        }
+        _ => println!("Invalid selection"),
+    }
+    
+    Ok(())
+}

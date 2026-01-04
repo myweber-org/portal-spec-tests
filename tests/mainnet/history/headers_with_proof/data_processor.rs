@@ -272,3 +272,207 @@ mod tests {
         assert_eq!(average, Some(20.0));
     }
 }
+use csv::{ReaderBuilder, WriterBuilder};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::path::Path;
+
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
+pub struct Record {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub active: bool,
+}
+
+pub struct DataProcessor {
+    records: Vec<Record>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn Error>> {
+        let mut reader = ReaderBuilder::new()
+            .has_headers(true)
+            .from_path(path)?;
+
+        for result in reader.deserialize() {
+            let record: Record = result?;
+            self.records.push(record);
+        }
+
+        Ok(())
+    }
+
+    pub fn save_to_csv<P: AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn Error>> {
+        let mut writer = WriterBuilder::new()
+            .has_headers(true)
+            .from_path(path)?;
+
+        for record in &self.records {
+            writer.serialize(record)?;
+        }
+
+        writer.flush()?;
+        Ok(())
+    }
+
+    pub fn add_record(&mut self, record: Record) {
+        self.records.push(record);
+    }
+
+    pub fn filter_active(&self) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|record| record.active)
+            .collect()
+    }
+
+    pub fn calculate_total(&self) -> f64 {
+        self.records
+            .iter()
+            .map(|record| record.value)
+            .sum()
+    }
+
+    pub fn find_by_id(&self, id: u32) -> Option<&Record> {
+        self.records
+            .iter()
+            .find(|record| record.id == id)
+    }
+
+    pub fn validate_records(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+
+        for (index, record) in self.records.iter().enumerate() {
+            if record.name.trim().is_empty() {
+                errors.push(format!("Record {}: Name cannot be empty", index));
+            }
+
+            if record.value < 0.0 {
+                errors.push(format!("Record {}: Value cannot be negative", index));
+            }
+        }
+
+        errors
+    }
+
+    pub fn clear(&mut self) {
+        self.records.clear();
+    }
+
+    pub fn count(&self) -> usize {
+        self.records.len()
+    }
+}
+
+impl Default for DataProcessor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_add_and_count() {
+        let mut processor = DataProcessor::new();
+        assert_eq!(processor.count(), 0);
+
+        let record = Record {
+            id: 1,
+            name: "Test".to_string(),
+            value: 100.0,
+            active: true,
+        };
+
+        processor.add_record(record);
+        assert_eq!(processor.count(), 1);
+    }
+
+    #[test]
+    fn test_filter_active() {
+        let mut processor = DataProcessor::new();
+
+        processor.add_record(Record {
+            id: 1,
+            name: "Active".to_string(),
+            value: 50.0,
+            active: true,
+        });
+
+        processor.add_record(Record {
+            id: 2,
+            name: "Inactive".to_string(),
+            value: 30.0,
+            active: false,
+        });
+
+        let active = processor.filter_active();
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].name, "Active");
+    }
+
+    #[test]
+    fn test_calculate_total() {
+        let mut processor = DataProcessor::new();
+
+        processor.add_record(Record {
+            id: 1,
+            name: "Item1".to_string(),
+            value: 25.5,
+            active: true,
+        });
+
+        processor.add_record(Record {
+            id: 2,
+            name: "Item2".to_string(),
+            value: 34.5,
+            active: true,
+        });
+
+        assert_eq!(processor.calculate_total(), 60.0);
+    }
+
+    #[test]
+    fn test_csv_roundtrip() {
+        let mut processor = DataProcessor::new();
+
+        let test_records = vec![
+            Record {
+                id: 1,
+                name: "First".to_string(),
+                value: 10.0,
+                active: true,
+            },
+            Record {
+                id: 2,
+                name: "Second".to_string(),
+                value: 20.0,
+                active: false,
+            },
+        ];
+
+        for record in test_records {
+            processor.add_record(record);
+        }
+
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.path();
+
+        processor.save_to_csv(path).unwrap();
+
+        let mut new_processor = DataProcessor::new();
+        new_processor.load_from_csv(path).unwrap();
+
+        assert_eq!(processor.count(), new_processor.count());
+    }
+}

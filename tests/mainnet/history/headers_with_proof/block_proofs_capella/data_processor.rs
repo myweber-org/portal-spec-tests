@@ -1,97 +1,143 @@
-
-use csv::Reader;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::error::Error;
-use std::fs::File;
+use std::fmt;
 
-#[derive(Debug, Deserialize)]
-struct Record {
-    id: u32,
-    value: f64,
-    category: String,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataRecord {
+    pub id: u64,
+    pub timestamp: i64,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
 }
 
+#[derive(Debug)]
+pub enum ProcessingError {
+    InvalidData(String),
+    TransformationFailed(String),
+    ValidationError(String),
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProcessingError::InvalidData(msg) => write!(f, "Invalid data: {}", msg),
+            ProcessingError::TransformationFailed(msg) => write!(f, "Transformation failed: {}", msg),
+            ProcessingError::ValidationError(msg) => write!(f, "Validation error: {}", msg),
+        }
+    }
+}
+
+impl Error for ProcessingError {}
+
 pub struct DataProcessor {
-    records: Vec<Record>,
+    validation_rules: Vec<Box<dyn Fn(&DataRecord) -> Result<(), ProcessingError>>>,
+    transformation_pipeline: Vec<Box<dyn Fn(DataRecord) -> Result<DataRecord, ProcessingError>>>,
 }
 
 impl DataProcessor {
     pub fn new() -> Self {
         DataProcessor {
-            records: Vec::new(),
+            validation_rules: Vec::new(),
+            transformation_pipeline: Vec::new(),
         }
     }
 
-    pub fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
-        let file = File::open(file_path)?;
-        let mut rdr = Reader::from_reader(file);
-        
-        for result in rdr.deserialize() {
-            let record: Record = result?;
-            self.records.push(record);
+    pub fn add_validation_rule<F>(&mut self, rule: F)
+    where
+        F: Fn(&DataRecord) -> Result<(), ProcessingError> + 'static,
+    {
+        self.validation_rules.push(Box::new(rule));
+    }
+
+    pub fn add_transformation<F>(&mut self, transform: F)
+    where
+        F: Fn(DataRecord) -> Result<DataRecord, ProcessingError> + 'static,
+    {
+        self.transformation_pipeline.push(Box::new(transform));
+    }
+
+    pub fn process(&self, mut record: DataRecord) -> Result<DataRecord, ProcessingError> {
+        for rule in &self.validation_rules {
+            rule(&record)?;
         }
-        
+
+        for transform in &self.transformation_pipeline {
+            record = transform(record)?;
+        }
+
+        Ok(record)
+    }
+
+    pub fn batch_process(&self, records: Vec<DataRecord>) -> Vec<Result<DataRecord, ProcessingError>> {
+        records.into_iter().map(|record| self.process(record)).collect()
+    }
+}
+
+pub fn create_default_processor() -> DataProcessor {
+    let mut processor = DataProcessor::new();
+
+    processor.add_validation_rule(|record| {
+        if record.values.is_empty() {
+            return Err(ProcessingError::ValidationError("Empty values array".to_string()));
+        }
+        if record.timestamp < 0 {
+            return Err(ProcessingError::ValidationError("Invalid timestamp".to_string()));
+        }
         Ok(())
-    }
+    });
 
-    pub fn calculate_statistics(&self) -> (f64, f64, f64) {
-        let values: Vec<f64> = self.records.iter().map(|r| r.value).collect();
-        
-        if values.is_empty() {
-            return (0.0, 0.0, 0.0);
-        }
+    processor.add_transformation(|mut record| {
+        let sum: f64 = record.values.iter().sum();
+        let avg = sum / record.values.len() as f64;
+        record.metadata.insert("average".to_string(), avg.to_string());
+        Ok(record)
+    });
 
-        let sum: f64 = values.iter().sum();
-        let count = values.len() as f64;
-        let mean = sum / count;
+    processor.add_transformation(|mut record| {
+        record.values = record.values.into_iter().map(|v| v * 2.0).collect();
+        Ok(record)
+    });
 
-        let variance: f64 = values.iter()
-            .map(|&v| (v - mean).powi(2))
-            .sum::<f64>() / count;
-
-        let std_dev = variance.sqrt();
-
-        (mean, variance, std_dev)
-    }
-
-    pub fn filter_by_category(&self, category: &str) -> Vec<&Record> {
-        self.records
-            .iter()
-            .filter(|r| r.category == category)
-            .collect()
-    }
-
-    pub fn get_record_count(&self) -> usize {
-        self.records.len()
-    }
+    processor
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_data_processor() {
-        let mut processor = DataProcessor::new();
-        
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "id,value,category").unwrap();
-        writeln!(temp_file, "1,10.5,category_a").unwrap();
-        writeln!(temp_file, "2,20.3,category_b").unwrap();
-        writeln!(temp_file, "3,15.7,category_a").unwrap();
-        
-        let result = processor.load_from_csv(temp_file.path().to_str().unwrap());
+    fn test_data_processing() {
+        let processor = create_default_processor();
+        let mut metadata = HashMap::new();
+        metadata.insert("source".to_string(), "test".to_string());
+
+        let record = DataRecord {
+            id: 1,
+            timestamp: 1625097600,
+            values: vec![1.0, 2.0, 3.0],
+            metadata,
+        };
+
+        let result = processor.process(record);
         assert!(result.is_ok());
-        assert_eq!(processor.get_record_count(), 3);
-        
-        let filtered = processor.filter_by_category("category_a");
-        assert_eq!(filtered.len(), 2);
-        
-        let (mean, variance, std_dev) = processor.calculate_statistics();
-        assert!((mean - 15.5).abs() < 0.1);
-        assert!(variance > 0.0);
-        assert!(std_dev > 0.0);
+
+        let processed = result.unwrap();
+        assert_eq!(processed.values, vec![2.0, 4.0, 6.0]);
+        assert!(processed.metadata.contains_key("average"));
+    }
+
+    #[test]
+    fn test_validation_failure() {
+        let processor = create_default_processor();
+        let record = DataRecord {
+            id: 2,
+            timestamp: -1,
+            values: vec![1.0, 2.0],
+            metadata: HashMap::new(),
+        };
+
+        let result = processor.process(record);
+        assert!(result.is_err());
     }
 }

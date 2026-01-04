@@ -696,4 +696,170 @@ mod tests {
 
         assert_eq!(test_data.to_vec(), decrypted_data);
     }
+}use aes::Aes256;
+use block_modes::{BlockMode, Cbc};
+use block_modes::block_padding::Pkcs7;
+use rand::RngCore;
+use sha2::{Sha256, Digest};
+use std::fs::{self, File};
+use std::io::{Read, Write};
+use std::path::Path;
+
+type Aes256Cbc = Cbc<Aes256, Pkcs7>;
+
+const SALT_LENGTH: usize = 16;
+const IV_LENGTH: usize = 16;
+const KEY_LENGTH: usize = 32;
+
+pub struct FileEncryptor {
+    password: String,
+}
+
+impl FileEncryptor {
+    pub fn new(password: &str) -> Self {
+        Self {
+            password: password.to_string(),
+        }
+    }
+
+    fn derive_key(&self, salt: &[u8]) -> [u8; KEY_LENGTH] {
+        let mut hasher = Sha256::new();
+        hasher.update(self.password.as_bytes());
+        hasher.update(salt);
+        let result = hasher.finalize();
+        let mut key = [0u8; KEY_LENGTH];
+        key.copy_from_slice(&result[..KEY_LENGTH]);
+        key
+    }
+
+    pub fn encrypt_file(&self, input_path: &Path, output_path: &Path) -> Result<(), String> {
+        let mut input_file = File::open(input_path)
+            .map_err(|e| format!("Failed to open input file: {}", e))?;
+        
+        let mut plaintext = Vec::new();
+        input_file.read_to_end(&mut plaintext)
+            .map_err(|e| format!("Failed to read input file: {}", e))?;
+
+        let mut salt = [0u8; SALT_LENGTH];
+        let mut iv = [0u8; IV_LENGTH];
+        rand::thread_rng().fill_bytes(&mut salt);
+        rand::thread_rng().fill_bytes(&mut iv);
+
+        let key = self.derive_key(&salt);
+        let cipher = Aes256Cbc::new_from_slices(&key, &iv)
+            .map_err(|e| format!("Failed to create cipher: {}", e))?;
+
+        let ciphertext = cipher.encrypt_vec(&plaintext);
+
+        let mut output_file = File::create(output_path)
+            .map_err(|e| format!("Failed to create output file: {}", e))?;
+
+        output_file.write_all(&salt)
+            .map_err(|e| format!("Failed to write salt: {}", e))?;
+        output_file.write_all(&iv)
+            .map_err(|e| format!("Failed to write IV: {}", e))?;
+        output_file.write_all(&ciphertext)
+            .map_err(|e| format!("Failed to write ciphertext: {}", e))?;
+
+        Ok(())
+    }
+
+    pub fn decrypt_file(&self, input_path: &Path, output_path: &Path) -> Result<(), String> {
+        let mut input_file = File::open(input_path)
+            .map_err(|e| format!("Failed to open input file: {}", e))?;
+
+        let mut encrypted_data = Vec::new();
+        input_file.read_to_end(&mut encrypted_data)
+            .map_err(|e| format!("Failed to read encrypted file: {}", e))?;
+
+        if encrypted_data.len() < SALT_LENGTH + IV_LENGTH {
+            return Err("File too short to contain salt and IV".to_string());
+        }
+
+        let salt = &encrypted_data[..SALT_LENGTH];
+        let iv = &encrypted_data[SALT_LENGTH..SALT_LENGTH + IV_LENGTH];
+        let ciphertext = &encrypted_data[SALT_LENGTH + IV_LENGTH..];
+
+        let key = self.derive_key(salt);
+        let cipher = Aes256Cbc::new_from_slices(&key, iv)
+            .map_err(|e| format!("Failed to create cipher: {}", e))?;
+
+        let plaintext = cipher.decrypt_vec(ciphertext)
+            .map_err(|e| format!("Decryption failed: {}", e))?;
+
+        let mut output_file = File::create(output_path)
+            .map_err(|e| format!("Failed to create output file: {}", e))?;
+        output_file.write_all(&plaintext)
+            .map_err(|e| format!("Failed to write decrypted data: {}", e))?;
+
+        Ok(())
+    }
+
+    pub fn encrypt_directory(&self, dir_path: &Path, output_dir: &Path) -> Result<(), String> {
+        if !dir_path.is_dir() {
+            return Err("Provided path is not a directory".to_string());
+        }
+
+        fs::create_dir_all(output_dir)
+            .map_err(|e| format!("Failed to create output directory: {}", e))?;
+
+        for entry in fs::read_dir(dir_path)
+            .map_err(|e| format!("Failed to read directory: {}", e))? 
+        {
+            let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
+            let path = entry.path();
+            
+            if path.is_file() {
+                let output_path = output_dir.join(path.file_name().unwrap());
+                self.encrypt_file(&path, &output_path)?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_encrypt_decrypt() {
+        let encryptor = FileEncryptor::new("test_password");
+        let test_data = b"Hello, this is a secret message!";
+        
+        let mut input_file = NamedTempFile::new().unwrap();
+        input_file.write_all(test_data).unwrap();
+        
+        let encrypted_file = NamedTempFile::new().unwrap();
+        let decrypted_file = NamedTempFile::new().unwrap();
+
+        encryptor.encrypt_file(input_file.path(), encrypted_file.path()).unwrap();
+        encryptor.decrypt_file(encrypted_file.path(), decrypted_file.path()).unwrap();
+
+        let mut decrypted_data = Vec::new();
+        File::open(decrypted_file.path()).unwrap()
+            .read_to_end(&mut decrypted_data).unwrap();
+
+        assert_eq!(test_data.to_vec(), decrypted_data);
+    }
+
+    #[test]
+    fn test_wrong_password() {
+        let encryptor = FileEncryptor::new("correct_password");
+        let test_data = b"Test data";
+        
+        let input_file = NamedTempFile::new().unwrap();
+        fs::write(input_file.path(), test_data).unwrap();
+        
+        let encrypted_file = NamedTempFile::new().unwrap();
+        encryptor.encrypt_file(input_file.path(), encrypted_file.path()).unwrap();
+
+        let wrong_encryptor = FileEncryptor::new("wrong_password");
+        let decrypted_file = NamedTempFile::new().unwrap();
+        
+        let result = wrong_encryptor.decrypt_file(encrypted_file.path(), decrypted_file.path());
+        assert!(result.is_err());
+    }
 }

@@ -114,4 +114,90 @@ fn merge_value(map: &mut Map<String, Value>, key: String, new_value: Value) {
             map.insert(key, new_value);
         }
     }
+}use serde_json::{Map, Value};
+use std::fs;
+use std::path::Path;
+
+pub fn merge_json_files(file_paths: &[&str]) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut merged_map = Map::new();
+
+    for path_str in file_paths {
+        let path = Path::new(path_str);
+        if !path.exists() {
+            return Err(format!("File not found: {}", path_str).into());
+        }
+
+        let content = fs::read_to_string(path)?;
+        let json_value: Value = serde_json::from_str(&content)?;
+
+        if let Value::Object(obj) = json_value {
+            for (key, value) in obj {
+                if merged_map.contains_key(&key) {
+                    eprintln!("Warning: Key '{}' already exists, overwriting.", key);
+                }
+                merged_map.insert(key, value);
+            }
+        } else {
+            return Err("Each JSON file must contain a JSON object at the root.".into());
+        }
+    }
+
+    Ok(Value::Object(merged_map))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_merge_json_files() {
+        let mut file1 = NamedTempFile::new().unwrap();
+        let mut file2 = NamedTempFile::new().unwrap();
+
+        let data1 = json!({"name": "Alice", "age": 30});
+        let data2 = json!({"city": "Berlin", "active": true});
+
+        writeln!(file1, "{}", data1.to_string()).unwrap();
+        writeln!(file2, "{}", data2.to_string()).unwrap();
+
+        let paths = [
+            file1.path().to_str().unwrap(),
+            file2.path().to_str().unwrap(),
+        ];
+
+        let result = merge_json_files(&paths).unwrap();
+        let expected = json!({
+            "name": "Alice",
+            "age": 30,
+            "city": "Berlin",
+            "active": true
+        });
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_duplicate_keys() {
+        let mut file1 = NamedTempFile::new().unwrap();
+        let mut file2 = NamedTempFile::new().unwrap();
+
+        let data1 = json!({"id": 1, "value": "first"});
+        let data2 = json!({"id": 2, "extra": "data"});
+
+        writeln!(file1, "{}", data1.to_string()).unwrap();
+        writeln!(file2, "{}", data2.to_string()).unwrap();
+
+        let paths = [
+            file1.path().to_str().unwrap(),
+            file2.path().to_str().unwrap(),
+        ];
+
+        let result = merge_json_files(&paths).unwrap();
+        assert_eq!(result["id"], json!(2));
+        assert_eq!(result["value"], json!("first"));
+        assert_eq!(result["extra"], json!("data"));
+    }
 }

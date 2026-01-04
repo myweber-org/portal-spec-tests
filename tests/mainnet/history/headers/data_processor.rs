@@ -90,3 +90,132 @@ mod tests {
         assert!(result.is_err());
     }
 }
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DataRecord {
+    pub id: u64,
+    pub value: f64,
+    pub timestamp: i64,
+}
+
+#[derive(Debug, Error)]
+pub enum ProcessingError {
+    #[error("Invalid data value: {0}")]
+    InvalidValue(f64),
+    #[error("Timestamp out of range: {0}")]
+    InvalidTimestamp(i64),
+    #[error("Data validation failed")]
+    ValidationFailed,
+}
+
+pub struct DataProcessor {
+    min_value: f64,
+    max_value: f64,
+    time_window: (i64, i64),
+}
+
+impl DataProcessor {
+    pub fn new(min_value: f64, max_value: f64, start_time: i64, end_time: i64) -> Self {
+        Self {
+            min_value,
+            max_value,
+            time_window: (start_time, end_time),
+        }
+    }
+
+    pub fn validate_record(&self, record: &DataRecord) -> Result<(), ProcessingError> {
+        if record.value < self.min_value || record.value > self.max_value {
+            return Err(ProcessingError::InvalidValue(record.value));
+        }
+
+        if record.timestamp < self.time_window.0 || record.timestamp > self.time_window.1 {
+            return Err(ProcessingError::InvalidTimestamp(record.timestamp));
+        }
+
+        Ok(())
+    }
+
+    pub fn normalize_value(&self, value: f64) -> f64 {
+        (value - self.min_value) / (self.max_value - self.min_value)
+    }
+
+    pub fn process_records(&self, records: Vec<DataRecord>) -> Result<Vec<f64>, ProcessingError> {
+        let mut results = Vec::with_capacity(records.len());
+
+        for record in records {
+            self.validate_record(&record)?;
+            let normalized = self.normalize_value(record.value);
+            results.push(normalized);
+        }
+
+        Ok(results)
+    }
+
+    pub fn filter_by_time_range(&self, records: Vec<DataRecord>) -> Vec<DataRecord> {
+        records
+            .into_iter()
+            .filter(|r| r.timestamp >= self.time_window.0 && r.timestamp <= self.time_window.1)
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validation_success() {
+        let processor = DataProcessor::new(0.0, 100.0, 0, 1000);
+        let record = DataRecord {
+            id: 1,
+            value: 50.0,
+            timestamp: 500,
+        };
+
+        assert!(processor.validate_record(&record).is_ok());
+    }
+
+    #[test]
+    fn test_validation_failure() {
+        let processor = DataProcessor::new(0.0, 100.0, 0, 1000);
+        let record = DataRecord {
+            id: 1,
+            value: 150.0,
+            timestamp: 500,
+        };
+
+        assert!(processor.validate_record(&record).is_err());
+    }
+
+    #[test]
+    fn test_normalization() {
+        let processor = DataProcessor::new(0.0, 100.0, 0, 1000);
+        assert_eq!(processor.normalize_value(50.0), 0.5);
+        assert_eq!(processor.normalize_value(0.0), 0.0);
+        assert_eq!(processor.normalize_value(100.0), 1.0);
+    }
+
+    #[test]
+    fn test_process_records() {
+        let processor = DataProcessor::new(0.0, 100.0, 0, 1000);
+        let records = vec![
+            DataRecord {
+                id: 1,
+                value: 25.0,
+                timestamp: 100,
+            },
+            DataRecord {
+                id: 2,
+                value: 75.0,
+                timestamp: 200,
+            },
+        ];
+
+        let result = processor.process_records(records).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], 0.25);
+        assert_eq!(result[1], 0.75);
+    }
+}

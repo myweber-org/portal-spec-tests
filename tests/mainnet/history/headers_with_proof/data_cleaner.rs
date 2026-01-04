@@ -1,69 +1,66 @@
-use csv::{ReaderBuilder, WriterBuilder};
-use std::error::Error;
-use std::io;
+use std::collections::HashSet;
 
-pub fn clean_csv_data<R: io::Read, W: io::Write>(
-    input: R,
-    output: W,
-    delimiter: u8,
-    trim_fields: bool,
-) -> Result<(), Box<dyn Error>> {
-    let mut reader = ReaderBuilder::new()
-        .delimiter(delimiter)
-        .has_headers(true)
-        .from_reader(input);
+pub struct DataCleaner {
+    data: Vec<Vec<Option<String>>>,
+}
 
-    let mut writer = WriterBuilder::new()
-        .delimiter(delimiter)
-        .from_writer(output);
-
-    let headers = reader.headers()?.clone();
-    writer.write_record(&headers)?;
-
-    for result in reader.records() {
-        let record = result?;
-        let cleaned_record: Vec<String> = if trim_fields {
-            record.iter().map(|field| field.trim().to_string()).collect()
-        } else {
-            record.iter().map(|field| field.to_string()).collect()
-        };
-        writer.write_record(&cleaned_record)?;
+impl DataCleaner {
+    pub fn new(data: Vec<Vec<Option<String>>>) -> Self {
+        DataCleaner { data }
     }
 
-    writer.flush()?;
-    Ok(())
+    pub fn remove_null_rows(&mut self) {
+        self.data.retain(|row| {
+            row.iter().all(|cell| cell.is_some())
+        });
+    }
+
+    pub fn deduplicate(&mut self) {
+        let mut seen = HashSet::new();
+        self.data.retain(|row| {
+            let row_string: String = row
+                .iter()
+                .map(|cell| cell.as_ref().unwrap_or(&"NULL".to_string()))
+                .collect::<Vec<&String>>()
+                .join(",");
+            seen.insert(row_string)
+        });
+    }
+
+    pub fn get_data(&self) -> &Vec<Vec<Option<String>>> {
+        &self.data
+    }
+
+    pub fn count_rows(&self) -> usize {
+        self.data.len()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Cursor;
 
     #[test]
-    fn test_clean_csv_with_trimming() {
-        let input_data = "name , age, city\nJohn Doe , 25, New York\n";
-        let expected_output = "name,age,city\nJohn Doe,25,New York\n";
-
-        let input = Cursor::new(input_data);
-        let mut output = Cursor::new(Vec::new());
-
-        clean_csv_data(input, &mut output, b',', true).unwrap();
-
-        let result = String::from_utf8(output.into_inner()).unwrap();
-        assert_eq!(result, expected_output);
+    fn test_remove_null_rows() {
+        let mut cleaner = DataCleaner::new(vec![
+            vec![Some("A".to_string()), Some("B".to_string())],
+            vec![Some("C".to_string()), None],
+            vec![Some("D".to_string()), Some("E".to_string())],
+        ]);
+        
+        cleaner.remove_null_rows();
+        assert_eq!(cleaner.count_rows(), 2);
     }
 
     #[test]
-    fn test_clean_csv_without_trimming() {
-        let input_data = "name , age, city\nJohn Doe , 25, New York\n";
-        let expected_output = "name , age, city\nJohn Doe , 25, New York\n";
-
-        let input = Cursor::new(input_data);
-        let mut output = Cursor::new(Vec::new());
-
-        clean_csv_data(input, &mut output, b',', false).unwrap();
-
-        let result = String::from_utf8(output.into_inner()).unwrap();
-        assert_eq!(result, expected_output);
+    fn test_deduplicate() {
+        let mut cleaner = DataCleaner::new(vec![
+            vec![Some("A".to_string()), Some("B".to_string())],
+            vec![Some("A".to_string()), Some("B".to_string())],
+            vec![Some("C".to_string()), Some("D".to_string())],
+        ]);
+        
+        cleaner.deduplicate();
+        assert_eq!(cleaner.count_rows(), 2);
     }
 }

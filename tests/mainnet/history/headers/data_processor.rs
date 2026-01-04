@@ -219,3 +219,121 @@ mod tests {
         assert_eq!(result[1], 0.75);
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+pub struct DataRecord {
+    pub id: u32,
+    pub value: f64,
+    pub category: String,
+    pub valid: bool,
+}
+
+pub struct DataProcessor {
+    records: Vec<DataRecord>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_csv(&mut self, file_path: &str) -> Result<usize, Box<dyn Error>> {
+        let path = Path::new(file_path);
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        
+        let mut count = 0;
+        for (line_num, line) in reader.lines().enumerate() {
+            let line = line?;
+            
+            if line_num == 0 {
+                continue;
+            }
+            
+            let parts: Vec<&str> = line.split(',').collect();
+            if parts.len() < 3 {
+                continue;
+            }
+            
+            let id = parts[0].parse::<u32>().unwrap_or(0);
+            let value = parts[1].parse::<f64>().unwrap_or(0.0);
+            let category = parts[2].to_string();
+            let valid = value > 0.0 && !category.is_empty();
+            
+            self.records.push(DataRecord {
+                id,
+                value,
+                category,
+                valid,
+            });
+            
+            count += 1;
+        }
+        
+        Ok(count)
+    }
+
+    pub fn filter_valid(&self) -> Vec<&DataRecord> {
+        self.records
+            .iter()
+            .filter(|record| record.valid)
+            .collect()
+    }
+
+    pub fn calculate_average(&self) -> f64 {
+        let valid_records = self.filter_valid();
+        if valid_records.is_empty() {
+            return 0.0;
+        }
+        
+        let sum: f64 = valid_records.iter().map(|r| r.value).sum();
+        sum / valid_records.len() as f64
+    }
+
+    pub fn get_category_summary(&self) -> Vec<(String, usize)> {
+        let mut summary = std::collections::HashMap::new();
+        
+        for record in &self.records {
+            if record.valid {
+                *summary.entry(record.category.clone()).or_insert(0) += 1;
+            }
+        }
+        
+        let mut result: Vec<(String, usize)> = summary.into_iter().collect();
+        result.sort_by(|a, b| b.1.cmp(&a.1));
+        result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_data_processing() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,value,category").unwrap();
+        writeln!(temp_file, "1,10.5,TypeA").unwrap();
+        writeln!(temp_file, "2,0.0,TypeB").unwrap();
+        writeln!(temp_file, "3,15.2,TypeA").unwrap();
+        
+        let mut processor = DataProcessor::new();
+        let count = processor.load_from_csv(temp_file.path().to_str().unwrap()).unwrap();
+        
+        assert_eq!(count, 3);
+        assert_eq!(processor.filter_valid().len(), 2);
+        assert_eq!(processor.calculate_average(), 12.85);
+        
+        let summary = processor.get_category_summary();
+        assert_eq!(summary.len(), 2);
+        assert_eq!(summary[0].0, "TypeA");
+        assert_eq!(summary[0].1, 2);
+    }
+}

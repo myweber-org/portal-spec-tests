@@ -122,3 +122,138 @@ mod tests {
         assert!((std_dev - 8.1649).abs() < 0.001);
     }
 }
+use std::collections::HashMap;
+
+pub struct DataProcessor {
+    cache: HashMap<String, Vec<f64>>,
+    validation_rules: Vec<ValidationRule>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ValidationRule {
+    pub field_name: String,
+    pub min_value: f64,
+    pub max_value: f64,
+    pub required: bool,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            cache: HashMap::new(),
+            validation_rules: Vec::new(),
+        }
+    }
+
+    pub fn add_validation_rule(&mut self, rule: ValidationRule) {
+        self.validation_rules.push(rule);
+    }
+
+    pub fn process_dataset(&mut self, dataset: &[HashMap<String, f64>]) -> Result<Vec<HashMap<String, f64>>, String> {
+        let mut processed = Vec::new();
+
+        for (index, record) in dataset.iter().enumerate() {
+            match self.validate_record(record) {
+                Ok(validated_record) => {
+                    let transformed = self.transform_record(&validated_record);
+                    self.cache_record(index, &transformed);
+                    processed.push(transformed);
+                }
+                Err(err) => {
+                    return Err(format!("Validation failed at record {}: {}", index, err));
+                }
+            }
+        }
+
+        Ok(processed)
+    }
+
+    fn validate_record(&self, record: &HashMap<String, f64>) -> Result<HashMap<String, f64>, String> {
+        for rule in &self.validation_rules {
+            match record.get(&rule.field_name) {
+                Some(&value) => {
+                    if value < rule.min_value || value > rule.max_value {
+                        return Err(format!(
+                            "Field '{}' value {} out of range [{}, {}]",
+                            rule.field_name, value, rule.min_value, rule.max_value
+                        ));
+                    }
+                }
+                None => {
+                    if rule.required {
+                        return Err(format!("Required field '{}' missing", rule.field_name));
+                    }
+                }
+            }
+        }
+        Ok(record.clone())
+    }
+
+    fn transform_record(&self, record: &HashMap<String, f64>) -> HashMap<String, f64> {
+        let mut transformed = record.clone();
+        
+        for (key, value) in transformed.iter_mut() {
+            if key.starts_with("normalized_") {
+                *value = (*value * 100.0).round() / 100.0;
+            }
+        }
+
+        transformed
+    }
+
+    fn cache_record(&mut self, index: usize, record: &HashMap<String, f64>) {
+        let cache_key = format!("record_{}", index);
+        let values: Vec<f64> = record.values().cloned().collect();
+        self.cache.insert(cache_key, values);
+    }
+
+    pub fn get_cached_record(&self, index: usize) -> Option<&Vec<f64>> {
+        let key = format!("record_{}", index);
+        self.cache.get(&key)
+    }
+
+    pub fn calculate_statistics(&self, field_name: &str, dataset: &[HashMap<String, f64>]) -> Option<Statistics> {
+        let values: Vec<f64> = dataset
+            .iter()
+            .filter_map(|record| record.get(field_name))
+            .cloned()
+            .collect();
+
+        if values.is_empty() {
+            return None;
+        }
+
+        let mean = values.iter().sum::<f64>() / values.len() as f64;
+        let variance = values.iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>() / values.len() as f64;
+        let std_dev = variance.sqrt();
+
+        Some(Statistics {
+            field_name: field_name.to_string(),
+            count: values.len(),
+            mean,
+            variance,
+            std_dev,
+            min: *values.iter().min_by(|a, b| a.partial_cmp(b).unwrap()).unwrap(),
+            max: *values.iter().max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap(),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Statistics {
+    pub field_name: String,
+    pub count: usize,
+    pub mean: f64,
+    pub variance: f64,
+    pub std_dev: f64,
+    pub min: f64,
+    pub max: f64,
+}
+
+impl Default for DataProcessor {
+    fn default() -> Self {
+        Self::new()
+    }
+}

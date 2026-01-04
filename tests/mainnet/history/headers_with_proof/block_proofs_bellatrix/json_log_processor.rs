@@ -1,173 +1,106 @@
-
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::collections::HashMap;
-use std::error::Error;
-use std::fmt;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LogEntry {
-    pub timestamp: String,
-    pub level: String,
-    pub service: String,
-    pub message: String,
-    pub metadata: HashMap<String, Value>,
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
+pub enum LogLevel {
+    DEBUG,
+    INFO,
+    WARN,
+    ERROR,
+    CRITICAL,
 }
 
-#[derive(Debug)]
-pub enum LogError {
-    IoError(String),
-    ParseError(String),
-    ValidationError(String),
-    InvalidFormat(String),
-}
+impl LogLevel {
+    pub fn from_str(level: &str) -> Option<Self> {
+        match level.to_uppercase().as_str() {
+            "DEBUG" => Some(LogLevel::DEBUG),
+            "INFO" => Some(LogLevel::INFO),
+            "WARN" => Some(LogLevel::WARN),
+            "ERROR" => Some(LogLevel::ERROR),
+            "CRITICAL" => Some(LogLevel::CRITICAL),
+            _ => None,
+        }
+    }
 
-impl fmt::Display for LogError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    pub fn severity(&self) -> u8 {
         match self {
-            LogError::IoError(msg) => write!(f, "IO error: {}", msg),
-            LogError::ParseError(msg) => write!(f, "Parse error: {}", msg),
-            LogError::ValidationError(msg) => write!(f, "Validation error: {}", msg),
-            LogError::InvalidFormat(msg) => write!(f, "Invalid format: {}", msg),
+            LogLevel::DEBUG => 1,
+            LogLevel::INFO => 2,
+            LogLevel::WARN => 3,
+            LogLevel::ERROR => 4,
+            LogLevel::CRITICAL => 5,
         }
     }
 }
 
-impl Error for LogError {}
-
-impl From<std::io::Error> for LogError {
-    fn from(error: std::io::Error) -> Self {
-        LogError::IoError(error.to_string())
-    }
-}
-
-impl From<serde_json::Error> for LogError {
-    fn from(error: serde_json::Error) -> Self {
-        LogError::ParseError(error.to_string())
-    }
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LogEntry {
+    pub timestamp: String,
+    pub level: LogLevel,
+    pub message: String,
+    pub metadata: HashMap<String, String>,
 }
 
 pub struct LogProcessor {
-    pub entries: Vec<LogEntry>,
-    pub stats: ProcessingStats,
-}
-
-#[derive(Debug, Default, Serialize)]
-pub struct ProcessingStats {
-    pub total_lines: usize,
-    pub parsed_successfully: usize,
-    pub parse_failures: usize,
-    pub validation_failures: usize,
-    pub level_distribution: HashMap<String, usize>,
+    min_level: LogLevel,
+    include_metadata: bool,
 }
 
 impl LogProcessor {
-    pub fn new() -> Self {
+    pub fn new(min_level: LogLevel, include_metadata: bool) -> Self {
         LogProcessor {
-            entries: Vec::new(),
-            stats: ProcessingStats::default(),
+            min_level,
+            include_metadata,
         }
     }
 
-    pub fn process_file<P: AsRef<Path>>(&mut self, path: P) -> Result<(), LogError> {
-        let file = File::open(path)?;
+    pub fn process_file<P: AsRef<Path>>(&self, path: P) -> Result<Vec<LogEntry>, String> {
+        let file = File::open(path).map_err(|e| format!("Failed to open file: {}", e))?;
         let reader = BufReader::new(file);
+        let mut entries = Vec::new();
 
-        for line_result in reader.lines() {
-            self.stats.total_lines += 1;
-            let line = line_result?;
-
-            match self.parse_log_line(&line) {
-                Ok(entry) => {
-                    if self.validate_entry(&entry) {
-                        self.stats.parsed_successfully += 1;
-                        *self.stats.level_distribution.entry(entry.level.clone()).or_insert(0) += 1;
-                        self.entries.push(entry);
-                    } else {
-                        self.stats.validation_failures += 1;
-                    }
-                }
-                Err(_) => {
-                    self.stats.parse_failures += 1;
+        for line in reader.lines() {
+            let line = line.map_err(|e| format!("Failed to read line: {}", e))?;
+            if let Some(entry) = self.parse_line(&line) {
+                if entry.level.severity() >= self.min_level.severity() {
+                    entries.push(entry);
                 }
             }
         }
 
-        Ok(())
+        Ok(entries)
     }
 
-    fn parse_log_line(&self, line: &str) -> Result<LogEntry, LogError> {
-        let json_value: Value = serde_json::from_str(line)?;
-
-        let timestamp = json_value["timestamp"]
-            .as_str()
-            .ok_or_else(|| LogError::InvalidFormat("Missing timestamp".to_string()))?
-            .to_string();
-
-        let level = json_value["level"]
-            .as_str()
-            .ok_or_else(|| LogError::InvalidFormat("Missing level".to_string()))?
-            .to_string();
-
-        let service = json_value["service"]
-            .as_str()
-            .ok_or_else(|| LogError::InvalidFormat("Missing service".to_string()))?
-            .to_string();
-
-        let message = json_value["message"]
-            .as_str()
-            .ok_or_else(|| LogError::InvalidFormat("Missing message".to_string()))?
-            .to_string();
-
-        let metadata = if let Some(obj) = json_value["metadata"].as_object() {
-            let mut map = HashMap::new();
-            for (key, value) in obj {
-                map.insert(key.clone(), value.clone());
+    fn parse_line(&self, line: &str) -> Option<LogEntry> {
+        serde_json::from_str::<LogEntry>(line).ok().map(|mut entry| {
+            if !self.include_metadata {
+                entry.metadata.clear();
             }
-            map
-        } else {
-            HashMap::new()
-        };
-
-        Ok(LogEntry {
-            timestamp,
-            level,
-            service,
-            message,
-            metadata,
+            entry
         })
     }
 
-    fn validate_entry(&self, entry: &LogEntry) -> bool {
-        !entry.timestamp.is_empty()
-            && !entry.level.is_empty()
-            && !entry.service.is_empty()
-            && !entry.message.is_empty()
-    }
-
-    pub fn filter_by_level(&self, level: &str) -> Vec<&LogEntry> {
-        self.entries
+    pub fn filter_by_level(&self, entries: &[LogEntry], level: LogLevel) -> Vec<LogEntry> {
+        entries
             .iter()
             .filter(|entry| entry.level == level)
+            .cloned()
             .collect()
     }
 
-    pub fn filter_by_service(&self, service: &str) -> Vec<&LogEntry> {
-        self.entries
-            .iter()
-            .filter(|entry| entry.service == service)
-            .collect()
+    pub fn extract_timestamps(&self, entries: &[LogEntry]) -> Vec<String> {
+        entries.iter().map(|entry| entry.timestamp.clone()).collect()
     }
 
-    pub fn get_stats(&self) -> &ProcessingStats {
-        &self.stats
-    }
-
-    pub fn export_stats_json(&self) -> Result<String, LogError> {
-        serde_json::to_string(&self.stats).map_err(|e| LogError::ParseError(e.to_string()))
+    pub fn count_by_level(&self, entries: &[LogEntry]) -> HashMap<LogLevel, usize> {
+        let mut counts = HashMap::new();
+        for entry in entries {
+            *counts.entry(entry.level.clone()).or_insert(0) += 1;
+        }
+        counts
     }
 }
 
@@ -178,84 +111,48 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_parse_valid_log_line() {
-        let processor = LogProcessor::new();
-        let log_line = r#"{
-            "timestamp": "2024-01-15T10:30:00Z",
-            "level": "INFO",
-            "service": "api-gateway",
-            "message": "Request processed successfully",
-            "metadata": {
-                "request_id": "abc123",
-                "duration_ms": 150
-            }
-        }"#;
-
-        let result = processor.parse_log_line(log_line);
-        assert!(result.is_ok());
-        let entry = result.unwrap();
-        assert_eq!(entry.timestamp, "2024-01-15T10:30:00Z");
-        assert_eq!(entry.level, "INFO");
-        assert_eq!(entry.service, "api-gateway");
-        assert_eq!(entry.message, "Request processed successfully");
-        assert_eq!(entry.metadata.get("request_id").unwrap().as_str().unwrap(), "abc123");
+    fn test_log_level_parsing() {
+        assert_eq!(LogLevel::from_str("INFO"), Some(LogLevel::INFO));
+        assert_eq!(LogLevel::from_str("error"), Some(LogLevel::ERROR));
+        assert_eq!(LogLevel::from_str("UNKNOWN"), None);
     }
 
     #[test]
-    fn test_parse_invalid_log_line() {
-        let processor = LogProcessor::new();
-        let log_line = r#"{"invalid": "json"}"#;
-        let result = processor.parse_log_line(log_line);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_process_file() {
+    fn test_log_processing() {
         let mut temp_file = NamedTempFile::new().unwrap();
-        let log_data = r#"{"timestamp": "2024-01-15T10:30:00Z", "level": "ERROR", "service": "database", "message": "Connection failed"}
-{"timestamp": "2024-01-15T10:31:00Z", "level": "WARN", "service": "cache", "message": "High memory usage"}
-{"timestamp": "2024-01-15T10:32:00Z", "level": "INFO", "service": "api", "message": "Health check passed"}"#;
-        
-        writeln!(temp_file, "{}", log_data).unwrap();
-        
-        let mut processor = LogProcessor::new();
-        let result = processor.process_file(temp_file.path());
-        assert!(result.is_ok());
-        assert_eq!(processor.stats.total_lines, 3);
-        assert_eq!(processor.stats.parsed_successfully, 3);
+        let log_data = r#"{"timestamp":"2024-01-15T10:30:00Z","level":"INFO","message":"System started","metadata":{"user":"admin"}}
+{"timestamp":"2024-01-15T10:31:00Z","level":"ERROR","message":"Connection failed","metadata":{"ip":"192.168.1.1"}}"#;
+        write!(temp_file, "{}", log_data).unwrap();
+
+        let processor = LogProcessor::new(LogLevel::INFO, true);
+        let entries = processor.process_file(temp_file.path()).unwrap();
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].level, LogLevel::INFO);
+        assert_eq!(entries[1].level, LogLevel::ERROR);
     }
 
     #[test]
-    fn test_filter_by_level() {
-        let mut processor = LogProcessor::new();
-        processor.entries = vec![
+    fn test_level_filtering() {
+        let entries = vec![
             LogEntry {
                 timestamp: "2024-01-15T10:30:00Z".to_string(),
-                level: "ERROR".to_string(),
-                service: "database".to_string(),
-                message: "Connection failed".to_string(),
+                level: LogLevel::INFO,
+                message: "Test info".to_string(),
                 metadata: HashMap::new(),
             },
             LogEntry {
                 timestamp: "2024-01-15T10:31:00Z".to_string(),
-                level: "INFO".to_string(),
-                service: "api".to_string(),
-                message: "Request processed".to_string(),
-                metadata: HashMap::new(),
-            },
-            LogEntry {
-                timestamp: "2024-01-15T10:32:00Z".to_string(),
-                level: "ERROR".to_string(),
-                service: "cache".to_string(),
-                message: "Cache miss".to_string(),
+                level: LogLevel::ERROR,
+                message: "Test error".to_string(),
                 metadata: HashMap::new(),
             },
         ];
 
-        let errors = processor.filter_by_level("ERROR");
-        assert_eq!(errors.len(), 2);
-        
-        let infos = processor.filter_by_level("INFO");
-        assert_eq!(infos.len(), 1);
+        let processor = LogProcessor::new(LogLevel::DEBUG, false);
+        let filtered = processor.filter_by_level(&entries, LogLevel::ERROR);
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].level, LogLevel::ERROR);
     }
 }

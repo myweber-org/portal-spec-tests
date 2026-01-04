@@ -430,3 +430,140 @@ mod tests {
         assert!(result.unwrap_err().to_string().contains("Duplicate key"));
     }
 }
+use serde_json::{Value, Map};
+use std::fs;
+use std::path::Path;
+use std::collections::HashSet;
+
+pub fn merge_json_files<P: AsRef<Path>>(paths: &[P]) -> Result<Value, String> {
+    if paths.is_empty() {
+        return Err("No input files provided".to_string());
+    }
+
+    let mut merged = Map::new();
+    let mut conflict_log = Vec::new();
+
+    for (idx, path) in paths.iter().enumerate() {
+        let content = fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read {}: {}", path.as_ref().display(), e))?;
+        
+        let json: Value = serde_json::from_str(&content)
+            .map_err(|e| format!("Invalid JSON in {}: {}", path.as_ref().display(), e))?;
+
+        if let Value::Object(obj) = json {
+            merge_object(&mut merged, obj, idx, &mut conflict_log);
+        } else {
+            return Err("Top-level JSON must be an object".to_string());
+        }
+    }
+
+    if !conflict_log.is_empty() {
+        eprintln!("Conflicts detected during merge:");
+        for conflict in &conflict_log {
+            eprintln!("  - {}", conflict);
+        }
+    }
+
+    Ok(Value::Object(merged))
+}
+
+fn merge_object(base: &mut Map<String, Value>, 
+                incoming: Map<String, Value>, 
+                file_index: usize,
+                conflicts: &mut Vec<String>) {
+    
+    for (key, incoming_value) in incoming {
+        match base.get_mut(&key) {
+            Some(existing_value) => {
+                handle_conflict(key, existing_value, incoming_value, file_index, conflicts);
+            }
+            None => {
+                base.insert(key, incoming_value);
+            }
+        }
+    }
+}
+
+fn handle_conflict(key: String, 
+                   existing: &mut Value, 
+                   incoming: Value,
+                   file_index: usize,
+                   conflicts: &mut Vec<String>) {
+    
+    match (existing, incoming) {
+        (Value::Object(existing_obj), Value::Object(incoming_obj)) => {
+            merge_object(existing_obj, incoming_obj, file_index, conflicts);
+        }
+        (Value::Array(existing_arr), Value::Array(incoming_arr)) => {
+            merge_array(existing_arr, incoming_arr, file_index, conflicts);
+        }
+        (existing_val, incoming_val) if existing_val == &incoming_val => {
+            // Values are identical, no conflict
+        }
+        _ => {
+            conflicts.push(format!("Key '{}' conflict in file {}: {:?} vs existing {:?}", 
+                                 key, file_index, incoming, existing));
+            
+            // Strategy: Keep existing value, log conflict
+            // Alternative strategies could be implemented here
+        }
+    }
+}
+
+fn merge_array(existing: &mut Vec<Value>, 
+               incoming: Vec<Value>, 
+               file_index: usize,
+               conflicts: &mut Vec<String>) {
+    
+    let existing_set: HashSet<_> = existing.iter().collect();
+    let incoming_set: HashSet<_> = incoming.iter().collect();
+    
+    let unique_incoming: Vec<_> = incoming
+        .into_iter()
+        .filter(|v| !existing_set.contains(v))
+        .collect();
+    
+    if !unique_incoming.is_empty() {
+        existing.extend(unique_incoming);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_basic_merge() {
+        let file1 = NamedTempFile::new().unwrap();
+        let file2 = NamedTempFile::new().unwrap();
+        
+        fs::write(&file1, r#"{"a": 1, "b": {"c": 2}}"#).unwrap();
+        fs::write(&file2, r#"{"a": 1, "b": {"d": 3}}"#).unwrap();
+        
+        let result = merge_json_files(&[file1.path(), file2.path()]).unwrap();
+        let expected = json!({
+            "a": 1,
+            "b": {"c": 2, "d": 3}
+        });
+        
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_array_merge() {
+        let file1 = NamedTempFile::new().unwrap();
+        let file2 = NamedTempFile::new().unwrap();
+        
+        fs::write(&file1, r#"{"items": [1, 2, 3]}"#).unwrap();
+        fs::write(&file2, r#"{"items": [3, 4, 5]}"#).unwrap();
+        
+        let result = merge_json_files(&[file1.path(), file2.path()]).unwrap();
+        let items = result["items"].as_array().unwrap();
+        
+        assert_eq!(items.len(), 5);
+        assert!(items.contains(&json!(1)));
+        assert!(items.contains(&json!(5)));
+    }
+}

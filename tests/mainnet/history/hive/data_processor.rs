@@ -351,3 +351,147 @@ mod tests {
         assert_eq!(categories, vec!["Alpha", "Beta"]);
     }
 }
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DataRecord {
+    pub id: u32,
+    pub value: f64,
+    pub timestamp: i64,
+}
+
+#[derive(Debug)]
+pub enum DataError {
+    InvalidId,
+    InvalidValue,
+    InvalidTimestamp,
+    TransformationError(String),
+}
+
+impl fmt::Display for DataError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DataError::InvalidId => write!(f, "Invalid record ID"),
+            DataError::InvalidValue => write!(f, "Invalid value field"),
+            DataError::InvalidTimestamp => write!(f, "Invalid timestamp"),
+            DataError::TransformationError(msg) => write!(f, "Transformation error: {}", msg),
+        }
+    }
+}
+
+impl Error for DataError {}
+
+pub fn validate_record(record: &DataRecord) -> Result<(), DataError> {
+    if record.id == 0 {
+        return Err(DataError::InvalidId);
+    }
+    
+    if !record.value.is_finite() {
+        return Err(DataError::InvalidValue);
+    }
+    
+    if record.timestamp < 0 {
+        return Err(DataError::InvalidTimestamp);
+    }
+    
+    Ok(())
+}
+
+pub fn transform_records(records: Vec<DataRecord>) -> Result<Vec<DataRecord>, DataError> {
+    let mut transformed = Vec::with_capacity(records.len());
+    
+    for record in records {
+        validate_record(&record)?;
+        
+        let transformed_record = DataRecord {
+            id: record.id,
+            value: record.value * 1.1,
+            timestamp: record.timestamp + 3600,
+        };
+        
+        transformed.push(transformed_record);
+    }
+    
+    if transformed.is_empty() {
+        return Err(DataError::TransformationError("No records to transform".to_string()));
+    }
+    
+    Ok(transformed)
+}
+
+pub fn calculate_statistics(records: &[DataRecord]) -> (f64, f64, f64) {
+    if records.is_empty() {
+        return (0.0, 0.0, 0.0);
+    }
+    
+    let sum: f64 = records.iter().map(|r| r.value).sum();
+    let count = records.len() as f64;
+    let mean = sum / count;
+    
+    let variance: f64 = records.iter()
+        .map(|r| (r.value - mean).powi(2))
+        .sum::<f64>() / count;
+    
+    let std_dev = variance.sqrt();
+    
+    (mean, variance, std_dev)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_validate_record_valid() {
+        let record = DataRecord {
+            id: 1,
+            value: 42.5,
+            timestamp: 1625097600,
+        };
+        
+        assert!(validate_record(&record).is_ok());
+    }
+    
+    #[test]
+    fn test_validate_record_invalid_id() {
+        let record = DataRecord {
+            id: 0,
+            value: 42.5,
+            timestamp: 1625097600,
+        };
+        
+        assert!(matches!(validate_record(&record), Err(DataError::InvalidId)));
+    }
+    
+    #[test]
+    fn test_transform_records() {
+        let records = vec![
+            DataRecord { id: 1, value: 100.0, timestamp: 1000 },
+            DataRecord { id: 2, value: 200.0, timestamp: 2000 },
+        ];
+        
+        let result = transform_records(records);
+        assert!(result.is_ok());
+        
+        let transformed = result.unwrap();
+        assert_eq!(transformed.len(), 2);
+        assert_eq!(transformed[0].value, 110.0);
+        assert_eq!(transformed[0].timestamp, 4600);
+    }
+    
+    #[test]
+    fn test_calculate_statistics() {
+        let records = vec![
+            DataRecord { id: 1, value: 10.0, timestamp: 1000 },
+            DataRecord { id: 2, value: 20.0, timestamp: 2000 },
+            DataRecord { id: 3, value: 30.0, timestamp: 3000 },
+        ];
+        
+        let (mean, variance, std_dev) = calculate_statistics(&records);
+        
+        assert_eq!(mean, 20.0);
+        assert_eq!(variance, 66.66666666666667);
+        assert_eq!(std_dev, 8.16496580927726);
+    }
+}

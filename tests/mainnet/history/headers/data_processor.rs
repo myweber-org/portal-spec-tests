@@ -1,121 +1,68 @@
 
-use std::error::Error;
-use std::fmt;
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ProcessedData {
-    pub id: u32,
-    pub value: f64,
-    pub is_valid: bool,
-    pub metadata: String,
-}
-
-#[derive(Debug)]
-pub enum DataError {
-    InvalidValue(f64),
-    MissingMetadata,
-    ProcessingFailed(String),
-}
-
-impl fmt::Display for DataError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            DataError::InvalidValue(v) => write!(f, "Invalid value encountered: {}", v),
-            DataError::MissingMetadata => write!(f, "Required metadata is missing"),
-            DataError::ProcessingFailed(msg) => write!(f, "Processing failed: {}", msg),
-        }
-    }
-}
-
-impl Error for DataError {}
+use std::collections::HashMap;
 
 pub struct DataProcessor {
-    threshold: f64,
-    max_retries: u8,
+    cache: HashMap<String, Vec<f64>>,
 }
 
 impl DataProcessor {
-    pub fn new(threshold: f64, max_retries: u8) -> Self {
+    pub fn new() -> Self {
         DataProcessor {
-            threshold,
-            max_retries,
+            cache: HashMap::new(),
         }
     }
 
-    pub fn validate_value(&self, value: f64) -> Result<f64, DataError> {
-        if value.is_nan() || value.is_infinite() {
-            return Err(DataError::InvalidValue(value));
+    pub fn process_dataset(&mut self, key: &str, data: &[f64]) -> Result<Vec<f64>, String> {
+        if data.is_empty() {
+            return Err("Empty dataset provided".to_string());
         }
-        
-        if value.abs() > self.threshold {
-            return Err(DataError::InvalidValue(value));
+
+        if let Some(cached) = self.cache.get(key) {
+            return Ok(cached.clone());
         }
-        
-        Ok(value)
+
+        let validated = self.validate_data(data)?;
+        let normalized = self.normalize_data(&validated);
+        let transformed = self.apply_transformations(&normalized);
+
+        self.cache.insert(key.to_string(), transformed.clone());
+        Ok(transformed)
     }
 
-    pub fn process_data(&self, id: u32, raw_value: f64, metadata: Option<&str>) -> Result<ProcessedData, DataError> {
-        let validated_value = self.validate_value(raw_value)?;
-        
-        let metadata_str = metadata
-            .ok_or(DataError::MissingMetadata)?
-            .to_string();
-
-        if metadata_str.is_empty() {
-            return Err(DataError::MissingMetadata);
-        }
-
-        let is_valid = validated_value >= 0.0;
-        let processed_value = if is_valid {
-            validated_value * 2.0
-        } else {
-            validated_value.abs()
-        };
-
-        Ok(ProcessedData {
-            id,
-            value: processed_value,
-            is_valid,
-            metadata: metadata_str,
-        })
-    }
-
-    pub fn batch_process(
-        &self,
-        items: Vec<(u32, f64, Option<&str>)>,
-    ) -> (Vec<ProcessedData>, Vec<DataError>) {
-        let mut successes = Vec::new();
-        let mut errors = Vec::new();
-
-        for (id, value, metadata) in items {
-            match self.process_data(id, value, metadata) {
-                Ok(processed) => successes.push(processed),
-                Err(err) => errors.push(err),
+    fn validate_data(&self, data: &[f64]) -> Result<Vec<f64>, String> {
+        for &value in data {
+            if !value.is_finite() {
+                return Err("Invalid numeric value detected".to_string());
             }
         }
-
-        (successes, errors)
+        Ok(data.to_vec())
     }
 
-    pub fn retry_processing<F>(&self, mut operation: F) -> Result<ProcessedData, DataError>
-    where
-        F: FnMut() -> Result<ProcessedData, DataError>,
-    {
-        let mut last_error = None;
+    fn normalize_data(&self, data: &[f64]) -> Vec<f64> {
+        let min = data.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+        let max = data.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
         
-        for attempt in 1..=self.max_retries {
-            match operation() {
-                Ok(result) => return Ok(result),
-                Err(err) => {
-                    last_error = Some(err);
-                    if attempt < self.max_retries {
-                        continue;
-                    }
-                }
-            }
+        if (max - min).abs() < f64::EPSILON {
+            return vec![0.0; data.len()];
         }
-        
-        Err(last_error.unwrap_or_else(|| DataError::ProcessingFailed("Max retries exceeded".to_string())))
+
+        data.iter()
+            .map(|&x| (x - min) / (max - min))
+            .collect()
+    }
+
+    fn apply_transformations(&self, data: &[f64]) -> Vec<f64> {
+        data.iter()
+            .map(|&x| x.ln_1p().exp() - 1.0)
+            .collect()
+    }
+
+    pub fn clear_cache(&mut self) {
+        self.cache.clear();
+    }
+
+    pub fn cache_size(&self) -> usize {
+        self.cache.len()
     }
 }
 
@@ -124,42 +71,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_validate_value_within_threshold() {
-        let processor = DataProcessor::new(100.0, 3);
-        assert_eq!(processor.validate_value(50.0), Ok(50.0));
-    }
-
-    #[test]
-    fn test_validate_value_exceeds_threshold() {
-        let processor = DataProcessor::new(100.0, 3);
-        assert!(processor.validate_value(150.0).is_err());
-    }
-
-    #[test]
-    fn test_process_data_valid() {
-        let processor = DataProcessor::new(100.0, 3);
-        let result = processor.process_data(1, 25.0, Some("test_metadata"));
+    fn test_data_processing() {
+        let mut processor = DataProcessor::new();
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         
+        let result = processor.process_dataset("test", &data);
         assert!(result.is_ok());
-        let data = result.unwrap();
-        assert_eq!(data.id, 1);
-        assert_eq!(data.value, 50.0);
-        assert!(data.is_valid);
-        assert_eq!(data.metadata, "test_metadata");
+        
+        let processed = result.unwrap();
+        assert_eq!(processed.len(), 5);
+        assert!(processor.cache_size() > 0);
     }
 
     #[test]
-    fn test_batch_processing() {
-        let processor = DataProcessor::new(100.0, 3);
-        let items = vec![
-            (1, 10.0, Some("meta1")),
-            (2, -5.0, Some("meta2")),
-            (3, 150.0, Some("meta3")),
-        ];
-        
-        let (successes, errors) = processor.batch_process(items);
-        
-        assert_eq!(successes.len(), 2);
-        assert_eq!(errors.len(), 1);
+    fn test_empty_data() {
+        let mut processor = DataProcessor::new();
+        let result = processor.process_dataset("empty", &[]);
+        assert!(result.is_err());
     }
 }

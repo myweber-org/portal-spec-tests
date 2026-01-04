@@ -104,4 +104,99 @@ mod tests {
         assert!(errors[0].contains("timeout must be a positive integer"));
         assert!(errors[1].contains("log_level must be one of:"));
     }
+}use std::fs::File;
+use std::io::{self, BufRead, BufReader};
+use std::collections::HashMap;
+use std::path::Path;
+
+#[derive(Debug)]
+pub enum ConfigError {
+    IoError(io::Error),
+    ParseError(String),
+    DuplicateKey(String),
+}
+
+impl From<io::Error> for ConfigError {
+    fn from(err: io::Error) -> Self {
+        ConfigError::IoError(err)
+    }
+}
+
+pub type ConfigMap = HashMap<String, String>;
+
+pub fn parse_config_file<P: AsRef<Path>>(path: P) -> Result<ConfigMap, ConfigError> {
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+    let mut config = HashMap::new();
+
+    for (line_num, line) in reader.lines().enumerate() {
+        let line = line?;
+        let line = line.trim();
+
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        let parts: Vec<&str> = line.splitn(2, '=').map(|s| s.trim()).collect();
+        if parts.len() != 2 {
+            return Err(ConfigError::ParseError(format!(
+                "Invalid format at line {}: '{}'",
+                line_num + 1,
+                line
+            )));
+        }
+
+        let key = parts[0].to_string();
+        let value = parts[1].to_string();
+
+        if config.contains_key(&key) {
+            return Err(ConfigError::DuplicateKey(key));
+        }
+
+        config.insert(key, value);
+    }
+
+    Ok(config)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_valid_config() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "host=localhost").unwrap();
+        writeln!(temp_file, "port=8080").unwrap();
+        writeln!(temp_file, "# This is a comment").unwrap();
+        writeln!(temp_file, "").unwrap();
+        writeln!(temp_file, "timeout=30").unwrap();
+
+        let config = parse_config_file(temp_file.path()).unwrap();
+        assert_eq!(config.get("host"), Some(&"localhost".to_string()));
+        assert_eq!(config.get("port"), Some(&"8080".to_string()));
+        assert_eq!(config.get("timeout"), Some(&"30".to_string()));
+        assert_eq!(config.len(), 3);
+    }
+
+    #[test]
+    fn test_duplicate_key() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "key=value1").unwrap();
+        writeln!(temp_file, "key=value2").unwrap();
+
+        let result = parse_config_file(temp_file.path());
+        assert!(matches!(result, Err(ConfigError::DuplicateKey(_))));
+    }
+
+    #[test]
+    fn test_invalid_format() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "invalid_line").unwrap();
+
+        let result = parse_config_file(temp_file.path());
+        assert!(matches!(result, Err(ConfigError::ParseError(_))));
+    }
 }

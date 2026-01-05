@@ -1,66 +1,67 @@
-use regex::Regex;
+
 use std::collections::HashMap;
 
 pub struct UrlParser;
 
 impl UrlParser {
-    pub fn parse_domain(url: &str) -> Option<String> {
-        let re = Regex::new(r"^(?:https?://)?([^/?#]+)").unwrap();
-        re.captures(url).map(|caps| caps[1].to_string())
-    }
-
-    pub fn parse_query_params(url: &str) -> HashMap<String, String> {
-        let mut params = HashMap::new();
-        let query_start = url.find('?');
+    pub fn parse_query_string(url: &str) -> Option<HashMap<String, String>> {
+        let query_start = url.find('?')?;
+        let query_str = &url[query_start + 1..];
         
-        if let Some(start) = query_start {
-            let query_str = &url[start + 1..];
-            for pair in query_str.split('&') {
-                let mut parts = pair.split('=');
-                if let (Some(key), Some(value)) = (parts.next(), parts.next()) {
+        let mut params = HashMap::new();
+        
+        for pair in query_str.split('&') {
+            let mut parts = pair.split('=');
+            if let (Some(key), Some(value)) = (parts.next(), parts.next()) {
+                if !key.is_empty() {
                     params.insert(key.to_string(), value.to_string());
                 }
             }
         }
         
-        params
+        if params.is_empty() { None } else { Some(params) }
     }
-
-    pub fn is_valid_url(url: &str) -> bool {
-        let re = Regex::new(r"^https?://[^\s/$.?#].[^\s]*$").unwrap();
-        re.is_match(url)
+    
+    pub fn extract_domain(url: &str) -> Option<String> {
+        let stripped = url
+            .trim_start_matches("http://")
+            .trim_start_matches("https://");
+        
+        let domain_end = stripped.find('/').unwrap_or(stripped.len());
+        let domain = &stripped[..domain_end];
+        
+        if domain.is_empty() {
+            None
+        } else {
+            Some(domain.to_string())
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
+    
     #[test]
-    fn test_parse_domain() {
-        let url = "https://www.example.com/path?query=value";
-        assert_eq!(UrlParser::parse_domain(url), Some("www.example.com".to_string()));
+    fn test_query_parsing() {
+        let url = "https://example.com/search?q=rust&lang=en&sort=desc";
+        let params = UrlParser::parse_query_string(url).unwrap();
         
-        let url_no_protocol = "example.com/path";
-        assert_eq!(UrlParser::parse_domain(url_no_protocol), Some("example.com".to_string()));
+        assert_eq!(params.get("q"), Some(&"rust".to_string()));
+        assert_eq!(params.get("lang"), Some(&"en".to_string()));
+        assert_eq!(params.get("sort"), Some(&"desc".to_string()));
     }
-
+    
     #[test]
-    fn test_parse_query_params() {
-        let url = "https://example.com?name=john&age=25&city=nyc";
-        let params = UrlParser::parse_query_params(url);
+    fn test_domain_extraction() {
+        assert_eq!(
+            UrlParser::extract_domain("https://github.com/rust-lang/rust"),
+            Some("github.com".to_string())
+        );
         
-        assert_eq!(params.get("name"), Some(&"john".to_string()));
-        assert_eq!(params.get("age"), Some(&"25".to_string()));
-        assert_eq!(params.get("city"), Some(&"nyc".to_string()));
-        assert_eq!(params.get("country"), None);
-    }
-
-    #[test]
-    fn test_is_valid_url() {
-        assert!(UrlParser::is_valid_url("http://example.com"));
-        assert!(UrlParser::is_valid_url("https://sub.example.com/path"));
-        assert!(!UrlParser::is_valid_url("not-a-url"));
-        assert!(!UrlParser::is_valid_url("ftp://example.com"));
+        assert_eq!(
+            UrlParser::extract_domain("http://localhost:8080/api"),
+            Some("localhost:8080".to_string())
+        );
     }
 }

@@ -158,3 +158,174 @@ mod tests {
         assert_eq!(stats.get("mean"), Some(&2.0));
     }
 }
+use std::collections::HashMap;
+
+pub struct DataProcessor {
+    cache: HashMap<String, Vec<f64>>,
+    validation_rules: Vec<ValidationRule>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ValidationRule {
+    pub field_name: String,
+    pub min_value: f64,
+    pub max_value: f64,
+    pub required: bool,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            cache: HashMap::new(),
+            validation_rules: Vec::new(),
+        }
+    }
+
+    pub fn add_validation_rule(&mut self, rule: ValidationRule) {
+        self.validation_rules.push(rule);
+    }
+
+    pub fn process_data(&mut self, dataset: &[HashMap<String, f64>]) -> Result<Vec<ProcessedRecord>, ProcessingError> {
+        let mut results = Vec::with_capacity(dataset.len());
+        
+        for (index, record) in dataset.iter().enumerate() {
+            match self.validate_record(record) {
+                Ok(_) => {
+                    let processed = self.transform_record(record);
+                    self.cache.insert(format!("record_{}", index), processed.values().cloned().collect());
+                    results.push(ProcessedRecord::new(processed));
+                }
+                Err(err) => return Err(ProcessingError::ValidationFailed {
+                    record_index: index,
+                    details: err,
+                }),
+            }
+        }
+        
+        Ok(results)
+    }
+
+    fn validate_record(&self, record: &HashMap<String, f64>) -> Result<(), String> {
+        for rule in &self.validation_rules {
+            if rule.required && !record.contains_key(&rule.field_name) {
+                return Err(format!("Required field '{}' is missing", rule.field_name));
+            }
+            
+            if let Some(&value) = record.get(&rule.field_name) {
+                if value < rule.min_value || value > rule.max_value {
+                    return Err(format!(
+                        "Field '{}' value {} is outside valid range [{}, {}]",
+                        rule.field_name, value, rule.min_value, rule.max_value
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn transform_record(&self, record: &HashMap<String, f64>) -> HashMap<String, f64> {
+        let mut transformed = HashMap::new();
+        
+        for (key, value) in record {
+            let transformed_key = key.to_lowercase().replace(' ', "_");
+            let transformed_value = if key.contains("percentage") {
+                value / 100.0
+            } else {
+                *value
+            };
+            transformed.insert(transformed_key, transformed_value);
+        }
+        
+        transformed
+    }
+
+    pub fn get_cached_data(&self, key: &str) -> Option<&Vec<f64>> {
+        self.cache.get(key)
+    }
+
+    pub fn clear_cache(&mut self) {
+        self.cache.clear();
+    }
+}
+
+#[derive(Debug)]
+pub struct ProcessedRecord {
+    data: HashMap<String, f64>,
+    timestamp: std::time::SystemTime,
+}
+
+impl ProcessedRecord {
+    pub fn new(data: HashMap<String, f64>) -> Self {
+        ProcessedRecord {
+            data,
+            timestamp: std::time::SystemTime::now(),
+        }
+    }
+
+    pub fn get_value(&self, field: &str) -> Option<f64> {
+        self.data.get(field).copied()
+    }
+
+    pub fn get_timestamp(&self) -> std::time::SystemTime {
+        self.timestamp
+    }
+}
+
+#[derive(Debug)]
+pub enum ProcessingError {
+    ValidationFailed { record_index: usize, details: String },
+    TransformationError(String),
+    CacheError(String),
+}
+
+impl std::fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ProcessingError::ValidationFailed { record_index, details } => {
+                write!(f, "Validation failed for record {}: {}", record_index, details)
+            }
+            ProcessingError::TransformationError(msg) => write!(f, "Transformation error: {}", msg),
+            ProcessingError::CacheError(msg) => write!(f, "Cache error: {}", msg),
+        }
+    }
+}
+
+impl std::error::Error for ProcessingError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_data_processor_validation() {
+        let mut processor = DataProcessor::new();
+        processor.add_validation_rule(ValidationRule {
+            field_name: "temperature".to_string(),
+            min_value: -50.0,
+            max_value: 100.0,
+            required: true,
+        });
+
+        let mut valid_record = HashMap::new();
+        valid_record.insert("temperature".to_string(), 25.5);
+        
+        let mut invalid_record = HashMap::new();
+        invalid_record.insert("temperature".to_string(), 150.0);
+
+        assert!(processor.validate_record(&valid_record).is_ok());
+        assert!(processor.validate_record(&invalid_record).is_err());
+    }
+
+    #[test]
+    fn test_record_transformation() {
+        let processor = DataProcessor::new();
+        let mut record = HashMap::new();
+        record.insert("Temperature Value".to_string(), 25.5);
+        record.insert("Humidity Percentage".to_string(), 75.0);
+
+        let transformed = processor.transform_record(&record);
+        
+        assert_eq!(transformed.get("temperature_value"), Some(&25.5));
+        assert_eq!(transformed.get("humidity_percentage"), Some(&0.75));
+    }
+}

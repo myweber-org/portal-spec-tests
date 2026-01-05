@@ -261,3 +261,76 @@ mod tests {
         Ok(())
     }
 }
+use std::fs;
+use std::io::{self, Read, Write};
+use std::path::Path;
+
+pub fn xor_encrypt_file(input_path: &str, output_path: &str, key: &[u8]) -> io::Result<()> {
+    let input_data = fs::read(input_path)?;
+    let encrypted_data: Vec<u8> = input_data
+        .iter()
+        .enumerate()
+        .map(|(i, &byte)| byte ^ key[i % key.len()])
+        .collect();
+    
+    fs::write(output_path, encrypted_data)?;
+    Ok(())
+}
+
+pub fn xor_decrypt_file(input_path: &str, output_path: &str, key: &[u8]) -> io::Result<()> {
+    xor_encrypt_file(input_path, output_path, key)
+}
+
+pub fn generate_key_from_password(password: &str) -> Vec<u8> {
+    let mut key = Vec::with_capacity(32);
+    let password_bytes = password.as_bytes();
+    
+    for i in 0..32 {
+        let byte = password_bytes[i % password_bytes.len()]
+            .wrapping_add((i * 17) as u8)
+            .rotate_left(3);
+        key.push(byte);
+    }
+    
+    key
+}
+
+pub fn process_file() -> io::Result<()> {
+    let input_file = "document.txt";
+    let encrypted_file = "document.enc";
+    let decrypted_file = "document_decrypted.txt";
+    let password = "secure_password_123";
+    
+    if !Path::new(input_file).exists() {
+        let sample_data = b"This is a sample document containing sensitive information.";
+        fs::write(input_file, sample_data)?;
+        println!("Created sample input file: {}", input_file);
+    }
+    
+    let key = generate_key_from_password(password);
+    
+    println!("Encrypting file...");
+    xor_encrypt_file(input_file, encrypted_file, &key)?;
+    
+    println!("Decrypting file...");
+    xor_decrypt_file(encrypted_file, decrypted_file, &key)?;
+    
+    let original = fs::read(input_file)?;
+    let decrypted = fs::read(decrypted_file)?;
+    
+    if original == decrypted {
+        println!("Encryption/decryption successful!");
+        println!("Original and decrypted files match.");
+    } else {
+        println!("Error: Original and decrypted files do not match!");
+    }
+    
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = process_file() {
+        eprintln!("Error: {}", e);
+        std::process::exit(1);
+    }
+}

@@ -89,4 +89,161 @@ mod tests {
         let invalid = validate_csv_structure(temp_file.path(), 2).unwrap();
         assert!(!invalid);
     }
+}use std::collections::HashMap;
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+
+#[derive(Debug)]
+pub struct CsvStats {
+    pub row_count: usize,
+    pub column_count: usize,
+    pub column_types: HashMap<String, String>,
+    pub numeric_columns: Vec<String>,
+    pub text_columns: Vec<String>,
+}
+
+pub fn analyze_csv(file_path: &str) -> Result<CsvStats, Box<dyn Error>> {
+    let file = File::open(file_path)?;
+    let reader = BufReader::new(file);
+    let mut lines = reader.lines();
+    
+    let header_line = lines.next()
+        .ok_or("Empty CSV file")??;
+    let headers: Vec<String> = header_line
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .collect();
+    
+    let mut column_samples: HashMap<String, Vec<String>> = HashMap::new();
+    let mut row_count = 0;
+    
+    for line_result in lines {
+        let line = line_result?;
+        let values: Vec<&str> = line.split(',').map(|s| s.trim()).collect();
+        
+        if values.len() != headers.len() {
+            continue;
+        }
+        
+        for (i, value) in values.iter().enumerate() {
+            column_samples
+                .entry(headers[i].clone())
+                .or_insert_with(Vec::new)
+                .push(value.to_string());
+        }
+        
+        row_count += 1;
+    }
+    
+    let mut column_types = HashMap::new();
+    let mut numeric_columns = Vec::new();
+    let mut text_columns = Vec::new();
+    
+    for (header, samples) in column_samples {
+        let sample_count = samples.len().min(100);
+        let mut is_numeric = true;
+        
+        for sample in samples.iter().take(sample_count) {
+            if sample.parse::<f64>().is_err() && !sample.is_empty() {
+                is_numeric = false;
+                break;
+            }
+        }
+        
+        let col_type = if is_numeric { "numeric" } else { "text" };
+        column_types.insert(header.clone(), col_type.to_string());
+        
+        if is_numeric {
+            numeric_columns.push(header);
+        } else {
+            text_columns.push(header);
+        }
+    }
+    
+    Ok(CsvStats {
+        row_count,
+        column_count: headers.len(),
+        column_types,
+        numeric_columns,
+        text_columns,
+    })
+}
+
+pub fn filter_csv_rows(
+    file_path: &str,
+    column_name: &str,
+    filter_value: &str,
+) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+    let file = File::open(file_path)?;
+    let reader = BufReader::new(file);
+    let mut lines = reader.lines();
+    
+    let header_line = lines.next()
+        .ok_or("Empty CSV file")??;
+    let headers: Vec<String> = header_line
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .collect();
+    
+    let column_index = headers.iter()
+        .position(|h| h == column_name)
+        .ok_or(format!("Column '{}' not found", column_name))?;
+    
+    let mut filtered_rows = Vec::new();
+    
+    for line_result in lines {
+        let line = line_result?;
+        let values: Vec<String> = line.split(',')
+            .map(|s| s.trim().to_string())
+            .collect();
+        
+        if values.len() > column_index && values[column_index] == filter_value {
+            filtered_rows.push(values);
+        }
+    }
+    
+    Ok(filtered_rows)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+    
+    #[test]
+    fn test_analyze_csv() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,salary,department").unwrap();
+        writeln!(temp_file, "Alice,30,50000.0,Engineering").unwrap();
+        writeln!(temp_file, "Bob,25,45000.0,Sales").unwrap();
+        writeln!(temp_file, "Charlie,35,60000.0,Engineering").unwrap();
+        
+        let stats = analyze_csv(temp_file.path().to_str().unwrap()).unwrap();
+        
+        assert_eq!(stats.row_count, 3);
+        assert_eq!(stats.column_count, 4);
+        assert_eq!(stats.numeric_columns.len(), 2);
+        assert_eq!(stats.text_columns.len(), 2);
+    }
+    
+    #[test]
+    fn test_filter_csv_rows() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,department").unwrap();
+        writeln!(temp_file, "Alice,30,Engineering").unwrap();
+        writeln!(temp_file, "Bob,25,Sales").unwrap();
+        writeln!(temp_file, "Charlie,35,Engineering").unwrap();
+        
+        let filtered = filter_csv_rows(
+            temp_file.path().to_str().unwrap(),
+            "department",
+            "Engineering"
+        ).unwrap();
+        
+        assert_eq!(filtered.len(), 2);
+        assert_eq!(filtered[0][0], "Alice");
+        assert_eq!(filtered[1][0], "Charlie");
+    }
 }

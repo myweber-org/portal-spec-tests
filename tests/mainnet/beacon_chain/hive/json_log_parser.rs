@@ -270,4 +270,98 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Exported error logs to error_logs.jsonl");
 
     Ok(())
+}use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LogEntry {
+    timestamp: String,
+    level: String,
+    message: String,
+    #[serde(flatten)]
+    extra_fields: serde_json::Value,
+}
+
+#[derive(Debug)]
+pub struct LogParser {
+    min_level: String,
+    include_fields: Vec<String>,
+}
+
+impl LogParser {
+    pub fn new(min_level: &str) -> Self {
+        LogParser {
+            min_level: min_level.to_lowercase(),
+            include_fields: Vec::new(),
+        }
+    }
+
+    pub fn with_fields(mut self, fields: &[&str]) -> Self {
+        self.include_fields = fields.iter().map(|s| s.to_string()).collect();
+        self
+    }
+
+    pub fn parse_file<P: AsRef<Path>>(&self, path: P) -> Result<Vec<LogEntry>, Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut entries = Vec::new();
+
+        for line in reader.lines() {
+            let line = line?;
+            if let Ok(entry) = self.parse_line(&line) {
+                entries.push(entry);
+            }
+        }
+
+        Ok(entries)
+    }
+
+    fn parse_line(&self, line: &str) -> Result<LogEntry, Box<dyn Error>> {
+        let mut entry: LogEntry = serde_json::from_str(line)?;
+        
+        if !self.should_include(&entry.level) {
+            return Err("Log level below threshold".into());
+        }
+
+        if !self.include_fields.is_empty() {
+            self.filter_fields(&mut entry);
+        }
+
+        Ok(entry)
+    }
+
+    fn should_include(&self, level: &str) -> bool {
+        let level_order = ["trace", "debug", "info", "warn", "error"];
+        let min_idx = level_order.iter().position(|l| *l == self.min_level);
+        let entry_idx = level_order.iter().position(|l| *l == level.to_lowercase());
+
+        match (min_idx, entry_idx) {
+            (Some(min), Some(entry)) => entry >= min,
+            _ => true,
+        }
+    }
+
+    fn filter_fields(&self, entry: &mut LogEntry) {
+        if let serde_json::Value::Object(ref mut map) = entry.extra_fields {
+            let keys: Vec<String> = map.keys().cloned().collect();
+            for key in keys {
+                if !self.include_fields.contains(&key) {
+                    map.remove(&key);
+                }
+            }
+        }
+    }
+}
+
+pub fn summarize_logs(entries: &[LogEntry]) -> std::collections::HashMap<String, usize> {
+    let mut summary = std::collections::HashMap::new();
+    
+    for entry in entries {
+        *summary.entry(entry.level.clone()).or_insert(0) += 1;
+    }
+    
+    summary
 }

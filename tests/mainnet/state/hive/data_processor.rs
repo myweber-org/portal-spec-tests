@@ -105,4 +105,105 @@ mod tests {
         assert_eq!(stats.get("count"), Some(&4.0));
         assert_eq!(stats.get("sum"), Some(&10.0));
     }
+}use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DataRecord {
+    pub id: u32,
+    pub value: f64,
+    pub category: String,
+}
+
+#[derive(Debug)]
+pub enum ProcessingError {
+    InvalidValue,
+    InvalidCategory,
+    SerializationError(String),
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProcessingError::InvalidValue => write!(f, "Value must be positive"),
+            ProcessingError::InvalidCategory => write!(f, "Category cannot be empty"),
+            ProcessingError::SerializationError(msg) => write!(f, "Serialization error: {}", msg),
+        }
+    }
+}
+
+impl Error for ProcessingError {}
+
+pub fn validate_record(record: &DataRecord) -> Result<(), ProcessingError> {
+    if record.value <= 0.0 {
+        return Err(ProcessingError::InvalidValue);
+    }
+    
+    if record.category.trim().is_empty() {
+        return Err(ProcessingError::InvalidCategory);
+    }
+    
+    Ok(())
+}
+
+pub fn transform_record(record: &DataRecord) -> DataRecord {
+    DataRecord {
+        id: record.id,
+        value: record.value * 2.0,
+        category: record.category.to_uppercase(),
+    }
+}
+
+pub fn process_records(records: &[DataRecord]) -> Result<Vec<DataRecord>, ProcessingError> {
+    let mut processed = Vec::with_capacity(records.len());
+    
+    for record in records {
+        validate_record(record)?;
+        processed.push(transform_record(record));
+    }
+    
+    Ok(processed)
+}
+
+pub fn serialize_records(records: &[DataRecord]) -> Result<String, ProcessingError> {
+    serde_json::to_string(records)
+        .map_err(|e| ProcessingError::SerializationError(e.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_record_valid() {
+        let record = DataRecord {
+            id: 1,
+            value: 10.5,
+            category: "test".to_string(),
+        };
+        assert!(validate_record(&record).is_ok());
+    }
+
+    #[test]
+    fn test_validate_record_invalid_value() {
+        let record = DataRecord {
+            id: 1,
+            value: -5.0,
+            category: "test".to_string(),
+        };
+        assert!(validate_record(&record).is_err());
+    }
+
+    #[test]
+    fn test_transform_record() {
+        let record = DataRecord {
+            id: 1,
+            value: 10.0,
+            category: "example".to_string(),
+        };
+        let transformed = transform_record(&record);
+        assert_eq!(transformed.value, 20.0);
+        assert_eq!(transformed.category, "EXAMPLE");
+    }
 }

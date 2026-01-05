@@ -106,4 +106,201 @@ mod tests {
 
         assert!(parser.load_from_str(config).is_err());
     }
+}use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::env;
+use std::fs;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Config {
+    pub database: DatabaseConfig,
+    pub server: ServerConfig,
+    pub features: HashMap<String, bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DatabaseConfig {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: String,
+    pub database_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServerConfig {
+    pub host: String,
+    pub port: u16,
+    pub max_connections: u32,
+    pub timeout_seconds: u64,
+}
+
+impl Config {
+    pub fn from_file(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let content = fs::read_to_string(path)?;
+        let mut config: Config = serde_yaml::from_str(&content)?;
+        config.resolve_environment_variables();
+        Ok(config)
+    }
+
+    fn resolve_environment_variables(&mut self) {
+        self.database.host = Self::get_env_or_default(
+            "DB_HOST",
+            &self.database.host,
+        );
+        self.database.port = Self::get_env_or_default(
+            "DB_PORT",
+            &self.database.port.to_string(),
+        ).parse().unwrap_or(self.database.port);
+        self.database.username = Self::get_env_or_default(
+            "DB_USER",
+            &self.database.username,
+        );
+        self.database.password = Self::get_env_or_default(
+            "DB_PASS",
+            &self.database.password,
+        );
+        self.database.database_name = Self::get_env_or_default(
+            "DB_NAME",
+            &self.database.database_name,
+        );
+
+        self.server.host = Self::get_env_or_default(
+            "SERVER_HOST",
+            &self.server.host,
+        );
+        self.server.port = Self::get_env_or_default(
+            "SERVER_PORT",
+            &self.server.port.to_string(),
+        ).parse().unwrap_or(self.server.port);
+        self.server.max_connections = Self::get_env_or_default(
+            "MAX_CONNECTIONS",
+            &self.server.max_connections.to_string(),
+        ).parse().unwrap_or(self.server.max_connections);
+        self.server.timeout_seconds = Self::get_env_or_default(
+            "TIMEOUT_SECONDS",
+            &self.server.timeout_seconds.to_string(),
+        ).parse().unwrap_or(self.server.timeout_seconds);
+    }
+
+    fn get_env_or_default(key: &str, default: &str) -> String {
+        env::var(key).unwrap_or_else(|_| default.to_string())
+    }
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.database.host.is_empty() {
+            errors.push("Database host cannot be empty".to_string());
+        }
+        if self.database.port == 0 {
+            errors.push("Database port must be greater than 0".to_string());
+        }
+        if self.database.username.is_empty() {
+            errors.push("Database username cannot be empty".to_string());
+        }
+        if self.server.port == 0 {
+            errors.push("Server port must be greater than 0".to_string());
+        }
+        if self.server.max_connections == 0 {
+            errors.push("Max connections must be greater than 0".to_string());
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_config_parsing() {
+        let yaml_content = r#"
+database:
+  host: localhost
+  port: 5432
+  username: postgres
+  password: secret
+  database_name: mydb
+server:
+  host: 0.0.0.0
+  port: 8080
+  max_connections: 100
+  timeout_seconds: 30
+features:
+  caching: true
+  logging: false
+"#;
+
+        let temp_file = NamedTempFile::new().unwrap();
+        fs::write(temp_file.path(), yaml_content).unwrap();
+
+        let config = Config::from_file(temp_file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.database.host, "localhost");
+        assert_eq!(config.database.port, 5432);
+        assert_eq!(config.server.port, 8080);
+        assert_eq!(config.features.get("caching"), Some(&true));
+    }
+
+    #[test]
+    fn test_environment_variable_override() {
+        env::set_var("DB_HOST", "prod-db.example.com");
+        env::set_var("SERVER_PORT", "9090");
+
+        let yaml_content = r#"
+database:
+  host: localhost
+  port: 5432
+  username: postgres
+  password: secret
+  database_name: mydb
+server:
+  host: 0.0.0.0
+  port: 8080
+  max_connections: 100
+  timeout_seconds: 30
+features: {}
+"#;
+
+        let temp_file = NamedTempFile::new().unwrap();
+        fs::write(temp_file.path(), yaml_content).unwrap();
+
+        let config = Config::from_file(temp_file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.database.host, "prod-db.example.com");
+        assert_eq!(config.server.port, 9090);
+
+        env::remove_var("DB_HOST");
+        env::remove_var("SERVER_PORT");
+    }
+
+    #[test]
+    fn test_config_validation() {
+        let config = Config {
+            database: DatabaseConfig {
+                host: "".to_string(),
+                port: 0,
+                username: "".to_string(),
+                password: "secret".to_string(),
+                database_name: "mydb".to_string(),
+            },
+            server: ServerConfig {
+                host: "0.0.0.0".to_string(),
+                port: 0,
+                max_connections: 0,
+                timeout_seconds: 30,
+            },
+            features: HashMap::new(),
+        };
+
+        let result = config.validate();
+        assert!(result.is_err());
+        let errors = result.unwrap_err();
+        assert!(errors.len() >= 4);
+    }
 }

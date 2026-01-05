@@ -107,3 +107,155 @@ mod tests {
         assert!(filtered.iter().any(|row| row[0] == "C"));
     }
 }
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum DataError {
+    #[error("Invalid input data: {0}")]
+    ValidationError(String),
+    #[error("Transformation failed: {0}")]
+    TransformationError(String),
+    #[error("Serialization error: {0}")]
+    SerializationError(#[from] serde_json::Error),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataRecord {
+    pub id: u64,
+    pub timestamp: i64,
+    pub values: HashMap<String, f64>,
+    pub metadata: Option<HashMap<String, String>>,
+}
+
+impl DataRecord {
+    pub fn new(id: u64, timestamp: i64) -> Self {
+        Self {
+            id,
+            timestamp,
+            values: HashMap::new(),
+            metadata: None,
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), DataError> {
+        if self.id == 0 {
+            return Err(DataError::ValidationError("ID cannot be zero".to_string()));
+        }
+        
+        if self.timestamp < 0 {
+            return Err(DataError::ValidationError(
+                "Timestamp cannot be negative".to_string(),
+            ));
+        }
+
+        if self.values.is_empty() {
+            return Err(DataError::ValidationError(
+                "Values map cannot be empty".to_string(),
+            ));
+        }
+
+        for (key, value) in &self.values {
+            if key.trim().is_empty() {
+                return Err(DataError::ValidationError(
+                    "Key cannot be empty or whitespace".to_string(),
+                ));
+            }
+            
+            if !value.is_finite() {
+                return Err(DataError::ValidationError(
+                    format!("Value for key '{}' must be finite", key),
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn transform(&mut self, multiplier: f64) -> Result<(), DataError> {
+        if multiplier == 0.0 {
+            return Err(DataError::TransformationError(
+                "Multiplier cannot be zero".to_string(),
+            ));
+        }
+
+        for value in self.values.values_mut() {
+            *value *= multiplier;
+            
+            if !value.is_finite() {
+                return Err(DataError::TransformationError(
+                    "Transformation resulted in non-finite value".to_string(),
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn to_json(&self) -> Result<String, DataError> {
+        serde_json::to_string_pretty(self).map_err(DataError::from)
+    }
+
+    pub fn from_json(json_str: &str) -> Result<Self, DataError> {
+        serde_json::from_str(json_str).map_err(DataError::from)
+    }
+}
+
+pub fn process_records(
+    records: &mut [DataRecord],
+    multiplier: f64,
+) -> Result<Vec<String>, DataError> {
+    let mut results = Vec::with_capacity(records.len());
+
+    for record in records {
+        record.validate()?;
+        record.transform(multiplier)?;
+        
+        let json_output = record.to_json()?;
+        results.push(json_output);
+    }
+
+    Ok(results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_record() {
+        let mut record = DataRecord::new(1, 1625097600);
+        record.values.insert("temperature".to_string(), 25.5);
+        record.values.insert("humidity".to_string(), 60.0);
+
+        assert!(record.validate().is_ok());
+    }
+
+    #[test]
+    fn test_invalid_record() {
+        let record = DataRecord::new(0, 1625097600);
+        assert!(record.validate().is_err());
+    }
+
+    #[test]
+    fn test_transform() {
+        let mut record = DataRecord::new(1, 1625097600);
+        record.values.insert("value".to_string(), 10.0);
+
+        assert!(record.transform(2.0).is_ok());
+        assert_eq!(record.values.get("value"), Some(&20.0));
+    }
+
+    #[test]
+    fn test_serialization() {
+        let mut record = DataRecord::new(42, 1625097600);
+        record.values.insert("metric".to_string(), 99.9);
+        
+        let json = record.to_json();
+        assert!(json.is_ok());
+        
+        let parsed = DataRecord::from_json(&json.unwrap());
+        assert!(parsed.is_ok());
+    }
+}

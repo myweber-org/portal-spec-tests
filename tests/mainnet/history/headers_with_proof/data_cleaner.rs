@@ -1,38 +1,39 @@
 use std::collections::HashSet;
 
 pub struct DataCleaner {
-    data: Vec<Vec<Option<String>>>,
+    records: Vec<String>,
 }
 
 impl DataCleaner {
-    pub fn new(data: Vec<Vec<Option<String>>>) -> Self {
-        DataCleaner { data }
+    pub fn new() -> Self {
+        DataCleaner {
+            records: Vec::new(),
+        }
     }
 
-    pub fn remove_null_rows(&mut self) {
-        self.data.retain(|row| {
-            row.iter().all(|cell| cell.is_some())
-        });
+    pub fn add_record(&mut self, record: String) {
+        self.records.push(record);
     }
 
-    pub fn deduplicate(&mut self) {
+    pub fn clean(&mut self) -> Vec<String> {
         let mut seen = HashSet::new();
-        self.data.retain(|row| {
-            let row_string: String = row
-                .iter()
-                .map(|cell| cell.as_ref().unwrap_or(&"NULL".to_string()))
-                .collect::<Vec<&String>>()
-                .join(",");
-            seen.insert(row_string)
-        });
+        let mut cleaned = Vec::new();
+
+        for record in self.records.drain(..) {
+            if seen.insert(record.clone()) {
+                cleaned.push(record);
+            }
+        }
+
+        cleaned
     }
 
-    pub fn get_data(&self) -> &Vec<Vec<Option<String>>> {
-        &self.data
-    }
-
-    pub fn count_rows(&self) -> usize {
-        self.data.len()
+    pub fn filter_by_prefix(&self, prefix: &str) -> Vec<String> {
+        self.records
+            .iter()
+            .filter(|record| record.starts_with(prefix))
+            .cloned()
+            .collect()
     }
 }
 
@@ -41,26 +42,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_remove_null_rows() {
-        let mut cleaner = DataCleaner::new(vec![
-            vec![Some("A".to_string()), Some("B".to_string())],
-            vec![Some("C".to_string()), None],
-            vec![Some("D".to_string()), Some("E".to_string())],
-        ]);
+    fn test_deduplication() {
+        let mut cleaner = DataCleaner::new();
+        cleaner.add_record("apple".to_string());
+        cleaner.add_record("banana".to_string());
+        cleaner.add_record("apple".to_string());
         
-        cleaner.remove_null_rows();
-        assert_eq!(cleaner.count_rows(), 2);
+        let cleaned = cleaner.clean();
+        assert_eq!(cleaned.len(), 2);
+        assert!(cleaned.contains(&"apple".to_string()));
+        assert!(cleaned.contains(&"banana".to_string()));
     }
 
     #[test]
-    fn test_deduplicate() {
-        let mut cleaner = DataCleaner::new(vec![
-            vec![Some("A".to_string()), Some("B".to_string())],
-            vec![Some("A".to_string()), Some("B".to_string())],
-            vec![Some("C".to_string()), Some("D".to_string())],
-        ]);
+    fn test_filtering() {
+        let mut cleaner = DataCleaner::new();
+        cleaner.add_record("apple".to_string());
+        cleaner.add_record("apricot".to_string());
+        cleaner.add_record("banana".to_string());
         
-        cleaner.deduplicate();
-        assert_eq!(cleaner.count_rows(), 2);
+        let filtered = cleaner.filter_by_prefix("ap");
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered.contains(&"apple".to_string()));
+        assert!(filtered.contains(&"apricot".to_string()));
     }
 }

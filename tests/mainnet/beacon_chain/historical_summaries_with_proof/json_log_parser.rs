@@ -296,3 +296,89 @@ mod tests {
         assert!(!filter.check_level("DEBUG", "INFO"));
     }
 }
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use serde_json::Value;
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum LogParseError {
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("JSON parse error: {0}")]
+    Json(#[from] serde_json::Error),
+    #[error("Missing required field: {0}")]
+    MissingField(String),
+}
+
+pub struct LogEntry {
+    pub timestamp: String,
+    pub level: String,
+    pub message: String,
+    pub metadata: Value,
+}
+
+pub fn parse_json_log_file(path: &str) -> Result<Vec<LogEntry>, LogParseError> {
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+    let mut entries = Vec::new();
+
+    for (line_num, line) in reader.lines().enumerate() {
+        let line_content = line?;
+        
+        if line_content.trim().is_empty() {
+            continue;
+        }
+
+        let json_value: Value = serde_json::from_str(&line_content)?;
+        
+        let entry = parse_log_entry(json_value)
+            .map_err(|e| LogParseError::MissingField(format!("Line {}: {}", line_num + 1, e)))?;
+        
+        entries.push(entry);
+    }
+
+    Ok(entries)
+}
+
+fn parse_log_entry(value: Value) -> Result<LogEntry, String> {
+    let obj = value.as_object().ok_or("Expected JSON object")?;
+    
+    let timestamp = obj.get("timestamp")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing 'timestamp' field")?
+        .to_string();
+    
+    let level = obj.get("level")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing 'level' field")?
+        .to_string();
+    
+    let message = obj.get("message")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing 'message' field")?
+        .to_string();
+    
+    let metadata = obj.get("metadata")
+        .cloned()
+        .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
+    
+    Ok(LogEntry {
+        timestamp,
+        level,
+        message,
+        metadata,
+    })
+}
+
+pub fn filter_logs_by_level(entries: &[LogEntry], level: &str) -> Vec<&LogEntry> {
+    entries.iter()
+        .filter(|entry| entry.level.to_lowercase() == level.to_lowercase())
+        .collect()
+}
+
+pub fn extract_timestamps(entries: &[LogEntry]) -> Vec<String> {
+    entries.iter()
+        .map(|entry| entry.timestamp.clone())
+        .collect()
+}

@@ -166,3 +166,98 @@ mod tests {
         assert!(result.is_empty());
     }
 }
+use std::fs;
+use std::io::{self, Read, Write};
+use std::path::Path;
+
+pub struct XorCipher {
+    key: Vec<u8>,
+}
+
+impl XorCipher {
+    pub fn new(key: &str) -> Self {
+        XorCipher {
+            key: key.as_bytes().to_vec(),
+        }
+    }
+
+    pub fn encrypt(&self, data: &[u8]) -> Vec<u8> {
+        self.process(data)
+    }
+
+    pub fn decrypt(&self, data: &[u8]) -> Vec<u8> {
+        self.process(data)
+    }
+
+    fn process(&self, data: &[u8]) -> Vec<u8> {
+        data.iter()
+            .enumerate()
+            .map(|(i, &byte)| byte ^ self.key[i % self.key.len()])
+            .collect()
+    }
+}
+
+pub fn encrypt_file(input_path: &Path, output_path: &Path, key: &str) -> io::Result<()> {
+    let cipher = XorCipher::new(key);
+    let mut file = fs::File::open(input_path)?;
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer)?;
+
+    let encrypted = cipher.encrypt(&buffer);
+    let mut output = fs::File::create(output_path)?;
+    output.write_all(&encrypted)?;
+
+    Ok(())
+}
+
+pub fn decrypt_file(input_path: &Path, output_path: &Path, key: &str) -> io::Result<()> {
+    let cipher = XorCipher::new(key);
+    let mut file = fs::File::open(input_path)?;
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer)?;
+
+    let decrypted = cipher.decrypt(&buffer);
+    let mut output = fs::File::create(output_path)?;
+    output.write_all(&decrypted)?;
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn test_xor_cipher() {
+        let cipher = XorCipher::new("secret");
+        let original = b"Hello, World!";
+        let encrypted = cipher.encrypt(original);
+        let decrypted = cipher.decrypt(&encrypted);
+
+        assert_eq!(original.to_vec(), decrypted);
+        assert_ne!(original.to_vec(), encrypted);
+    }
+
+    #[test]
+    fn test_file_encryption() -> io::Result<()> {
+        let test_data = b"Test file content for encryption";
+        let input_path = Path::new("test_input.txt");
+        let encrypted_path = Path::new("test_encrypted.bin");
+        let decrypted_path = Path::new("test_decrypted.txt");
+
+        fs::write(input_path, test_data)?;
+
+        encrypt_file(input_path, encrypted_path, "mykey")?;
+        decrypt_file(encrypted_path, decrypted_path, "mykey")?;
+
+        let decrypted_content = fs::read(decrypted_path)?;
+        assert_eq!(test_data.to_vec(), decrypted_content);
+
+        fs::remove_file(input_path)?;
+        fs::remove_file(encrypted_path)?;
+        fs::remove_file(decrypted_path)?;
+
+        Ok(())
+    }
+}

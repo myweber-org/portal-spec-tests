@@ -234,3 +234,85 @@ mod tests {
         assert_eq!(processor.records[0].value, 200.0);
     }
 }
+use std::collections::HashMap;
+
+pub struct DataProcessor {
+    cache: HashMap<String, Vec<f64>>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            cache: HashMap::new(),
+        }
+    }
+
+    pub fn process_dataset(&mut self, key: &str, data: &[f64]) -> Result<Vec<f64>, String> {
+        if data.is_empty() {
+            return Err("Empty dataset provided".to_string());
+        }
+
+        if let Some(cached) = self.cache.get(key) {
+            return Ok(cached.clone());
+        }
+
+        let processed = Self::normalize_data(data);
+        self.cache.insert(key.to_string(), processed.clone());
+        
+        Ok(processed)
+    }
+
+    fn normalize_data(data: &[f64]) -> Vec<f64> {
+        let min = data.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+        let max = data.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+        let range = max - min;
+
+        if range == 0.0 {
+            return vec![0.0; data.len()];
+        }
+
+        data.iter()
+            .map(|&value| (value - min) / range)
+            .collect()
+    }
+
+    pub fn calculate_statistics(data: &[f64]) -> (f64, f64, f64) {
+        let sum: f64 = data.iter().sum();
+        let mean = sum / data.len() as f64;
+        
+        let variance: f64 = data.iter()
+            .map(|&value| {
+                let diff = value - mean;
+                diff * diff
+            })
+            .sum::<f64>() / data.len() as f64;
+        
+        let std_dev = variance.sqrt();
+        
+        (mean, variance, std_dev)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_normalize_data() {
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let normalized = DataProcessor::normalize_data(&data);
+        
+        assert_eq!(normalized[0], 0.0);
+        assert_eq!(normalized[4], 1.0);
+    }
+
+    #[test]
+    fn test_calculate_statistics() {
+        let data = vec![2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0];
+        let (mean, variance, std_dev) = DataProcessor::calculate_statistics(&data);
+        
+        assert!((mean - 5.0).abs() < 0.001);
+        assert!((variance - 4.0).abs() < 0.001);
+        assert!((std_dev - 2.0).abs() < 0.001);
+    }
+}

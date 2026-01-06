@@ -152,4 +152,113 @@ mod tests {
         assert_eq!(variance, 66.66666666666667);
         assert_eq!(std_dev, 8.16496580927726);
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufReader, BufWriter};
+
+pub fn filter_csv_rows(
+    input_path: &str,
+    output_path: &str,
+    predicate: impl Fn(&[String]) -> bool,
+) -> Result<usize, Box<dyn Error>> {
+    let input_file = File::open(input_path)?;
+    let reader = BufReader::new(input_file);
+    let mut csv_reader = csv::Reader::from_reader(reader);
+
+    let output_file = File::create(output_path)?;
+    let writer = BufWriter::new(output_file);
+    let mut csv_writer = csv::Writer::from_writer(writer);
+
+    let headers = csv_reader.headers()?.clone();
+    csv_writer.write_record(&headers)?;
+
+    let mut processed_count = 0;
+    for result in csv_reader.records() {
+        let record = result?;
+        let fields: Vec<String> = record.iter().map(|s| s.to_string()).collect();
+
+        if predicate(&fields) {
+            csv_writer.write_record(&fields)?;
+            processed_count += 1;
+        }
+    }
+
+    csv_writer.flush()?;
+    Ok(processed_count)
+}
+
+pub fn transform_csv_column(
+    input_path: &str,
+    output_path: &str,
+    column_index: usize,
+    transformer: impl Fn(&str) -> String,
+) -> Result<(), Box<dyn Error>> {
+    let input_file = File::open(input_path)?;
+    let reader = BufReader::new(input_file);
+    let mut csv_reader = csv::Reader::from_reader(reader);
+
+    let output_file = File::create(output_path)?;
+    let writer = BufWriter::new(output_file);
+    let mut csv_writer = csv::Writer::from_writer(writer);
+
+    let headers = csv_reader.headers()?.clone();
+    csv_writer.write_record(&headers)?;
+
+    for result in csv_reader.records() {
+        let mut record = result?;
+        if column_index < record.len() {
+            let transformed_value = transformer(&record[column_index]);
+            record[column_index] = transformed_value.into();
+        }
+        csv_writer.write_record(&record)?;
+    }
+
+    csv_writer.flush()?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_filter_csv_rows() {
+        let mut input_file = NamedTempFile::new().unwrap();
+        writeln!(input_file, "name,age,city").unwrap();
+        writeln!(input_file, "Alice,30,New York").unwrap();
+        writeln!(input_file, "Bob,25,London").unwrap();
+        writeln!(input_file, "Charlie,35,Tokyo").unwrap();
+
+        let output_file = NamedTempFile::new().unwrap();
+
+        let result = filter_csv_rows(
+            input_file.path().to_str().unwrap(),
+            output_file.path().to_str().unwrap(),
+            |fields| fields[1].parse::<i32>().unwrap_or(0) >= 30,
+        );
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 2);
+    }
+
+    #[test]
+    fn test_transform_csv_column() {
+        let mut input_file = NamedTempFile::new().unwrap();
+        writeln!(input_file, "name,age").unwrap();
+        writeln!(input_file, "alice,30").unwrap();
+        writeln!(input_file, "bob,25").unwrap();
+
+        let output_file = NamedTempFile::new().unwrap();
+
+        let result = transform_csv_column(
+            input_file.path().to_str().unwrap(),
+            output_file.path().to_str().unwrap(),
+            0,
+            |s| s.to_uppercase(),
+        );
+
+        assert!(result.is_ok());
+    }
 }

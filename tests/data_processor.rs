@@ -155,4 +155,101 @@ mod tests {
         assert_eq!(stats.variance, 2.0);
         assert_eq!(stats.count, 5);
     }
+}use std::collections::HashMap;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
+}
+
+impl DataRecord {
+    pub fn new(id: u32, values: Vec<f64>) -> Self {
+        Self {
+            id,
+            values,
+            metadata: HashMap::new(),
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.id == 0 {
+            return Err("ID cannot be zero".to_string());
+        }
+
+        if self.values.is_empty() {
+            return Err("Values cannot be empty".to_string());
+        }
+
+        for (i, &value) in self.values.iter().enumerate() {
+            if !value.is_finite() {
+                return Err(format!("Value at index {} is not finite", i));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn transform(&mut self, factor: f64) {
+        for value in &mut self.values {
+            *value *= factor;
+        }
+    }
+
+    pub fn add_metadata(&mut self, key: String, value: String) {
+        self.metadata.insert(key, value);
+    }
+}
+
+pub fn process_records(records: &mut [DataRecord], factor: f64) -> Result<(), Vec<String>> {
+    let mut errors = Vec::new();
+
+    for (index, record) in records.iter_mut().enumerate() {
+        match record.validate() {
+            Ok(_) => {
+                record.transform(factor);
+            }
+            Err(err) => {
+                errors.push(format!("Record {}: {}", index, err));
+            }
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_record() {
+        let record = DataRecord::new(1, vec![1.0, 2.0, 3.0]);
+        assert!(record.validate().is_ok());
+    }
+
+    #[test]
+    fn test_invalid_id() {
+        let record = DataRecord::new(0, vec![1.0, 2.0]);
+        assert!(record.validate().is_err());
+    }
+
+    #[test]
+    fn test_transform() {
+        let mut record = DataRecord::new(1, vec![1.0, 2.0, 3.0]);
+        record.transform(2.0);
+        assert_eq!(record.values, vec![2.0, 4.0, 6.0]);
+    }
+
+    #[test]
+    fn test_metadata() {
+        let mut record = DataRecord::new(1, vec![1.0]);
+        record.add_metadata("source".to_string(), "test".to_string());
+        assert_eq!(record.metadata.get("source"), Some(&"test".to_string()));
+    }
 }

@@ -128,4 +128,117 @@ mod tests {
         assert_eq!(config.log_level, "warn");
         assert!(!config.enable_metrics);
     }
+}use std::fs;
+use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AppConfig {
+    pub server: ServerConfig,
+    pub database: DatabaseConfig,
+    pub logging: LoggingConfig,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ServerConfig {
+    pub host: String,
+    pub port: u16,
+    pub tls_enabled: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DatabaseConfig {
+    pub url: String,
+    pub max_connections: u32,
+    pub timeout_seconds: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LoggingConfig {
+    pub level: String,
+    pub file_path: String,
+    pub rotation: String,
+}
+
+impl AppConfig {
+    pub fn from_file(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let content = fs::read_to_string(path)?;
+        let config: AppConfig = toml::from_str(&content)?;
+        Ok(config)
+    }
+
+    pub fn to_file(&self, path: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let toml_string = toml::to_string_pretty(self)?;
+        fs::write(path, toml_string)?;
+        Ok(())
+    }
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.server.port == 0 {
+            errors.push("Server port cannot be zero".to_string());
+        }
+
+        if self.database.max_connections == 0 {
+            errors.push("Database max connections must be greater than zero".to_string());
+        }
+
+        let valid_log_levels = ["error", "warn", "info", "debug", "trace"];
+        if !valid_log_levels.contains(&self.logging.level.as_str()) {
+            errors.push(format!("Invalid log level: {}", self.logging.level));
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+pub fn load_config_with_defaults(path: &str) -> AppConfig {
+    match AppConfig::from_file(path) {
+        Ok(config) => config,
+        Err(_) => {
+            let default_config = AppConfig {
+                server: ServerConfig {
+                    host: "localhost".to_string(),
+                    port: 8080,
+                    tls_enabled: false,
+                },
+                database: DatabaseConfig {
+                    url: "postgresql://localhost:5432/mydb".to_string(),
+                    max_connections: 10,
+                    timeout_seconds: 30,
+                },
+                logging: LoggingConfig {
+                    level: "info".to_string(),
+                    file_path: "app.log".to_string(),
+                    rotation: "daily".to_string(),
+                },
+            };
+            default_config
+        }
+    }
+}
+
+pub fn parse_key_value_pairs(input: &str) -> HashMap<String, String> {
+    input
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                return None;
+            }
+            let parts: Vec<&str> = line.splitn(2, '=').collect();
+            if parts.len() == 2 {
+                let key = parts[0].trim().to_string();
+                let value = parts[1].trim().to_string();
+                Some((key, value))
+            } else {
+                None
+            }
+        })
+        .collect()
 }

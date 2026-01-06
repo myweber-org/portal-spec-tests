@@ -277,3 +277,102 @@ mod tests {
         assert_eq!(config.get("HOST"), Some(&"${UNDEFINED_VAR}".to_string()));
     }
 }
+use std::collections::HashMap;
+use std::env;
+use regex::Regex;
+
+pub struct ConfigParser {
+    values: HashMap<String, String>,
+}
+
+impl ConfigParser {
+    pub fn new() -> Self {
+        ConfigParser {
+            values: HashMap::new(),
+        }
+    }
+
+    pub fn load_from_str(&mut self, content: &str) -> Result<(), String> {
+        let re = Regex::new(r"^\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*(.*?)\s*$").unwrap();
+        let var_re = Regex::new(r"\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}").unwrap();
+
+        for (line_num, line) in content.lines().enumerate() {
+            if line.trim().is_empty() || line.trim().starts_with('#') {
+                continue;
+            }
+
+            if let Some(caps) = re.captures(line) {
+                let key = caps[1].to_string();
+                let mut value = caps[2].to_string();
+
+                for var_cap in var_re.captures_iter(&value) {
+                    let var_name = &var_cap[1];
+                    if let Ok(env_value) = env::var(var_name) {
+                        value = value.replace(&var_cap[0], &env_value);
+                    }
+                }
+
+                self.values.insert(key, value);
+            } else {
+                return Err(format!("Invalid syntax at line {}", line_num + 1));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn get(&self, key: &str) -> Option<&String> {
+        self.values.get(key)
+    }
+
+    pub fn get_or_default(&self, key: &str, default: &str) -> String {
+        self.values.get(key).map(|s| s.as_str()).unwrap_or(default).to_string()
+    }
+
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.values.contains_key(key)
+    }
+
+    pub fn keys(&self) -> impl Iterator<Item = &String> {
+        self.values.keys()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_basic_parsing() {
+        let mut parser = ConfigParser::new();
+        let config = "HOST=localhost\nPORT=8080\nDEBUG=true";
+        
+        parser.load_from_str(config).unwrap();
+        
+        assert_eq!(parser.get("HOST"), Some(&"localhost".to_string()));
+        assert_eq!(parser.get("PORT"), Some(&"8080".to_string()));
+        assert_eq!(parser.get("DEBUG"), Some(&"true".to_string()));
+    }
+
+    #[test]
+    fn test_env_substitution() {
+        env::set_var("APP_ENV", "production");
+        
+        let mut parser = ConfigParser::new();
+        let config = "ENVIRONMENT=${APP_ENV}\nLOG_LEVEL=info";
+        
+        parser.load_from_str(config).unwrap();
+        
+        assert_eq!(parser.get("ENVIRONMENT"), Some(&"production".to_string()));
+        assert_eq!(parser.get("LOG_LEVEL"), Some(&"info".to_string()));
+    }
+
+    #[test]
+    fn test_invalid_syntax() {
+        let mut parser = ConfigParser::new();
+        let config = "INVALID LINE\nVALID=value";
+        
+        let result = parser.load_from_str(config);
+        assert!(result.is_err());
+    }
+}

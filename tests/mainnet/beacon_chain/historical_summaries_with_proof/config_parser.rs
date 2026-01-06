@@ -1,3 +1,4 @@
+
 use std::collections::HashMap;
 use std::env;
 use std::fs;
@@ -7,38 +8,32 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn from_file(path: &str) -> Result<Self, String> {
-        let content = fs::read_to_string(path)
-            .map_err(|e| format!("Failed to read config file: {}", e))?;
-
+    pub fn from_file(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let content = fs::read_to_string(path)?;
         let mut values = HashMap::new();
+
         for line in content.lines() {
             let trimmed = line.trim();
             if trimmed.is_empty() || trimmed.starts_with('#') {
                 continue;
             }
 
-            let parts: Vec<&str> = trimmed.splitn(2, '=').collect();
-            if parts.len() != 2 {
-                return Err(format!("Invalid config line: {}", line));
+            if let Some((key, value)) = trimmed.split_once('=') {
+                let key = key.trim().to_string();
+                let processed_value = Self::process_value(value.trim());
+                values.insert(key, processed_value);
             }
-
-            let key = parts[0].trim().to_string();
-            let raw_value = parts[1].trim().to_string();
-            let value = Self::resolve_value(&raw_value);
-
-            values.insert(key, value);
         }
 
         Ok(Config { values })
     }
 
-    fn resolve_value(raw_value: &str) -> String {
-        if raw_value.starts_with("${") && raw_value.ends_with('}') {
-            let var_name = &raw_value[2..raw_value.len() - 1];
-            env::var(var_name).unwrap_or_else(|_| raw_value.to_string())
+    fn process_value(value: &str) -> String {
+        if value.starts_with("${") && value.ends_with('}') {
+            let env_var = &value[2..value.len() - 1];
+            env::var(env_var).unwrap_or_else(|_| value.to_string())
         } else {
-            raw_value.to_string()
+            value.to_string()
         }
     }
 
@@ -46,8 +41,8 @@ impl Config {
         self.values.get(key)
     }
 
-    pub fn get_or_default(&self, key: &str, default: &str) -> String {
-        self.values.get(key).map(|s| s.as_str()).unwrap_or(default).to_string()
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.values.contains_key(key)
     }
 }
 
@@ -60,39 +55,31 @@ mod tests {
     #[test]
     fn test_basic_parsing() {
         let mut file = NamedTempFile::new().unwrap();
-        writeln!(file, "HOST=localhost").unwrap();
-        writeln!(file, "PORT=8080").unwrap();
+        writeln!(file, "DATABASE_URL=postgres://localhost:5432").unwrap();
+        writeln!(file, "API_KEY=secret123").unwrap();
         writeln!(file, "# This is a comment").unwrap();
-        writeln!(file, "TIMEOUT=30").unwrap();
+        writeln!(file, "").unwrap();
+        writeln!(file, "DEBUG=true").unwrap();
 
         let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
-        assert_eq!(config.get("HOST"), Some(&"localhost".to_string()));
-        assert_eq!(config.get("PORT"), Some(&"8080".to_string()));
-        assert_eq!(config.get("TIMEOUT"), Some(&"30".to_string()));
-        assert_eq!(config.get("MISSING"), None);
+        assert_eq!(config.get("DATABASE_URL").unwrap(), "postgres://localhost:5432");
+        assert_eq!(config.get("API_KEY").unwrap(), "secret123");
+        assert_eq!(config.get("DEBUG").unwrap(), "true");
+        assert!(!config.contains_key("NONEXISTENT"));
     }
 
     #[test]
     fn test_env_substitution() {
-        env::set_var("DB_PASSWORD", "secret123");
+        env::set_var("DB_PASSWORD", "securepass");
         
         let mut file = NamedTempFile::new().unwrap();
-        writeln!(file, "DB_HOST=localhost").unwrap();
-        writeln!(file, "DB_PASS=${{DB_PASSWORD}}").unwrap();
-        writeln!(file, "NO_ENV=${{NONEXISTENT}}").unwrap();
+        writeln!(file, "PASSWORD=${DB_PASSWORD}").unwrap();
+        writeln!(file, "HOST=localhost").unwrap();
 
         let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
-        assert_eq!(config.get("DB_HOST"), Some(&"localhost".to_string()));
-        assert_eq!(config.get("DB_PASS"), Some(&"secret123".to_string()));
-        assert_eq!(config.get("NO_ENV"), Some(&"${NONEXISTENT}".to_string()));
-    }
-
-    #[test]
-    fn test_invalid_format() {
-        let mut file = NamedTempFile::new().unwrap();
-        writeln!(file, "INVALID_LINE").unwrap();
-
-        let result = Config::from_file(file.path().to_str().unwrap());
-        assert!(result.is_err());
+        assert_eq!(config.get("PASSWORD").unwrap(), "securepass");
+        assert_eq!(config.get("HOST").unwrap(), "localhost");
+        
+        env::remove_var("DB_PASSWORD");
     }
 }

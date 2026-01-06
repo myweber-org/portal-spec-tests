@@ -90,4 +90,110 @@ mod tests {
         assert_eq!(*stats.get("warnings").unwrap(), 1);
         assert_eq!(*stats.get("info").unwrap(), 2);
     }
+}use std::collections::HashMap;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use regex::Regex;
+
+pub struct LogAnalyzer {
+    error_pattern: Regex,
+    warning_pattern: Regex,
+    info_pattern: Regex,
+}
+
+impl LogAnalyzer {
+    pub fn new() -> Self {
+        LogAnalyzer {
+            error_pattern: Regex::new(r"ERROR").unwrap(),
+            warning_pattern: Regex::new(r"WARN").unwrap(),
+            info_pattern: Regex::new(r"INFO").unwrap(),
+        }
+    }
+
+    pub fn analyze_log_file(&self, file_path: &str) -> Result<LogSummary, String> {
+        let file = File::open(file_path).map_err(|e| e.to_string())?;
+        let reader = BufReader::new(file);
+        
+        let mut summary = LogSummary::new();
+        
+        for line_result in reader.lines() {
+            let line = line_result.map_err(|e| e.to_string())?;
+            self.process_line(&line, &mut summary);
+        }
+        
+        Ok(summary)
+    }
+
+    fn process_line(&self, line: &str, summary: &mut LogSummary) {
+        if self.error_pattern.is_match(line) {
+            summary.error_count += 1;
+            summary.errors.push(line.to_string());
+        } else if self.warning_pattern.is_match(line) {
+            summary.warning_count += 1;
+        } else if self.info_pattern.is_match(line) {
+            summary.info_count += 1;
+        }
+        
+        summary.total_lines += 1;
+    }
+}
+
+pub struct LogSummary {
+    pub total_lines: usize,
+    pub error_count: usize,
+    pub warning_count: usize,
+    pub info_count: usize,
+    pub errors: Vec<String>,
+}
+
+impl LogSummary {
+    pub fn new() -> Self {
+        LogSummary {
+            total_lines: 0,
+            error_count: 0,
+            warning_count: 0,
+            info_count: 0,
+            errors: Vec::new(),
+        }
+    }
+
+    pub fn print_summary(&self) {
+        println!("Log Analysis Summary:");
+        println!("Total lines: {}", self.total_lines);
+        println!("Errors: {}", self.error_count);
+        println!("Warnings: {}", self.warning_count);
+        println!("Info messages: {}", self.info_count);
+        
+        if !self.errors.is_empty() {
+            println!("\nRecent errors:");
+            for error in self.errors.iter().take(5) {
+                println!("  - {}", error);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_log_analysis() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "INFO: Application started").unwrap();
+        writeln!(temp_file, "WARN: Disk space low").unwrap();
+        writeln!(temp_file, "ERROR: Database connection failed").unwrap();
+        writeln!(temp_file, "INFO: Processing complete").unwrap();
+        
+        let analyzer = LogAnalyzer::new();
+        let summary = analyzer.analyze_log_file(temp_file.path().to_str().unwrap()).unwrap();
+        
+        assert_eq!(summary.total_lines, 4);
+        assert_eq!(summary.error_count, 1);
+        assert_eq!(summary.warning_count, 1);
+        assert_eq!(summary.info_count, 2);
+        assert_eq!(summary.errors.len(), 1);
+    }
 }

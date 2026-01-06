@@ -384,3 +384,142 @@ mod tests {
         assert_eq!(column, vec!["b", "e"]);
     }
 }
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub metadata: HashMap<String, String>,
+}
+
+#[derive(Debug)]
+pub enum ValidationError {
+    InvalidId,
+    EmptyName,
+    NegativeValue,
+    MissingMetadata(String),
+}
+
+impl fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ValidationError::InvalidId => write!(f, "ID must be greater than zero"),
+            ValidationError::EmptyName => write!(f, "Name cannot be empty"),
+            ValidationError::NegativeValue => write!(f, "Value must be non-negative"),
+            ValidationError::MissingMetadata(key) => write!(f, "Missing metadata key: {}", key),
+        }
+    }
+}
+
+impl Error for ValidationError {}
+
+impl DataRecord {
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        if self.id == 0 {
+            return Err(ValidationError::InvalidId);
+        }
+        
+        if self.name.trim().is_empty() {
+            return Err(ValidationError::EmptyName);
+        }
+        
+        if self.value < 0.0 {
+            return Err(ValidationError::NegativeValue);
+        }
+        
+        Ok(())
+    }
+    
+    pub fn transform(&mut self, multiplier: f64) -> &mut Self {
+        self.value *= multiplier;
+        self.metadata.insert(
+            "transformed".to_string(),
+            format!("multiplied by {}", multiplier)
+        );
+        self
+    }
+    
+    pub fn calculate_score(&self) -> f64 {
+        let base_score = self.value * 100.0;
+        let metadata_bonus = self.metadata.len() as f64 * 10.0;
+        base_score + metadata_bonus
+    }
+}
+
+pub fn process_records(records: &mut [DataRecord], multiplier: f64) -> Result<Vec<f64>, ValidationError> {
+    let mut scores = Vec::with_capacity(records.len());
+    
+    for record in records.iter_mut() {
+        record.validate()?;
+        record.transform(multiplier);
+        scores.push(record.calculate_score());
+    }
+    
+    Ok(scores)
+}
+
+pub fn filter_records_by_threshold(records: &[DataRecord], threshold: f64) -> Vec<&DataRecord> {
+    records.iter()
+        .filter(|record| record.value >= threshold)
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_validation() {
+        let valid_record = DataRecord {
+            id: 1,
+            name: "Test".to_string(),
+            value: 10.0,
+            metadata: HashMap::new(),
+        };
+        
+        assert!(valid_record.validate().is_ok());
+        
+        let invalid_record = DataRecord {
+            id: 0,
+            name: "".to_string(),
+            value: -5.0,
+            metadata: HashMap::new(),
+        };
+        
+        assert!(invalid_record.validate().is_err());
+    }
+    
+    #[test]
+    fn test_transformation() {
+        let mut record = DataRecord {
+            id: 1,
+            name: "Test".to_string(),
+            value: 10.0,
+            metadata: HashMap::new(),
+        };
+        
+        record.transform(2.5);
+        assert_eq!(record.value, 25.0);
+        assert!(record.metadata.contains_key("transformed"));
+    }
+    
+    #[test]
+    fn test_score_calculation() {
+        let mut record = DataRecord {
+            id: 1,
+            name: "Test".to_string(),
+            value: 10.0,
+            metadata: HashMap::new(),
+        };
+        
+        record.metadata.insert("key1".to_string(), "value1".to_string());
+        record.metadata.insert("key2".to_string(), "value2".to_string());
+        
+        let score = record.calculate_score();
+        assert_eq!(score, 10.0 * 100.0 + 2.0 * 10.0);
+    }
+}

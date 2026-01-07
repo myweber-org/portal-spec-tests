@@ -124,3 +124,77 @@ mod tests {
         assert_eq!(clean_string_vector(input), expected);
     }
 }
+use csv::Reader;
+use serde::Deserialize;
+use std::error::Error;
+use std::fs::File;
+
+#[derive(Debug, Deserialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    category: String,
+}
+
+pub fn clean_csv_data(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
+    let mut reader = Reader::from_path(input_path)?;
+    let mut writer = csv::Writer::from_writer(File::create(output_path)?);
+
+    for result in reader.deserialize() {
+        let record: Record = result?;
+        
+        if record.value.is_finite() && !record.name.is_empty() {
+            let cleaned_record = Record {
+                name: record.name.trim().to_string(),
+                value: (record.value * 100.0).round() / 100.0,
+                category: record.category.to_uppercase(),
+                ..record
+            };
+            
+            writer.serialize(cleaned_record)?;
+        }
+    }
+    
+    writer.flush()?;
+    Ok(())
+}
+
+pub fn validate_record(record: &Record) -> bool {
+    !record.name.is_empty() 
+        && record.value >= 0.0 
+        && record.value.is_finite()
+        && !record.category.is_empty()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_validate_record() {
+        let valid_record = Record {
+            id: 1,
+            name: "Test".to_string(),
+            value: 42.5,
+            category: "CATEGORY".to_string(),
+        };
+        
+        assert!(validate_record(&valid_record));
+    }
+
+    #[test]
+    fn test_clean_csv_data() -> Result<(), Box<dyn Error>> {
+        let input_data = "id,name,value,category\n1,test,42.567,category";
+        let mut temp_input = NamedTempFile::new()?;
+        std::io::write(&mut temp_input, input_data)?;
+        
+        let temp_output = NamedTempFile::new()?;
+        
+        clean_csv_data(temp_input.path().to_str().unwrap(), 
+                      temp_output.path().to_str().unwrap())?;
+        
+        Ok(())
+    }
+}

@@ -108,4 +108,73 @@ impl Config {
     pub fn get_or_default(&self, key: &str, default: &str) -> String {
         self.values.get(key).cloned().unwrap_or(default.to_string())
     }
+}use std::collections::HashMap;
+use std::env;
+use std::fs;
+
+#[derive(Debug, Clone)]
+pub struct Config {
+    pub database_url: String,
+    pub server_port: u16,
+    pub log_level: String,
+    pub cache_ttl: u64,
+}
+
+impl Config {
+    pub fn load() -> Result<Self, String> {
+        let config_path = env::var("CONFIG_PATH").unwrap_or_else(|_| "config.toml".to_string());
+        
+        let file_contents = fs::read_to_string(&config_path)
+            .map_err(|e| format!("Failed to read config file {}: {}", config_path, e))?;
+        
+        let mut config: HashMap<String, String> = toml::from_str(&file_contents)
+            .map_err(|e| format!("Failed to parse config file: {}", e))?;
+        
+        Self::apply_env_overrides(&mut config);
+        
+        Ok(Config {
+            database_url: Self::get_value(&config, "database_url")?,
+            server_port: Self::get_value(&config, "server_port")?
+                .parse()
+                .map_err(|e| format!("Invalid server_port: {}", e))?,
+            log_level: Self::get_value(&config, "log_level")?,
+            cache_ttl: Self::get_value(&config, "cache_ttl")?
+                .parse()
+                .map_err(|e| format!("Invalid cache_ttl: {}", e))?,
+        })
+    }
+    
+    fn apply_env_overrides(config: &mut HashMap<String, String>) {
+        for (key, value) in env::vars() {
+            if key.starts_with("APP_") {
+                let config_key = key.trim_start_matches("APP_").to_lowercase();
+                config.insert(config_key, value);
+            }
+        }
+    }
+    
+    fn get_value(config: &HashMap<String, String>, key: &str) -> Result<String, String> {
+        config.get(key)
+            .cloned()
+            .ok_or_else(|| format!("Missing required config key: {}", key))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_config_loading() {
+        env::set_var("APP_DATABASE_URL", "postgres://test:test@localhost/test");
+        
+        let config = Config::load();
+        assert!(config.is_ok());
+        
+        if let Ok(cfg) = config {
+            assert_eq!(cfg.database_url, "postgres://test:test@localhost/test");
+        }
+        
+        env::remove_var("APP_DATABASE_URL");
+    }
 }

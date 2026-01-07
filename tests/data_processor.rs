@@ -1,225 +1,131 @@
 
 use std::collections::HashMap;
-
-pub struct DataProcessor {
-    data: HashMap<String, Vec<f64>>,
-    validation_rules: HashMap<String, ValidationRule>,
-}
-
-pub struct ValidationRule {
-    min_value: Option<f64>,
-    max_value: Option<f64>,
-    required: bool,
-}
-
-impl DataProcessor {
-    pub fn new() -> Self {
-        DataProcessor {
-            data: HashMap::new(),
-            validation_rules: HashMap::new(),
-        }
-    }
-
-    pub fn add_dataset(&mut self, name: String, values: Vec<f64>) {
-        self.data.insert(name, values);
-    }
-
-    pub fn set_validation_rule(&mut self, field: String, rule: ValidationRule) {
-        self.validation_rules.insert(field, rule);
-    }
-
-    pub fn validate_dataset(&self, dataset_name: &str) -> Result<(), String> {
-        let data = self.data.get(dataset_name)
-            .ok_or_else(|| format!("Dataset '{}' not found", dataset_name))?;
-
-        if let Some(rule) = self.validation_rules.get(dataset_name) {
-            if rule.required && data.is_empty() {
-                return Err(format!("Dataset '{}' is required but empty", dataset_name));
-            }
-
-            for &value in data {
-                if let Some(min) = rule.min_value {
-                    if value < min {
-                        return Err(format!("Value {} below minimum {}", value, min));
-                    }
-                }
-                if let Some(max) = rule.max_value {
-                    if value > max {
-                        return Err(format!("Value {} above maximum {}", value, max));
-                    }
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    pub fn calculate_statistics(&self, dataset_name: &str) -> Option<Statistics> {
-        self.data.get(dataset_name).map(|values| {
-            let sum: f64 = values.iter().sum();
-            let count = values.len() as f64;
-            let mean = sum / count;
-            
-            let variance: f64 = values.iter()
-                .map(|&x| (x - mean).powi(2))
-                .sum::<f64>() / count;
-            
-            Statistics {
-                mean,
-                variance,
-                count: values.len(),
-                min: values.iter().fold(f64::INFINITY, |a, &b| a.min(b)),
-                max: values.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b)),
-            }
-        })
-    }
-
-    pub fn normalize_data(&mut self, dataset_name: &str) -> Result<(), String> {
-        let stats = self.calculate_statistics(dataset_name)
-            .ok_or_else(|| format!("Dataset '{}' not found", dataset_name))?;
-
-        if stats.variance == 0.0 {
-            return Err("Cannot normalize dataset with zero variance".to_string());
-        }
-
-        if let Some(values) = self.data.get_mut(dataset_name) {
-            for value in values.iter_mut() {
-                *value = (*value - stats.mean) / stats.variance.sqrt();
-            }
-        }
-
-        Ok(())
-    }
-}
-
-pub struct Statistics {
-    pub mean: f64,
-    pub variance: f64,
-    pub count: usize,
-    pub min: f64,
-    pub max: f64,
-}
-
-impl ValidationRule {
-    pub fn new() -> Self {
-        ValidationRule {
-            min_value: None,
-            max_value: None,
-            required: false,
-        }
-    }
-
-    pub fn with_min(mut self, min: f64) -> Self {
-        self.min_value = Some(min);
-        self
-    }
-
-    pub fn with_max(mut self, max: f64) -> Self {
-        self.max_value = Some(max);
-        self
-    }
-
-    pub fn required(mut self) -> Self {
-        self.required = true;
-        self
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_data_validation() {
-        let mut processor = DataProcessor::new();
-        processor.add_dataset("temperatures".to_string(), vec![20.5, 22.1, 19.8, 25.3]);
-        
-        let rule = ValidationRule::new()
-            .with_min(15.0)
-            .with_max(30.0)
-            .required();
-        
-        processor.set_validation_rule("temperatures".to_string(), rule);
-        
-        assert!(processor.validate_dataset("temperatures").is_ok());
-    }
-
-    #[test]
-    fn test_statistics_calculation() {
-        let mut processor = DataProcessor::new();
-        processor.add_dataset("measurements".to_string(), vec![1.0, 2.0, 3.0, 4.0, 5.0]);
-        
-        let stats = processor.calculate_statistics("measurements").unwrap();
-        
-        assert_eq!(stats.mean, 3.0);
-        assert_eq!(stats.variance, 2.0);
-        assert_eq!(stats.count, 5);
-    }
-}use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
 
 #[derive(Debug, Clone)]
 pub struct DataRecord {
     pub id: u32,
-    pub values: Vec<f64>,
-    pub metadata: HashMap<String, String>,
+    pub name: String,
+    pub value: f64,
+    pub category: String,
 }
 
-impl DataRecord {
-    pub fn new(id: u32, values: Vec<f64>) -> Self {
-        Self {
-            id,
-            values,
-            metadata: HashMap::new(),
+#[derive(Debug)]
+pub enum DataError {
+    InvalidId,
+    InvalidValue,
+    EmptyName,
+    UnknownCategory,
+    DuplicateRecord,
+}
+
+impl fmt::Display for DataError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DataError::InvalidId => write!(f, "ID must be greater than 0"),
+            DataError::InvalidValue => write!(f, "Value must be between 0.0 and 1000.0"),
+            DataError::EmptyName => write!(f, "Name cannot be empty"),
+            DataError::UnknownCategory => write!(f, "Category not recognized"),
+            DataError::DuplicateRecord => write!(f, "Record with this ID already exists"),
         }
-    }
-
-    pub fn validate(&self) -> Result<(), String> {
-        if self.id == 0 {
-            return Err("ID cannot be zero".to_string());
-        }
-
-        if self.values.is_empty() {
-            return Err("Values cannot be empty".to_string());
-        }
-
-        for (i, &value) in self.values.iter().enumerate() {
-            if !value.is_finite() {
-                return Err(format!("Value at index {} is not finite", i));
-            }
-        }
-
-        Ok(())
-    }
-
-    pub fn transform(&mut self, factor: f64) {
-        for value in &mut self.values {
-            *value *= factor;
-        }
-    }
-
-    pub fn add_metadata(&mut self, key: String, value: String) {
-        self.metadata.insert(key, value);
     }
 }
 
-pub fn process_records(records: &mut [DataRecord], factor: f64) -> Result<(), Vec<String>> {
-    let mut errors = Vec::new();
+impl Error for DataError {}
 
-    for (index, record) in records.iter_mut().enumerate() {
-        match record.validate() {
-            Ok(_) => {
-                record.transform(factor);
-            }
-            Err(err) => {
-                errors.push(format!("Record {}: {}", index, err));
-            }
+pub struct DataProcessor {
+    records: HashMap<u32, DataRecord>,
+    valid_categories: Vec<String>,
+}
+
+impl DataProcessor {
+    pub fn new(categories: Vec<String>) -> Self {
+        DataProcessor {
+            records: HashMap::new(),
+            valid_categories: categories,
         }
     }
 
-    if errors.is_empty() {
+    pub fn add_record(&mut self, record: DataRecord) -> Result<(), DataError> {
+        if record.id == 0 {
+            return Err(DataError::InvalidId);
+        }
+        
+        if self.records.contains_key(&record.id) {
+            return Err(DataError::DuplicateRecord);
+        }
+        
+        if record.name.trim().is_empty() {
+            return Err(DataError::EmptyName);
+        }
+        
+        if record.value < 0.0 || record.value > 1000.0 {
+            return Err(DataError::InvalidValue);
+        }
+        
+        if !self.valid_categories.contains(&record.category) {
+            return Err(DataError::UnknownCategory);
+        }
+        
+        self.records.insert(record.id, record);
         Ok(())
-    } else {
-        Err(errors)
+    }
+
+    pub fn get_record(&self, id: u32) -> Option<&DataRecord> {
+        self.records.get(&id)
+    }
+
+    pub fn calculate_statistics(&self) -> (f64, f64, f64) {
+        let values: Vec<f64> = self.records.values().map(|r| r.value).collect();
+        
+        if values.is_empty() {
+            return (0.0, 0.0, 0.0);
+        }
+        
+        let sum: f64 = values.iter().sum();
+        let count = values.len() as f64;
+        let mean = sum / count;
+        
+        let variance: f64 = values.iter()
+            .map(|&v| (v - mean).powi(2))
+            .sum::<f64>() / count;
+        
+        let std_dev = variance.sqrt();
+        
+        (mean, variance, std_dev)
+    }
+
+    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
+        self.records.values()
+            .filter(|record| record.category == category)
+            .collect()
+    }
+
+    pub fn transform_values<F>(&mut self, transform_fn: F) 
+    where
+        F: Fn(f64) -> f64,
+    {
+        for record in self.records.values_mut() {
+            record.value = transform_fn(record.value);
+        }
+    }
+
+    pub fn export_records(&self) -> String {
+        let mut output = String::from("id,name,value,category\n");
+        
+        let mut sorted_records: Vec<&DataRecord> = self.records.values().collect();
+        sorted_records.sort_by_key(|r| r.id);
+        
+        for record in sorted_records {
+            output.push_str(&format!("{},{},{},{}\n", 
+                record.id, 
+                record.name, 
+                record.value, 
+                record.category));
+        }
+        
+        output
     }
 }
 
@@ -228,28 +134,55 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_valid_record() {
-        let record = DataRecord::new(1, vec![1.0, 2.0, 3.0]);
-        assert!(record.validate().is_ok());
+    fn test_add_valid_record() {
+        let categories = vec!["A".to_string(), "B".to_string()];
+        let mut processor = DataProcessor::new(categories);
+        
+        let record = DataRecord {
+            id: 1,
+            name: "Test".to_string(),
+            value: 100.0,
+            category: "A".to_string(),
+        };
+        
+        assert!(processor.add_record(record).is_ok());
+        assert_eq!(processor.records.len(), 1);
     }
 
     #[test]
-    fn test_invalid_id() {
-        let record = DataRecord::new(0, vec![1.0, 2.0]);
-        assert!(record.validate().is_err());
+    fn test_add_invalid_record() {
+        let categories = vec!["A".to_string()];
+        let mut processor = DataProcessor::new(categories);
+        
+        let record = DataRecord {
+            id: 0,
+            name: "Test".to_string(),
+            value: 50.0,
+            category: "A".to_string(),
+        };
+        
+        assert!(processor.add_record(record).is_err());
     }
 
     #[test]
-    fn test_transform() {
-        let mut record = DataRecord::new(1, vec![1.0, 2.0, 3.0]);
-        record.transform(2.0);
-        assert_eq!(record.values, vec![2.0, 4.0, 6.0]);
-    }
-
-    #[test]
-    fn test_metadata() {
-        let mut record = DataRecord::new(1, vec![1.0]);
-        record.add_metadata("source".to_string(), "test".to_string());
-        assert_eq!(record.metadata.get("source"), Some(&"test".to_string()));
+    fn test_calculate_statistics() {
+        let categories = vec!["A".to_string()];
+        let mut processor = DataProcessor::new(categories);
+        
+        let records = vec![
+            DataRecord { id: 1, name: "R1".to_string(), value: 10.0, category: "A".to_string() },
+            DataRecord { id: 2, name: "R2".to_string(), value: 20.0, category: "A".to_string() },
+            DataRecord { id: 3, name: "R3".to_string(), value: 30.0, category: "A".to_string() },
+        ];
+        
+        for record in records {
+            processor.add_record(record).unwrap();
+        }
+        
+        let (mean, variance, std_dev) = processor.calculate_statistics();
+        
+        assert_eq!(mean, 20.0);
+        assert_eq!(variance, 66.66666666666667);
+        assert_eq!(std_dev, 8.16496580927726);
     }
 }

@@ -240,3 +240,86 @@ mod tests {
         assert_eq!(config.get_or_default("MISSING", "default_value"), "default_value");
     }
 }
+use std::collections::HashMap;
+use std::env;
+use std::fs;
+
+#[derive(Debug)]
+pub struct Config {
+    pub database_url: String,
+    pub api_key: String,
+    pub debug_mode: bool,
+    pub port: u16,
+}
+
+impl Config {
+    pub fn from_file(path: &str) -> Result<Self, String> {
+        let content = fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read config file: {}", e))?;
+
+        let mut settings = HashMap::new();
+        for line in content.lines() {
+            if line.trim().is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let parts: Vec<&str> = line.splitn(2, '=').collect();
+            if parts.len() == 2 {
+                let key = parts[0].trim().to_string();
+                let value = Self::resolve_value(parts[1].trim());
+                settings.insert(key, value);
+            }
+        }
+
+        Ok(Config {
+            database_url: settings
+                .get("DATABASE_URL")
+                .ok_or("DATABASE_URL not found")?
+                .clone(),
+            api_key: settings
+                .get("API_KEY")
+                .ok_or("API_KEY not found")?
+                .clone(),
+            debug_mode: settings
+                .get("DEBUG")
+                .map(|v| v == "true")
+                .unwrap_or(false),
+            port: settings
+                .get("PORT")
+                .map(|v| v.parse().unwrap_or(8080))
+                .unwrap_or(8080),
+        })
+    }
+
+    fn resolve_value(value: &str) -> String {
+        if value.starts_with("${") && value.ends_with('}') {
+            let var_name = &value[2..value.len() - 1];
+            env::var(var_name).unwrap_or_else(|_| value.to_string())
+        } else {
+            value.to_string()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_config_parsing() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "DATABASE_URL=postgres://localhost/db").unwrap();
+        writeln!(file, "API_KEY=${SECRET_KEY}").unwrap();
+        writeln!(file, "DEBUG=true").unwrap();
+        writeln!(file, "PORT=3000").unwrap();
+
+        env::set_var("SECRET_KEY", "abc123");
+        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
+
+        assert_eq!(config.database_url, "postgres://localhost/db");
+        assert_eq!(config.api_key, "abc123");
+        assert!(config.debug_mode);
+        assert_eq!(config.port, 3000);
+    }
+}

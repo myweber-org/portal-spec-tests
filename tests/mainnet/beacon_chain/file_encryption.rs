@@ -1,86 +1,71 @@
+
+use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce,
+};
 use std::fs;
-use std::io::{Read, Write};
-use std::path::Path;
 
-pub struct XorCipher {
-    key: Vec<u8>,
+pub fn encrypt_file(input_path: &str, output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let data = fs::read(input_path)?;
+    
+    let key = Aes256Gcm::generate_key(&mut OsRng);
+    let cipher = Aes256Gcm::new(&key);
+    let nonce = Nonce::from_slice(b"unique_nonce_");
+    
+    let encrypted_data = cipher.encrypt(nonce, data.as_ref())
+        .map_err(|e| format!("Encryption failed: {}", e))?;
+    
+    fs::write(output_path, encrypted_data)?;
+    
+    let key_path = format!("{}.key", output_path);
+    fs::write(key_path, key.as_slice())?;
+    
+    Ok(())
 }
 
-impl XorCipher {
-    pub fn new(key: &str) -> Self {
-        XorCipher {
-            key: key.as_bytes().to_vec(),
-        }
-    }
-
-    pub fn encrypt_file(&self, input_path: &Path, output_path: &Path) -> std::io::Result<()> {
-        self.process_file(input_path, output_path)
-    }
-
-    pub fn decrypt_file(&self, input_path: &Path, output_path: &Path) -> std::io::Result<()> {
-        self.process_file(input_path, output_path)
-    }
-
-    fn process_file(&self, input_path: &Path, output_path: &Path) -> std::io::Result<()> {
-        let mut input_file = fs::File::open(input_path)?;
-        let mut buffer = Vec::new();
-        input_file.read_to_end(&mut buffer)?;
-
-        let processed_data: Vec<u8> = buffer
-            .iter()
-            .enumerate()
-            .map(|(i, &byte)| byte ^ self.key[i % self.key.len()])
-            .collect();
-
-        let mut output_file = fs::File::create(output_path)?;
-        output_file.write_all(&processed_data)?;
-
-        Ok(())
-    }
-}
-
-pub fn generate_random_key(length: usize) -> Vec<u8> {
-    use rand::Rng;
-    let mut rng = rand::thread_rng();
-    (0..length).map(|_| rng.gen()).collect()
+pub fn decrypt_file(input_path: &str, key_path: &str, output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let encrypted_data = fs::read(input_path)?;
+    let key_data = fs::read(key_path)?;
+    
+    let key = Key::<Aes256Gcm>::from_slice(&key_data);
+    let cipher = Aes256Gcm::new(key);
+    let nonce = Nonce::from_slice(b"unique_nonce_");
+    
+    let decrypted_data = cipher.decrypt(nonce, encrypted_data.as_ref())
+        .map_err(|e| format!("Decryption failed: {}", e))?;
+    
+    fs::write(output_path, decrypted_data)?;
+    
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
     use tempfile::NamedTempFile;
-
+    
     #[test]
-    fn test_encryption_decryption() {
-        let key = "secret_key";
-        let cipher = XorCipher::new(key);
-
-        let original_content = b"Hello, this is a test message for encryption!";
-        
+    fn test_encryption_roundtrip() {
+        let test_data = b"Hello, secure world!";
         let input_file = NamedTempFile::new().unwrap();
         let encrypted_file = NamedTempFile::new().unwrap();
         let decrypted_file = NamedTempFile::new().unwrap();
-
-        fs::write(input_file.path(), original_content).unwrap();
-
-        cipher.encrypt_file(input_file.path(), encrypted_file.path()).unwrap();
-        cipher.decrypt_file(encrypted_file.path(), decrypted_file.path()).unwrap();
-
-        let decrypted_content = fs::read(decrypted_file.path()).unwrap();
-        assert_eq!(original_content.to_vec(), decrypted_content);
-    }
-
-    #[test]
-    fn test_empty_file() {
-        let cipher = XorCipher::new("key");
         
-        let input_file = NamedTempFile::new().unwrap();
-        let output_file = NamedTempFile::new().unwrap();
-
-        cipher.encrypt_file(input_file.path(), output_file.path()).unwrap();
+        fs::write(input_file.path(), test_data).unwrap();
         
-        let output_content = fs::read(output_file.path()).unwrap();
-        assert!(output_content.is_empty());
+        encrypt_file(
+            input_file.path().to_str().unwrap(),
+            encrypted_file.path().to_str().unwrap()
+        ).unwrap();
+        
+        let key_path = format!("{}.key", encrypted_file.path().to_str().unwrap());
+        decrypt_file(
+            encrypted_file.path().to_str().unwrap(),
+            &key_path,
+            decrypted_file.path().to_str().unwrap()
+        ).unwrap();
+        
+        let result = fs::read(decrypted_file.path()).unwrap();
+        assert_eq!(result, test_data);
     }
 }

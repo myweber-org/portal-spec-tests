@@ -200,4 +200,102 @@ mod tests {
         assert_eq!(result["value"], json!("first"));
         assert_eq!(result["extra"], json!("data"));
     }
+}use serde_json::{Map, Value};
+use std::collections::HashSet;
+
+pub fn merge_json(base: &mut Value, update: &Value, deep: bool) {
+    match (base, update) {
+        (Value::Object(base_map), Value::Object(update_map)) => {
+            for (key, update_value) in update_map {
+                if deep {
+                    if let Some(base_value) = base_map.get_mut(key) {
+                        merge_json(base_value, update_value, deep);
+                    } else {
+                        base_map.insert(key.clone(), update_value.clone());
+                    }
+                } else {
+                    base_map.insert(key.clone(), update_value.clone());
+                }
+            }
+        }
+        (Value::Array(base_arr), Value::Array(update_arr)) => {
+            let mut seen = HashSet::new();
+            for item in base_arr.iter() {
+                if let Value::Object(map) = item {
+                    if let Some(Value::String(id)) = map.get("id") {
+                        seen.insert(id.clone());
+                    }
+                }
+            }
+            
+            for item in update_arr {
+                if let Value::Object(map) = item {
+                    if let Some(Value::String(id)) = map.get("id") {
+                        if !seen.contains(id) {
+                            base_arr.push(item.clone());
+                        }
+                    } else {
+                        base_arr.push(item.clone());
+                    }
+                } else {
+                    base_arr.push(item.clone());
+                }
+            }
+        }
+        _ => *base = update.clone(),
+    }
+}
+
+pub fn merge_json_with_strategy(
+    base: &mut Value,
+    update: &Value,
+    strategy: MergeStrategy,
+) -> Result<(), String> {
+    match strategy {
+        MergeStrategy::Shallow => {
+            *base = update.clone();
+            Ok(())
+        }
+        MergeStrategy::Deep => {
+            merge_json(base, update, true);
+            Ok(())
+        }
+        MergeStrategy::Custom(merge_fn) => merge_fn(base, update),
+    }
+}
+
+pub enum MergeStrategy {
+    Shallow,
+    Deep,
+    Custom(fn(&mut Value, &Value) -> Result<(), String>),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_shallow_merge() {
+        let mut base = json!({"a": 1, "b": {"c": 2}});
+        let update = json!({"b": {"d": 3}, "e": 4});
+        
+        merge_json(&mut base, &update, false);
+        
+        assert_eq!(base["b"], json!({"d": 3}));
+        assert_eq!(base["e"], 4);
+    }
+
+    #[test]
+    fn test_deep_merge() {
+        let mut base = json!({"a": 1, "b": {"c": 2, "d": 5}});
+        let update = json!({"b": {"d": 3, "e": 4}, "f": 6});
+        
+        merge_json(&mut base, &update, true);
+        
+        assert_eq!(base["b"]["c"], 2);
+        assert_eq!(base["b"]["d"], 3);
+        assert_eq!(base["b"]["e"], 4);
+        assert_eq!(base["f"], 6);
+    }
 }

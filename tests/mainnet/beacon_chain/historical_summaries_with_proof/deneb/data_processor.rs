@@ -90,3 +90,130 @@ impl std::fmt::Display for DataSummary {
         Ok(())
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+pub struct DataProcessor {
+    file_path: String,
+    delimiter: char,
+}
+
+impl DataProcessor {
+    pub fn new(file_path: &str, delimiter: char) -> Self {
+        DataProcessor {
+            file_path: file_path.to_string(),
+            delimiter,
+        }
+    }
+
+    pub fn process(&self) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let path = Path::new(&self.file_path);
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        
+        let mut records = Vec::new();
+        
+        for line in reader.lines() {
+            let line_content = line?;
+            if line_content.trim().is_empty() {
+                continue;
+            }
+            
+            let fields: Vec<String> = line_content
+                .split(self.delimiter)
+                .map(|s| s.trim().to_string())
+                .collect();
+            
+            if !self.validate_record(&fields) {
+                return Err(format!("Invalid record format: {}", line_content).into());
+            }
+            
+            records.push(fields);
+        }
+        
+        if records.is_empty() {
+            return Err("No valid records found in file".into());
+        }
+        
+        Ok(records)
+    }
+    
+    fn validate_record(&self, fields: &[String]) -> bool {
+        !fields.is_empty() && fields.iter().all(|f| !f.is_empty())
+    }
+    
+    pub fn calculate_statistics(&self, column_index: usize) -> Result<(f64, f64, f64), Box<dyn Error>> {
+        let records = self.process()?;
+        
+        if column_index >= records[0].len() {
+            return Err("Column index out of bounds".into());
+        }
+        
+        let mut values = Vec::new();
+        for record in &records[1..] {
+            if let Ok(value) = record[column_index].parse::<f64>() {
+                values.push(value);
+            }
+        }
+        
+        if values.is_empty() {
+            return Err("No numeric values found in specified column".into());
+        }
+        
+        let sum: f64 = values.iter().sum();
+        let count = values.len() as f64;
+        let mean = sum / count;
+        
+        let variance: f64 = values.iter()
+            .map(|x| (x - mean).powi(2))
+            .sum::<f64>() / count;
+        
+        let std_dev = variance.sqrt();
+        
+        Ok((mean, variance, std_dev))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+    
+    #[test]
+    fn test_data_processor() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,salary").unwrap();
+        writeln!(temp_file, "Alice,30,50000.0").unwrap();
+        writeln!(temp_file, "Bob,25,45000.0").unwrap();
+        writeln!(temp_file, "Charlie,35,55000.0").unwrap();
+        
+        let processor = DataProcessor::new(temp_file.path().to_str().unwrap(), ',');
+        let result = processor.process();
+        
+        assert!(result.is_ok());
+        let records = result.unwrap();
+        assert_eq!(records.len(), 3);
+        assert_eq!(records[0], vec!["name", "age", "salary"]);
+    }
+    
+    #[test]
+    fn test_statistics_calculation() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,salary").unwrap();
+        writeln!(temp_file, "Alice,30,50000.0").unwrap();
+        writeln!(temp_file, "Bob,25,45000.0").unwrap();
+        writeln!(temp_file, "Charlie,35,55000.0").unwrap();
+        
+        let processor = DataProcessor::new(temp_file.path().to_str().unwrap(), ',');
+        let stats = processor.calculate_statistics(2);
+        
+        assert!(stats.is_ok());
+        let (mean, variance, std_dev) = stats.unwrap();
+        assert!((mean - 50000.0).abs() < 0.1);
+        assert!(variance > 0.0);
+        assert!(std_dev > 0.0);
+    }
+}

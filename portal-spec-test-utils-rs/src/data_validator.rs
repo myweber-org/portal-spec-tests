@@ -34,10 +34,10 @@ mod tests {
     #[test]
     fn test_email_validation() {
         let validator = Validator::new();
-        assert!(validator.validate_email("test@example.com"));
-        assert!(validator.validate_email("user.name@domain.co.uk"));
+        assert!(validator.validate_email("user@example.com"));
+        assert!(validator.validate_email("john.doe@company.co.uk"));
         assert!(!validator.validate_email("invalid-email"));
-        assert!(!validator.validate_email("test@.com"));
+        assert!(!validator.validate_email("user@.com"));
     }
 
     #[test]

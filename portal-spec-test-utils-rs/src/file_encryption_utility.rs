@@ -304,4 +304,70 @@ mod tests {
         
         Ok(())
     }
+}use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce
+};
+use pbkdf2::{
+    password_hash::{
+        PasswordHasher, SaltString
+    },
+    Pbkdf2
+};
+use std::fs;
+
+pub struct FileEncryptor {
+    cipher: Aes256Gcm,
+}
+
+impl FileEncryptor {
+    pub fn new(password: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let salt = SaltString::generate(&mut OsRng);
+        let password_hash = Pbkdf2.hash_password(password.as_bytes(), &salt)?;
+        let hash_bytes = password_hash.hash.unwrap().as_bytes();
+        
+        let key = Key::<Aes256Gcm>::from_slice(&hash_bytes[..32]);
+        let cipher = Aes256Gcm::new(key);
+        
+        Ok(Self { cipher })
+    }
+    
+    pub fn encrypt_file(&self, input_path: &str, output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let data = fs::read(input_path)?;
+        let nonce = Nonce::generate(&mut OsRng);
+        
+        let encrypted_data = self.cipher.encrypt(&nonce, data.as_ref())?;
+        
+        let mut output = nonce.to_vec();
+        output.extend_from_slice(&encrypted_data);
+        
+        fs::write(output_path, output)?;
+        Ok(())
+    }
+    
+    pub fn decrypt_file(&self, input_path: &str, output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let encrypted_data = fs::read(input_path)?;
+        
+        if encrypted_data.len() < 12 {
+            return Err("Invalid encrypted file format".into());
+        }
+        
+        let nonce = Nonce::from_slice(&encrypted_data[..12]);
+        let ciphertext = &encrypted_data[12..];
+        
+        let decrypted_data = self.cipher.decrypt(nonce, ciphertext)?;
+        
+        fs::write(output_path, decrypted_data)?;
+        Ok(())
+    }
+}
+
+pub fn generate_key_file(password: &str, output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let salt = SaltString::generate(&mut OsRng);
+    let password_hash = Pbkdf2.hash_password(password.as_bytes(), &salt)?;
+    
+    let key_data = format!("Salt: {}\nHash: {}", salt.as_str(), password_hash.to_string());
+    fs::write(output_path, key_data)?;
+    
+    Ok(())
 }

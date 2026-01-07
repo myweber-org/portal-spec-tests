@@ -298,3 +298,126 @@ mod tests {
         assert!(result.is_err());
     }
 }
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum ProcessingError {
+    #[error("Invalid input data")]
+    InvalidInput,
+    #[error("Transformation failed: {0}")]
+    TransformationFailed(String),
+    #[error("Validation error: {0}")]
+    ValidationError(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataRecord {
+    pub id: u64,
+    pub value: f64,
+    pub timestamp: i64,
+    pub metadata: Option<Vec<String>>,
+}
+
+impl DataRecord {
+    pub fn new(id: u64, value: f64, timestamp: i64) -> Self {
+        Self {
+            id,
+            value,
+            timestamp,
+            metadata: None,
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), ProcessingError> {
+        if self.id == 0 {
+            return Err(ProcessingError::ValidationError(
+                "ID cannot be zero".to_string(),
+            ));
+        }
+
+        if self.value.is_nan() || self.value.is_infinite() {
+            return Err(ProcessingError::ValidationError(
+                "Value must be a finite number".to_string(),
+            ));
+        }
+
+        if self.timestamp < 0 {
+            return Err(ProcessingError::ValidationError(
+                "Timestamp cannot be negative".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    pub fn normalize(&mut self, factor: f64) -> Result<(), ProcessingError> {
+        if factor == 0.0 {
+            return Err(ProcessingError::TransformationFailed(
+                "Normalization factor cannot be zero".to_string(),
+            ));
+        }
+
+        self.value /= factor;
+        Ok(())
+    }
+
+    pub fn add_metadata(&mut self, metadata: &str) {
+        if let Some(ref mut meta) = self.metadata {
+            meta.push(metadata.to_string());
+        } else {
+            self.metadata = Some(vec![metadata.to_string()]);
+        }
+    }
+}
+
+pub fn process_records(
+    records: &mut [DataRecord],
+    normalization_factor: f64,
+) -> Result<Vec<DataRecord>, ProcessingError> {
+    let mut processed = Vec::with_capacity(records.len());
+
+    for record in records.iter_mut() {
+        record.validate()?;
+        record.normalize(normalization_factor)?;
+        record.add_metadata("processed");
+        processed.push(record.clone());
+    }
+
+    Ok(processed)
+}
+
+pub fn filter_records(
+    records: &[DataRecord],
+    predicate: impl Fn(&DataRecord) -> bool,
+) -> Vec<DataRecord> {
+    records.iter().filter(|r| predicate(r)).cloned().collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_record_validation() {
+        let valid_record = DataRecord::new(1, 42.5, 1234567890);
+        assert!(valid_record.validate().is_ok());
+
+        let invalid_record = DataRecord::new(0, 42.5, 1234567890);
+        assert!(invalid_record.validate().is_err());
+    }
+
+    #[test]
+    fn test_normalization() {
+        let mut record = DataRecord::new(1, 100.0, 1234567890);
+        assert!(record.normalize(10.0).is_ok());
+        assert_eq!(record.value, 10.0);
+    }
+
+    #[test]
+    fn test_metadata_addition() {
+        let mut record = DataRecord::new(1, 42.5, 1234567890);
+        record.add_metadata("test");
+        assert_eq!(record.metadata, Some(vec!["test".to_string()]));
+    }
+}

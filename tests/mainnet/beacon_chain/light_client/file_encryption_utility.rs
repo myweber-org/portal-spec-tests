@@ -492,3 +492,79 @@ mod tests {
         assert_eq!(original_content.to_vec(), decrypted_content);
     }
 }
+use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce,
+};
+use std::error::Error;
+
+pub struct FileEncryptor {
+    cipher: Aes256Gcm,
+}
+
+impl FileEncryptor {
+    pub fn new() -> Self {
+        let key = Aes256Gcm::generate_key(&mut OsRng);
+        let cipher = Aes256Gcm::new(&key);
+        Self { cipher }
+    }
+
+    pub fn encrypt_data(&self, plaintext: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+        let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+        let ciphertext = self
+            .cipher
+            .encrypt(&nonce, plaintext)
+            .map_err(|e| format!("Encryption failed: {}", e))?;
+
+        let mut result = Vec::with_capacity(nonce.len() + ciphertext.len());
+        result.extend_from_slice(nonce.as_slice());
+        result.extend_from_slice(&ciphertext);
+        Ok(result)
+    }
+
+    pub fn decrypt_data(&self, ciphertext: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+        if ciphertext.len() < 12 {
+            return Err("Invalid ciphertext length".into());
+        }
+
+        let nonce = Nonce::from_slice(&ciphertext[..12]);
+        let ciphertext_data = &ciphertext[12..];
+
+        self.cipher
+            .decrypt(nonce, ciphertext_data)
+            .map_err(|e| format!("Decryption failed: {}", e).into())
+    }
+}
+
+pub fn process_file_encryption(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
+    let encryptor = FileEncryptor::new();
+    let data = std::fs::read(input_path)?;
+    
+    let encrypted = encryptor.encrypt_data(&data)?;
+    std::fs::write(output_path, encrypted)?;
+    
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_encryption_decryption() {
+        let encryptor = FileEncryptor::new();
+        let plaintext = b"Test encryption data";
+        
+        let encrypted = encryptor.encrypt_data(plaintext).unwrap();
+        let decrypted = encryptor.decrypt_data(&encrypted).unwrap();
+        
+        assert_eq!(plaintext.to_vec(), decrypted);
+    }
+
+    #[test]
+    fn test_invalid_ciphertext() {
+        let encryptor = FileEncryptor::new();
+        let result = encryptor.decrypt_data(b"short");
+        assert!(result.is_err());
+    }
+}

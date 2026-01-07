@@ -385,4 +385,60 @@ mod tests {
         let result = merge_json_files(&paths);
         assert!(result.is_err());
     }
+}use std::collections::HashMap;
+use std::fs::File;
+use std::io::{BufReader, Read};
+use std::path::Path;
+
+pub fn merge_json_files(file_paths: &[&str]) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    let mut merged_map = HashMap::new();
+
+    for path_str in file_paths {
+        let path = Path::new(path_str);
+        let file = File::open(path)?;
+        let mut reader = BufReader::new(file);
+        let mut contents = String::new();
+        reader.read_to_string(&mut contents)?;
+
+        let json_value: serde_json::Value = serde_json::from_str(&contents)?;
+
+        if let serde_json::Value::Object(map) = json_value {
+            for (key, value) in map {
+                merged_map.insert(key, value);
+            }
+        } else {
+            return Err("Each JSON file must contain a JSON object".into());
+        }
+    }
+
+    Ok(serde_json::Value::Object(merged_map))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_merge_json_files() {
+        let temp_dir = TempDir::new().unwrap();
+        let file1_path = temp_dir.path().join("data1.json");
+        let file2_path = temp_dir.path().join("data2.json");
+
+        fs::write(&file1_path, r#"{"name": "Alice", "age": 30}"#).unwrap();
+        fs::write(&file2_path, r#"{"city": "Berlin", "active": true}"#).unwrap();
+
+        let paths = vec![
+            file1_path.to_str().unwrap(),
+            file2_path.to_str().unwrap(),
+        ];
+
+        let result = merge_json_files(&paths).unwrap();
+        let expected: serde_json::Value = serde_json::from_str(
+            r#"{"name": "Alice", "age": 30, "city": "Berlin", "active": true}"#
+        ).unwrap();
+
+        assert_eq!(result, expected);
+    }
 }

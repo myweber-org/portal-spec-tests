@@ -1,52 +1,28 @@
-use serde_json::{Value, json};
-use std::fs::{self, File};
-use std::io::{BufReader, Write};
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::{BufReader, Read};
 use std::path::Path;
 
-pub fn merge_json_files(input_paths: &[&str], output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let mut merged_array = Vec::new();
+pub fn merge_json_files(file_paths: &[&str]) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    let mut merged_map = HashMap::new();
 
-    for path_str in input_paths {
+    for path_str in file_paths {
         let path = Path::new(path_str);
-        if !path.exists() {
-            eprintln!("Warning: File {} not found, skipping.", path_str);
-            continue;
-        }
-
         let file = File::open(path)?;
-        let reader = BufReader::new(file);
-        let json_value: Value = serde_json::from_reader(reader)?;
+        let mut reader = BufReader::new(file);
+        let mut contents = String::new();
+        reader.read_to_string(&mut contents)?;
 
-        if let Value::Array(arr) = json_value {
-            merged_array.extend(arr);
-        } else {
-            merged_array.push(json_value);
-        }
-    }
+        let json_value: serde_json::Value = serde_json::from_str(&contents)?;
 
-    let output_file = File::create(output_path)?;
-    let merged_json = json!(merged_array);
-    serde_json::to_writer_pretty(output_file, &merged_json)?;
-
-    Ok(())
-}
-
-pub fn merge_json_from_directory(dir_path: &str, output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let dir = fs::read_dir(dir_path)?;
-    let mut json_files = Vec::new();
-
-    for entry in dir {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_file() {
-            if let Some(ext) = path.extension() {
-                if ext == "json" {
-                    json_files.push(path.to_string_lossy().to_string());
-                }
+        if let serde_json::Value::Object(map) = json_value {
+            for (key, value) in map {
+                merged_map.insert(key, value);
             }
+        } else {
+            return Err("Each JSON file must contain a JSON object".into());
         }
     }
 
-    let input_refs: Vec<&str> = json_files.iter().map(|s| s.as_str()).collect();
-    merge_json_files(&input_refs, output_path)
+    Ok(serde_json::Value::Object(merged_map.into_iter().collect()))
 }

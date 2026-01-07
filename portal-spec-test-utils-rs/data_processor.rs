@@ -1,83 +1,109 @@
+use std::error::Error;
 use std::fs::File;
-use std::io::{self, BufRead, BufReader, Write};
-use std::path::Path;
-use log::{error, info, warn};
+use std::io::{BufRead, BufReader};
+use std::collections::HashMap;
 
 pub struct DataProcessor {
-    input_path: String,
-    output_path: String,
+    data: Vec<f64>,
+    frequency_map: HashMap<String, u32>,
 }
 
 impl DataProcessor {
-    pub fn new(input_path: &str, output_path: &str) -> Self {
+    pub fn new() -> Self {
         DataProcessor {
-            input_path: input_path.to_string(),
-            output_path: output_path.to_string(),
+            data: Vec::new(),
+            frequency_map: HashMap::new(),
         }
     }
 
-    pub fn process(&self) -> Result<usize, Box<dyn std::error::Error>> {
-        info!("Starting data processing from {} to {}", self.input_path, self.output_path);
+    pub fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
         
-        let input_file = File::open(&self.input_path)?;
-        let reader = BufReader::new(input_file);
-        
-        let output_file = File::create(&self.output_path)?;
-        let mut writer = io::BufWriter::new(output_file);
-        
-        let mut processed_count = 0;
-        
-        for (line_num, line_result) in reader.lines().enumerate() {
-            match line_result {
-                Ok(line) => {
-                    let processed_line = self.transform_line(&line);
-                    writeln!(writer, "{}", processed_line)?;
-                    processed_count += 1;
-                    
-                    if line_num % 1000 == 0 {
-                        info!("Processed {} lines", line_num);
-                    }
+        for line in reader.lines().skip(1) {
+            let line = line?;
+            let parts: Vec<&str> = line.split(',').collect();
+            
+            if parts.len() >= 2 {
+                if let Ok(value) = parts[1].parse::<f64>() {
+                    self.data.push(value);
                 }
-                Err(e) => {
-                    warn!("Error reading line {}: {}", line_num + 1, e);
-                    continue;
-                }
-            }
-        }
-        
-        writer.flush()?;
-        info!("Completed processing. Total lines processed: {}", processed_count);
-        
-        Ok(processed_count)
-    }
-    
-    fn transform_line(&self, line: &str) -> String {
-        line.trim()
-            .to_uppercase()
-            .chars()
-            .filter(|c| c.is_alphanumeric() || c.is_whitespace())
-            .collect()
-    }
-    
-    pub fn validate_paths(&self) -> Result<(), Box<dyn std::error::Error>> {
-        if !Path::new(&self.input_path).exists() {
-            return Err(format!("Input file does not exist: {}", self.input_path).into());
-        }
-        
-        let output_dir = Path::new(&self.output_path).parent();
-        if let Some(dir) = output_dir {
-            if !dir.exists() {
-                return Err(format!("Output directory does not exist: {}", dir.display()).into());
+                
+                let category = parts[0].to_string();
+                *self.frequency_map.entry(category).or_insert(0) += 1;
             }
         }
         
         Ok(())
     }
+
+    pub fn calculate_mean(&self) -> Option<f64> {
+        if self.data.is_empty() {
+            return None;
+        }
+        
+        let sum: f64 = self.data.iter().sum();
+        Some(sum / self.data.len() as f64)
+    }
+
+    pub fn calculate_median(&self) -> Option<f64> {
+        if self.data.is_empty() {
+            return None;
+        }
+        
+        let mut sorted_data = self.data.clone();
+        sorted_data.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        
+        let mid = sorted_data.len() / 2;
+        if sorted_data.len() % 2 == 0 {
+            Some((sorted_data[mid - 1] + sorted_data[mid]) / 2.0)
+        } else {
+            Some(sorted_data[mid])
+        }
+    }
+
+    pub fn get_category_frequency(&self, category: &str) -> u32 {
+        *self.frequency_map.get(category).unwrap_or(&0)
+    }
+
+    pub fn get_top_categories(&self, limit: usize) -> Vec<(String, u32)> {
+        let mut categories: Vec<_> = self.frequency_map.iter().collect();
+        categories.sort_by(|a, b| b.1.cmp(a.1));
+        
+        categories
+            .into_iter()
+            .take(limit)
+            .map(|(k, v)| (k.clone(), *v))
+            .collect()
+    }
 }
 
-pub fn initialize_logger() -> Result<(), Box<dyn std::error::Error>> {
-    env_logger::Builder::from_default_env()
-        .filter_level(log::LevelFilter::Info)
-        .try_init()?;
-    Ok(())
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_data_processing() {
+        let mut processor = DataProcessor::new();
+        
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "category,value").unwrap();
+        writeln!(temp_file, "A,10.5").unwrap();
+        writeln!(temp_file, "B,20.3").unwrap();
+        writeln!(temp_file, "A,15.7").unwrap();
+        writeln!(temp_file, "C,8.9").unwrap();
+        
+        let result = processor.load_from_csv(temp_file.path().to_str().unwrap());
+        assert!(result.is_ok());
+        
+        assert_eq!(processor.calculate_mean(), Some(13.85));
+        assert_eq!(processor.calculate_median(), Some(13.1));
+        assert_eq!(processor.get_category_frequency("A"), 2);
+        
+        let top_categories = processor.get_top_categories(2);
+        assert_eq!(top_categories.len(), 2);
+        assert_eq!(top_categories[0].0, "A");
+    }
 }

@@ -1,41 +1,34 @@
 
-use std::fs;
-use std::io::{self, Read, Write};
+use std::fs::{self, File};
+use std::io::{Read, Write};
 use std::path::Path;
 
-const DEFAULT_KEY: u8 = 0x55;
-
-pub fn encrypt_file(input_path: &str, output_path: &str, key: Option<u8>) -> io::Result<()> {
-    let encryption_key = key.unwrap_or(DEFAULT_KEY);
-    let mut input_file = fs::File::open(input_path)?;
-    let mut buffer = Vec::new();
-    input_file.read_to_end(&mut buffer)?;
-
-    for byte in buffer.iter_mut() {
-        *byte ^= encryption_key;
+pub fn encrypt_file(input_path: &str, output_path: &str, key: &[u8]) -> Result<(), String> {
+    let path = Path::new(input_path);
+    if !path.exists() {
+        return Err("Input file does not exist".to_string());
     }
 
-    let mut output_file = fs::File::create(output_path)?;
-    output_file.write_all(&buffer)?;
+    let mut file = File::open(input_path).map_err(|e| e.to_string())?;
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer).map_err(|e| e.to_string())?;
+
+    let encrypted_data: Vec<u8> = buffer
+        .iter()
+        .enumerate()
+        .map(|(i, &byte)| byte ^ key[i % key.len()])
+        .collect();
+
+    let mut output_file = File::create(output_path).map_err(|e| e.to_string())?;
+    output_file
+        .write_all(&encrypted_data)
+        .map_err(|e| e.to_string())?;
+
     Ok(())
 }
 
-pub fn decrypt_file(input_path: &str, output_path: &str, key: Option<u8>) -> io::Result<()> {
+pub fn decrypt_file(input_path: &str, output_path: &str, key: &[u8]) -> Result<(), String> {
     encrypt_file(input_path, output_path, key)
-}
-
-pub fn encrypt_string(data: &str, key: Option<u8>) -> Vec<u8> {
-    let encryption_key = key.unwrap_or(DEFAULT_KEY);
-    data.bytes()
-        .map(|b| b ^ encryption_key)
-        .collect()
-}
-
-pub fn decrypt_string(data: &[u8], key: Option<u8>) -> String {
-    let encryption_key = key.unwrap_or(DEFAULT_KEY);
-    data.iter()
-        .map(|&b| (b ^ encryption_key) as char)
-        .collect()
 }
 
 #[cfg(test)]
@@ -44,36 +37,38 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_string_encryption() {
-        let original = "Hello, World!";
-        let encrypted = encrypt_string(original, Some(0x42));
-        let decrypted = decrypt_string(&encrypted, Some(0x42));
-        assert_eq!(original, decrypted);
+    fn test_encryption_decryption() {
+        let original_content = b"Hello, World! This is a test message.";
+        let key = b"secret_key";
+
+        let input_file = NamedTempFile::new().unwrap();
+        let encrypted_file = NamedTempFile::new().unwrap();
+        let decrypted_file = NamedTempFile::new().unwrap();
+
+        fs::write(input_file.path(), original_content).unwrap();
+
+        encrypt_file(
+            input_file.path().to_str().unwrap(),
+            encrypted_file.path().to_str().unwrap(),
+            key,
+        )
+        .unwrap();
+
+        decrypt_file(
+            encrypted_file.path().to_str().unwrap(),
+            decrypted_file.path().to_str().unwrap(),
+            key,
+        )
+        .unwrap();
+
+        let decrypted_content = fs::read(decrypted_file.path()).unwrap();
+        assert_eq!(original_content.to_vec(), decrypted_content);
     }
 
     #[test]
-    fn test_file_encryption() -> io::Result<()> {
-        let original_content = b"Secret data";
-        let mut input_file = NamedTempFile::new()?;
-        input_file.write_all(original_content)?;
-        let input_path = input_file.path().to_str().unwrap();
-
-        let output_file = NamedTempFile::new()?;
-        let output_path = output_file.path().to_str().unwrap();
-
-        encrypt_file(input_path, output_path, Some(0x99))?;
-        let mut encrypted_content = Vec::new();
-        fs::File::open(output_path)?.read_to_end(&mut encrypted_content)?;
-        assert_ne!(original_content, encrypted_content.as_slice());
-
-        let decrypted_file = NamedTempFile::new()?;
-        let decrypted_path = decrypted_file.path().to_str().unwrap();
-        decrypt_file(output_path, decrypted_path, Some(0x99))?;
-
-        let mut decrypted_content = Vec::new();
-        fs::File::open(decrypted_path)?.read_to_end(&mut decrypted_content)?;
-        assert_eq!(original_content, decrypted_content.as_slice());
-
-        Ok(())
+    fn test_nonexistent_file() {
+        let result = encrypt_file("nonexistent.txt", "output.txt", b"key");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("does not exist"));
     }
 }

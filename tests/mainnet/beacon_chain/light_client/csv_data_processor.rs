@@ -278,4 +278,76 @@ impl std::fmt::Display for CsvError {
     }
 }
 
-impl Error for CsvError {}
+impl Error for CsvError {}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+
+pub struct CsvProcessor {
+    headers: Vec<String>,
+    records: Vec<Vec<String>>,
+}
+
+impl CsvProcessor {
+    pub fn from_file(path: &str) -> Result<Self, Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut lines = reader.lines();
+
+        let headers = match lines.next() {
+            Some(Ok(line)) => line.split(',').map(|s| s.to_string()).collect(),
+            _ => return Err("Failed to read headers".into()),
+        };
+
+        let mut records = Vec::new();
+        for line_result in lines {
+            let line = line_result?;
+            let fields: Vec<String> = line.split(',').map(|s| s.to_string()).collect();
+            if fields.len() == headers.len() {
+                records.push(fields);
+            }
+        }
+
+        Ok(CsvProcessor { headers, records })
+    }
+
+    pub fn filter_by_column(&self, column_name: &str, predicate: impl Fn(&str) -> bool) -> Vec<Vec<String>> {
+        let column_index = match self.headers.iter().position(|h| h == column_name) {
+            Some(idx) => idx,
+            None => return Vec::new(),
+        };
+
+        self.records
+            .iter()
+            .filter(|record| predicate(&record[column_index]))
+            .cloned()
+            .collect()
+    }
+
+    pub fn get_column_stats(&self, column_name: &str) -> Option<(usize, usize, f64)> {
+        let column_index = self.headers.iter().position(|h| h == column_name)?;
+        
+        let numeric_values: Vec<f64> = self.records
+            .iter()
+            .filter_map(|record| record[column_index].parse().ok())
+            .collect();
+
+        if numeric_values.is_empty() {
+            return None;
+        }
+
+        let count = numeric_values.len();
+        let min = numeric_values.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+        let max = numeric_values.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+        let avg = numeric_values.iter().sum::<f64>() / count as f64;
+
+        Some((count, min as usize, max as usize, avg))
+    }
+
+    pub fn record_count(&self) -> usize {
+        self.records.len()
+    }
+
+    pub fn header_count(&self) -> usize {
+        self.headers.len()
+    }
+}

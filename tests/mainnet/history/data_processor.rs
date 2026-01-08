@@ -1,98 +1,84 @@
 
-use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
 
-pub struct DataProcessor {
-    data: HashMap<String, Vec<f64>>,
-    validation_rules: ValidationRules,
+#[derive(Debug, Clone)]
+pub struct ValidationError {
+    pub message: String,
 }
 
-pub struct ValidationRules {
-    min_value: f64,
-    max_value: f64,
-    required_keys: Vec<String>,
+impl fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Validation error: {}", self.message)
+    }
+}
+
+impl Error for ValidationError {}
+
+pub struct DataProcessor {
+    threshold: f64,
 }
 
 impl DataProcessor {
-    pub fn new(rules: ValidationRules) -> Self {
-        DataProcessor {
-            data: HashMap::new(),
-            validation_rules: rules,
+    pub fn new(threshold: f64) -> Result<Self, ValidationError> {
+        if threshold < 0.0 || threshold > 1.0 {
+            return Err(ValidationError {
+                message: format!("Threshold {} must be between 0.0 and 1.0", threshold),
+            });
         }
+
+        Ok(Self { threshold })
     }
 
-    pub fn add_dataset(&mut self, key: String, values: Vec<f64>) -> Result<(), String> {
-        if !self.validation_rules.required_keys.contains(&key) {
-            return Err(format!("Key '{}' is not in required keys list", key));
+    pub fn process_data(&self, data: &[f64]) -> Result<Vec<f64>, ValidationError> {
+        if data.is_empty() {
+            return Err(ValidationError {
+                message: "Input data cannot be empty".to_string(),
+            });
         }
 
-        for &value in &values {
-            if value < self.validation_rules.min_value || value > self.validation_rules.max_value {
-                return Err(format!("Value {} is outside allowed range [{}, {}]", 
-                    value, self.validation_rules.min_value, self.validation_rules.max_value));
+        let mean = data.iter().sum::<f64>() / data.len() as f64;
+        let mut result = Vec::with_capacity(data.len());
+
+        for &value in data {
+            let normalized = if mean == 0.0 {
+                0.0
+            } else {
+                (value - mean) / mean
+            };
+
+            if normalized.abs() > self.threshold {
+                return Err(ValidationError {
+                    message: format!(
+                        "Value {} exceeds threshold {} after normalization",
+                        value, self.threshold
+                    ),
+                });
             }
+
+            result.push(normalized);
         }
 
-        self.data.insert(key, values);
-        Ok(())
+        Ok(result)
     }
 
-    pub fn calculate_statistics(&self, key: &str) -> Option<Statistics> {
-        self.data.get(key).map(|values| {
-            let count = values.len();
-            let sum: f64 = values.iter().sum();
-            let mean = sum / count as f64;
-            let variance: f64 = values.iter()
-                .map(|&x| (x - mean).powi(2))
-                .sum::<f64>() / count as f64;
-            let std_dev = variance.sqrt();
+    pub fn calculate_statistics(&self, data: &[f64]) -> (f64, f64, f64) {
+        let count = data.len() as f64;
+        let sum: f64 = data.iter().sum();
+        let mean = sum / count;
 
-            Statistics {
-                count,
-                sum,
-                mean,
-                variance,
-                std_dev,
-            }
-        })
-    }
+        let variance: f64 = data
+            .iter()
+            .map(|&x| {
+                let diff = x - mean;
+                diff * diff
+            })
+            .sum::<f64>()
+            / count;
 
-    pub fn normalize_data(&mut self, key: &str) -> Result<(), String> {
-        if let Some(values) = self.data.get_mut(key) {
-            let stats = self.calculate_statistics(key).unwrap();
-            
-            for value in values {
-                *value = (*value - stats.mean) / stats.std_dev;
-            }
-            Ok(())
-        } else {
-            Err(format!("Key '{}' not found in dataset", key))
-        }
-    }
+        let std_dev = variance.sqrt();
 
-    pub fn merge_datasets(&mut self, other: DataProcessor) {
-        for (key, values) in other.data {
-            self.data.entry(key)
-                .and_modify(|existing| existing.extend_from_slice(&values))
-                .or_insert(values);
-        }
-    }
-}
-
-pub struct Statistics {
-    pub count: usize,
-    pub sum: f64,
-    pub mean: f64,
-    pub variance: f64,
-    pub std_dev: f64,
-}
-
-impl ValidationRules {
-    pub fn new(min_value: f64, max_value: f64, required_keys: Vec<String>) -> Self {
-        ValidationRules {
-            min_value,
-            max_value,
-            required_keys,
-        }
+        (mean, variance, std_dev)
     }
 }
 
@@ -101,31 +87,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_data_validation() {
-        let rules = ValidationRules::new(
-            0.0,
-            100.0,
-            vec!["temperature".to_string(), "humidity".to_string()]
-        );
-        
-        let mut processor = DataProcessor::new(rules);
-        
-        assert!(processor.add_dataset("temperature".to_string(), vec![25.5, 30.0, 22.1]).is_ok());
-        assert!(processor.add_dataset("invalid_key".to_string(), vec![50.0]).is_err());
-        assert!(processor.add_dataset("temperature".to_string(), vec![150.0]).is_err());
+    fn test_valid_processor_creation() {
+        let processor = DataProcessor::new(0.5);
+        assert!(processor.is_ok());
+    }
+
+    #[test]
+    fn test_invalid_processor_creation() {
+        let processor = DataProcessor::new(1.5);
+        assert!(processor.is_err());
+    }
+
+    #[test]
+    fn test_data_processing() {
+        let processor = DataProcessor::new(0.5).unwrap();
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let result = processor.process_data(&data);
+        assert!(result.is_ok());
     }
 
     #[test]
     fn test_statistics_calculation() {
-        let rules = ValidationRules::new(f64::MIN, f64::MAX, vec!["test".to_string()]);
-        let mut processor = DataProcessor::new(rules);
+        let processor = DataProcessor::new(0.5).unwrap();
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let (mean, variance, std_dev) = processor.calculate_statistics(&data);
         
-        processor.add_dataset("test".to_string(), vec![1.0, 2.0, 3.0, 4.0, 5.0]).unwrap();
-        
-        let stats = processor.calculate_statistics("test").unwrap();
-        
-        assert_eq!(stats.count, 5);
-        assert_eq!(stats.sum, 15.0);
-        assert_eq!(stats.mean, 3.0);
+        assert_eq!(mean, 3.0);
+        assert_eq!(variance, 2.0);
+        assert_eq!(std_dev, 2.0_f64.sqrt());
     }
 }

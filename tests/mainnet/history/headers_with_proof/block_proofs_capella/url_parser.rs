@@ -1,35 +1,89 @@
-use regex::Regex;
 use std::collections::HashMap;
 
-pub struct UrlParser;
+#[derive(Debug, PartialEq)]
+pub struct QueryParams {
+    params: HashMap<String, Vec<String>>,
+}
 
-impl UrlParser {
-    pub fn parse_domain(url: &str) -> Option<String> {
-        let re = Regex::new(r"https?://([^/]+)").unwrap();
-        re.captures(url)
-            .and_then(|cap| cap.get(1))
-            .map(|m| m.as_str().to_string())
+impl QueryParams {
+    pub fn new() -> Self {
+        QueryParams {
+            params: HashMap::new(),
+        }
     }
 
-    pub fn parse_query_params(url: &str) -> HashMap<String, String> {
+    pub fn parse(query_string: &str) -> Result<Self, String> {
         let mut params = HashMap::new();
-        let query_start = url.find('?');
         
-        if let Some(start) = query_start {
-            let query_str = &url[start + 1..];
-            for pair in query_str.split('&') {
-                let parts: Vec<&str> = pair.split('=').collect();
-                if parts.len() == 2 {
-                    params.insert(parts[0].to_string(), parts[1].to_string());
-                }
+        if query_string.is_empty() {
+            return Ok(QueryParams { params });
+        }
+
+        for pair in query_string.split('&') {
+            let parts: Vec<&str> = pair.splitn(2, '=').collect();
+            if parts.len() != 2 {
+                return Err(format!("Invalid query parameter format: {}", pair));
+            }
+
+            let key = parts[0].to_string();
+            let value = parts[1].to_string();
+
+            if key.is_empty() {
+                return Err("Query parameter key cannot be empty".to_string());
+            }
+
+            params
+                .entry(key)
+                .or_insert_with(Vec::new)
+                .push(value);
+        }
+
+        Ok(QueryParams { params })
+    }
+
+    pub fn get(&self, key: &str) -> Option<&Vec<String>> {
+        self.params.get(key)
+    }
+
+    pub fn insert(&mut self, key: String, value: String) {
+        self.params
+            .entry(key)
+            .or_insert_with(Vec::new)
+            .push(value);
+    }
+
+    pub fn remove(&mut self, key: &str) -> Option<Vec<String>> {
+        self.params.remove(key)
+    }
+
+    pub fn to_string(&self) -> String {
+        let mut pairs: Vec<String> = Vec::new();
+        
+        for (key, values) in &self.params {
+            for value in values {
+                pairs.push(format!("{}={}", key, value));
             }
         }
         
-        params
+        pairs.join("&")
     }
 
-    pub fn is_valid_url(url: &str) -> bool {
-        url.starts_with("http://") || url.starts_with("https://")
+    pub fn keys(&self) -> impl Iterator<Item = &String> {
+        self.params.keys()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.params.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.params.len()
+    }
+}
+
+impl Default for QueryParams {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -38,171 +92,89 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_domain() {
-        let url = "https://www.example.com/path?query=test";
-        assert_eq!(UrlParser::parse_domain(url), Some("www.example.com".to_string()));
-        
-        let invalid = "not-a-url";
-        assert_eq!(UrlParser::parse_domain(invalid), None);
+    fn test_parse_empty_string() {
+        let params = QueryParams::parse("").unwrap();
+        assert!(params.is_empty());
+        assert_eq!(params.len(), 0);
     }
 
     #[test]
-    fn test_parse_query_params() {
-        let url = "https://example.com?name=john&age=25&city=ny";
-        let params = UrlParser::parse_query_params(url);
-        
-        assert_eq!(params.get("name"), Some(&"john".to_string()));
-        assert_eq!(params.get("age"), Some(&"25".to_string()));
-        assert_eq!(params.get("city"), Some(&"ny".to_string()));
-        assert_eq!(params.get("country"), None);
+    fn test_parse_single_param() {
+        let params = QueryParams::parse("name=john").unwrap();
+        assert_eq!(params.len(), 1);
+        assert_eq!(params.get("name").unwrap(), &vec!["john".to_string()]);
     }
 
     #[test]
-    fn test_is_valid_url() {
-        assert!(UrlParser::is_valid_url("https://example.com"));
-        assert!(UrlParser::is_valid_url("http://localhost:8080"));
-        assert!(!UrlParser::is_valid_url("ftp://example.com"));
-        assert!(!UrlParser::is_valid_url("example.com"));
-    }
-}
-use std::collections::HashMap;
-
-pub struct UrlParser;
-
-impl UrlParser {
-    pub fn parse_query_params(url: &str) -> HashMap<String, String> {
-        let mut params = HashMap::new();
-        
-        if let Some(query_start) = url.find('?') {
-            let query_string = &url[query_start + 1..];
-            
-            for param_pair in query_string.split('&') {
-                let parts: Vec<&str> = param_pair.split('=').collect();
-                if parts.len() == 2 {
-                    let key = parts[0].to_string();
-                    let value = parts[1].to_string();
-                    params.insert(key, value);
-                }
-            }
-        }
-        
-        params
-    }
-    
-    pub fn extract_domain(url: &str) -> Option<String> {
-        let url_lower = url.to_lowercase();
-        
-        if url_lower.starts_with("http://") || url_lower.starts_with("https://") {
-            if let Some(domain_start) = url.find("://") {
-                let after_protocol = &url[domain_start + 3..];
-                if let Some(domain_end) = after_protocol.find('/') {
-                    return Some(after_protocol[..domain_end].to_string());
-                }
-                return Some(after_protocol.to_string());
-            }
-        }
-        
-        None
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_query_params() {
-        let url = "https://example.com/search?q=rust&lang=en&page=1";
-        let params = UrlParser::parse_query_params(url);
-        
-        assert_eq!(params.get("q"), Some(&"rust".to_string()));
-        assert_eq!(params.get("lang"), Some(&"en".to_string()));
-        assert_eq!(params.get("page"), Some(&"1".to_string()));
+    fn test_parse_multiple_params() {
+        let params = QueryParams::parse("name=john&age=30&city=nyc").unwrap();
         assert_eq!(params.len(), 3);
+        assert_eq!(params.get("name").unwrap(), &vec!["john".to_string()]);
+        assert_eq!(params.get("age").unwrap(), &vec!["30".to_string()]);
+        assert_eq!(params.get("city").unwrap(), &vec!["nyc".to_string()]);
     }
-    
+
     #[test]
-    fn test_extract_domain() {
-        let url1 = "https://www.example.com/path/to/resource";
-        let url2 = "http://subdomain.example.co.uk";
-        let url3 = "invalid-url";
+    fn test_parse_duplicate_keys() {
+        let params = QueryParams::parse("color=red&color=blue&color=green").unwrap();
+        assert_eq!(params.len(), 1);
+        assert_eq!(
+            params.get("color").unwrap(),
+            &vec!["red".to_string(), "blue".to_string(), "green".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_parse_invalid_format() {
+        let result = QueryParams::parse("name");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Invalid query parameter format"));
+    }
+
+    #[test]
+    fn test_parse_empty_key() {
+        let result = QueryParams::parse("=value");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Query parameter key cannot be empty"));
+    }
+
+    #[test]
+    fn test_insert_and_remove() {
+        let mut params = QueryParams::new();
+        params.insert("test".to_string(), "value".to_string());
         
-        assert_eq!(UrlParser::extract_domain(url1), Some("www.example.com".to_string()));
-        assert_eq!(UrlParser::extract_domain(url2), Some("subdomain.example.co.uk".to_string()));
-        assert_eq!(UrlParser::extract_domain(url3), None);
-    }
-    
-    #[test]
-    fn test_empty_query_params() {
-        let url = "https://example.com";
-        let params = UrlParser::parse_query_params(url);
+        assert_eq!(params.len(), 1);
+        assert_eq!(params.get("test").unwrap(), &vec!["value".to_string()]);
+        
+        let removed = params.remove("test");
+        assert_eq!(removed.unwrap(), vec!["value".to_string()]);
         assert!(params.is_empty());
     }
-}use std::collections::HashMap;
-
-pub struct UrlParser;
-
-impl UrlParser {
-    pub fn parse_query_params(url: &str) -> HashMap<String, String> {
-        let mut params = HashMap::new();
-        
-        if let Some(query_start) = url.find('?') {
-            let query_string = &url[query_start + 1..];
-            
-            for pair in query_string.split('&') {
-                let mut parts = pair.split('=');
-                if let (Some(key), Some(value)) = (parts.next(), parts.next()) {
-                    params.insert(key.to_string(), value.to_string());
-                }
-            }
-        }
-        
-        params
-    }
-    
-    pub fn extract_domain(url: &str) -> Option<String> {
-        let url_lower = url.to_lowercase();
-        
-        if url_lower.starts_with("http://") {
-            Some(url_lower[7..].split('/').next().unwrap_or("").to_string())
-        } else if url_lower.starts_with("https://") {
-            Some(url_lower[8..].split('/').next().unwrap_or("").to_string())
-        } else {
-            None
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
 
     #[test]
-    fn test_parse_query_params() {
-        let url = "https://example.com/search?q=rust&lang=en&page=2";
-        let params = UrlParser::parse_query_params(url);
+    fn test_to_string() {
+        let mut params = QueryParams::new();
+        params.insert("name".to_string(), "john".to_string());
+        params.insert("age".to_string(), "30".to_string());
+        params.insert("color".to_string(), "red".to_string());
+        params.insert("color".to_string(), "blue".to_string());
         
-        assert_eq!(params.get("q"), Some(&"rust".to_string()));
-        assert_eq!(params.get("lang"), Some(&"en".to_string()));
-        assert_eq!(params.get("page"), Some(&"2".to_string()));
-        assert_eq!(params.get("missing"), None);
+        let query_string = params.to_string();
+        assert!(query_string.contains("name=john"));
+        assert!(query_string.contains("age=30"));
+        assert!(query_string.contains("color=red"));
+        assert!(query_string.contains("color=blue"));
+        
+        let parsed = QueryParams::parse(&query_string).unwrap();
+        assert_eq!(parsed.len(), 3);
     }
-    
+
     #[test]
-    fn test_extract_domain() {
-        assert_eq!(
-            UrlParser::extract_domain("https://example.com/path"),
-            Some("example.com".to_string())
-        );
+    fn test_keys_iterator() {
+        let params = QueryParams::parse("a=1&b=2&c=3").unwrap();
+        let mut keys: Vec<&String> = params.keys().collect();
+        keys.sort();
         
-        assert_eq!(
-            UrlParser::extract_domain("http://sub.domain.co.uk/api"),
-            Some("sub.domain.co.uk".to_string())
-        );
-        
-        assert_eq!(
-            UrlParser::extract_domain("invalid-url"),
-            None
-        );
+        assert_eq!(keys, vec!["a", "b", "c"]);
     }
 }

@@ -90,3 +90,46 @@ mod tests {
         Ok(())
     }
 }
+use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce
+};
+use std::error::Error;
+
+pub struct FileEncryptor {
+    cipher: Aes256Gcm,
+}
+
+impl FileEncryptor {
+    pub fn new() -> Self {
+        let key = Aes256Gcm::generate_key(&mut OsRng);
+        let cipher = Aes256Gcm::new(&key);
+        FileEncryptor { cipher }
+    }
+
+    pub fn encrypt_data(&self, plaintext: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+        let nonce = Nonce::from_slice(b"unique_nonce_");
+        let ciphertext = self.cipher.encrypt(nonce, plaintext)?;
+        Ok(ciphertext)
+    }
+
+    pub fn decrypt_data(&self, ciphertext: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+        let nonce = Nonce::from_slice(b"unique_nonce_");
+        let plaintext = self.cipher.decrypt(nonce, ciphertext)?;
+        Ok(plaintext)
+    }
+}
+
+pub fn process_file_encryption() -> Result<(), Box<dyn Error>> {
+    let encryptor = FileEncryptor::new();
+    let original_data = b"Sensitive file content requiring protection";
+    
+    let encrypted = encryptor.encrypt_data(original_data)?;
+    println!("Encrypted data length: {} bytes", encrypted.len());
+    
+    let decrypted = encryptor.decrypt_data(&encrypted)?;
+    assert_eq!(original_data.to_vec(), decrypted);
+    println!("Decryption successful, data integrity verified");
+    
+    Ok(())
+}

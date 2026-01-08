@@ -168,4 +168,101 @@ mod tests {
         assert_eq!(cleaned.len(), 1);
         assert_eq!(cleaned[0].get("id").unwrap(), "123");
     }
+}use std::collections::HashMap;
+
+pub struct DataCleaner {
+    filters: Vec<Box<dyn Fn(&str) -> bool>>,
+    transformations: HashMap<String, Box<dyn Fn(String) -> String>>,
+}
+
+impl DataCleaner {
+    pub fn new() -> Self {
+        DataCleaner {
+            filters: Vec::new(),
+            transformations: HashMap::new(),
+        }
+    }
+
+    pub fn add_filter<F>(&mut self, filter: F)
+    where
+        F: Fn(&str) -> bool + 'static,
+    {
+        self.filters.push(Box::new(filter));
+    }
+
+    pub fn add_transformation<N, F>(&mut self, name: N, transform: F)
+    where
+        N: Into<String>,
+        F: Fn(String) -> String + 'static,
+    {
+        self.transformations.insert(name.into(), Box::new(transform));
+    }
+
+    pub fn clean_data(&self, data: &str) -> Option<String> {
+        if !self.filters.iter().all(|f| f(data)) {
+            return None;
+        }
+
+        let mut result = data.to_string();
+        for transform in self.transformations.values() {
+            result = transform(result);
+        }
+
+        Some(result)
+    }
+
+    pub fn batch_clean(&self, dataset: Vec<&str>) -> Vec<String> {
+        dataset
+            .iter()
+            .filter_map(|&item| self.clean_data(item))
+            .collect()
+    }
+}
+
+pub fn create_default_cleaner() -> DataCleaner {
+    let mut cleaner = DataCleaner::new();
+    
+    cleaner.add_filter(|s| !s.trim().is_empty());
+    cleaner.add_filter(|s| s.len() <= 1000);
+    
+    cleaner.add_transformation("trim", |s| s.trim().to_string());
+    cleaner.add_transformation("lowercase", |s| s.to_lowercase());
+    cleaner.add_transformation("remove_extra_spaces", |s| {
+        s.split_whitespace().collect::<Vec<_>>().join(" ")
+    });
+
+    cleaner
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_data_cleaning() {
+        let cleaner = create_default_cleaner();
+        
+        let test_data = "  Hello   WORLD  ";
+        let cleaned = cleaner.clean_data(test_data).unwrap();
+        
+        assert_eq!(cleaned, "hello world");
+    }
+
+    #[test]
+    fn test_filter_rejection() {
+        let mut cleaner = DataCleaner::new();
+        cleaner.add_filter(|s| s.contains("valid"));
+        
+        assert!(cleaner.clean_data("valid data").is_some());
+        assert!(cleaner.clean_data("invalid data").is_none());
+    }
+
+    #[test]
+    fn test_batch_processing() {
+        let cleaner = create_default_cleaner();
+        let dataset = vec!["  First  ", "", "  Second  "];
+        
+        let results = cleaner.batch_clean(dataset);
+        assert_eq!(results, vec!["first", "second"]);
+    }
 }

@@ -1,52 +1,57 @@
-
-use std::collections::HashMap;
+use std::collections::HashSet;
+use std::error::Error;
 
 pub struct DataCleaner {
-    data: HashMap<String, Vec<Option<String>>>,
+    dedupe_set: HashSet<String>,
 }
 
 impl DataCleaner {
     pub fn new() -> Self {
         DataCleaner {
-            data: HashMap::new(),
+            dedupe_set: HashSet::new(),
         }
     }
 
-    pub fn add_column(&mut self, column_name: &str, values: Vec<Option<String>>) {
-        self.data.insert(column_name.to_string(), values);
+    pub fn normalize_text(&self, text: &str) -> String {
+        text.trim()
+            .to_lowercase()
+            .chars()
+            .filter(|c| c.is_alphanumeric() || c.is_whitespace())
+            .collect()
     }
 
-    pub fn clean_data(&mut self) -> HashMap<String, Vec<String>> {
-        let mut cleaned = HashMap::new();
-        
-        for (column, values) in &self.data {
-            let cleaned_values: Vec<String> = values
-                .iter()
-                .filter_map(|val| {
-                    val.as_ref().and_then(|s| {
-                        let trimmed = s.trim().to_string();
-                        if trimmed.is_empty() {
-                            None
-                        } else {
-                            Some(trimmed)
-                        }
-                    })
-                })
-                .collect();
-            
-            cleaned.insert(column.clone(), cleaned_values);
+    pub fn deduplicate(&mut self, item: &str) -> bool {
+        let normalized = self.normalize_text(item);
+        self.dedupe_set.insert(normalized)
+    }
+
+    pub fn clean_dataset(&mut self, data: Vec<&str>) -> Vec<String> {
+        let mut cleaned = Vec::new();
+        for item in data {
+            if self.deduplicate(item) {
+                cleaned.push(self.normalize_text(item));
+            }
         }
-        
         cleaned
     }
 
-    pub fn count_valid_entries(&self) -> usize {
-        self.data
-            .values()
-            .flat_map(|values| values.iter())
-            .filter(|val| val.is_some())
-            .count()
+    pub fn get_unique_count(&self) -> usize {
+        self.dedupe_set.len()
     }
+}
+
+pub fn validate_email(email: &str) -> Result<bool, Box<dyn Error>> {
+    if email.is_empty() {
+        return Err("Email cannot be empty".into());
+    }
+    
+    let parts: Vec<&str> = email.split('@').collect();
+    if parts.len() != 2 {
+        return Ok(false);
+    }
+    
+    let domain_parts: Vec<&str> = parts[1].split('.').collect();
+    Ok(domain_parts.len() >= 2 && !domain_parts.iter().any(|p| p.is_empty()))
 }
 
 #[cfg(test)]
@@ -54,27 +59,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_clean_data() {
-        let mut cleaner = DataCleaner::new();
-        
-        cleaner.add_column(
-            "names",
-            vec![
-                Some("  John  ".to_string()),
-                Some("".to_string()),
-                None,
-                Some("Alice".to_string()),
-                Some("  Bob  ".to_string()),
-            ],
-        );
+    fn test_normalize_text() {
+        let cleaner = DataCleaner::new();
+        assert_eq!(cleaner.normalize_text("  HELLO World!  "), "hello world");
+    }
 
-        let cleaned = cleaner.clean_data();
-        let names = cleaned.get("names").unwrap();
-        
-        assert_eq!(names.len(), 3);
-        assert_eq!(names[0], "John");
-        assert_eq!(names[1], "Alice");
-        assert_eq!(names[2], "Bob");
-        assert_eq!(cleaner.count_valid_entries(), 4);
+    #[test]
+    fn test_deduplicate() {
+        let mut cleaner = DataCleaner::new();
+        assert!(cleaner.deduplicate("test"));
+        assert!(!cleaner.deduplicate("TEST"));
+        assert!(cleaner.deduplicate("another"));
+    }
+
+    #[test]
+    fn test_validate_email() {
+        assert!(validate_email("user@example.com").unwrap());
+        assert!(!validate_email("invalid-email").unwrap());
+        assert!(validate_email("test@sub.domain.co.uk").unwrap());
     }
 }

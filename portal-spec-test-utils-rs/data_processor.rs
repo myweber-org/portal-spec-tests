@@ -1,109 +1,115 @@
-use std::error::Error;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
+
 use std::collections::HashMap;
 
 pub struct DataProcessor {
-    data: Vec<f64>,
-    frequency_map: HashMap<String, u32>,
+    data: HashMap<String, Vec<f64>>,
 }
 
 impl DataProcessor {
     pub fn new() -> Self {
         DataProcessor {
-            data: Vec::new(),
-            frequency_map: HashMap::new(),
+            data: HashMap::new(),
         }
     }
 
-    pub fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
-        let file = File::open(file_path)?;
-        let reader = BufReader::new(file);
-        
-        for line in reader.lines().skip(1) {
-            let line = line?;
-            let parts: Vec<&str> = line.split(',').collect();
-            
-            if parts.len() >= 2 {
-                if let Ok(value) = parts[1].parse::<f64>() {
-                    self.data.push(value);
-                }
-                
-                let category = parts[0].to_string();
-                *self.frequency_map.entry(category).or_insert(0) += 1;
-            }
+    pub fn add_dataset(&mut self, key: String, values: Vec<f64>) -> Result<(), String> {
+        if values.is_empty() {
+            return Err("Dataset cannot be empty".to_string());
         }
-        
+
+        if values.iter().any(|&x| x.is_nan() || x.is_infinite()) {
+            return Err("Dataset contains invalid numeric values".to_string());
+        }
+
+        self.data.insert(key, values);
         Ok(())
     }
 
-    pub fn calculate_mean(&self) -> Option<f64> {
-        if self.data.is_empty() {
-            return None;
-        }
-        
-        let sum: f64 = self.data.iter().sum();
-        Some(sum / self.data.len() as f64)
+    pub fn calculate_statistics(&self, key: &str) -> Option<Statistics> {
+        self.data.get(key).map(|values| {
+            let count = values.len();
+            let sum: f64 = values.iter().sum();
+            let mean = sum / count as f64;
+            
+            let variance: f64 = values.iter()
+                .map(|&x| (x - mean).powi(2))
+                .sum::<f64>() / count as f64;
+            
+            let std_dev = variance.sqrt();
+
+            Statistics {
+                count,
+                mean,
+                std_dev,
+                min: *values.iter().min_by(|a, b| a.partial_cmp(b).unwrap()).unwrap(),
+                max: *values.iter().max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap(),
+            }
+        })
     }
 
-    pub fn calculate_median(&self) -> Option<f64> {
-        if self.data.is_empty() {
-            return None;
+    pub fn normalize_data(&self, key: &str) -> Option<Vec<f64>> {
+        self.calculate_statistics(key).map(|stats| {
+            self.data[key].iter()
+                .map(|&x| (x - stats.mean) / stats.std_dev)
+                .collect()
+        })
+    }
+
+    pub fn merge_datasets(&mut self, target_key: &str, source_key: &str) -> Result<(), String> {
+        if target_key == source_key {
+            return Err("Cannot merge dataset with itself".to_string());
         }
-        
-        let mut sorted_data = self.data.clone();
-        sorted_data.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        
-        let mid = sorted_data.len() / 2;
-        if sorted_data.len() % 2 == 0 {
-            Some((sorted_data[mid - 1] + sorted_data[mid]) / 2.0)
+
+        let source_data = match self.data.get(source_key) {
+            Some(data) => data.clone(),
+            None => return Err("Source dataset not found".to_string()),
+        };
+
+        if let Some(target_data) = self.data.get_mut(target_key) {
+            target_data.extend(source_data);
+            self.data.remove(source_key);
+            Ok(())
         } else {
-            Some(sorted_data[mid])
+            Err("Target dataset not found".to_string())
         }
     }
+}
 
-    pub fn get_category_frequency(&self, category: &str) -> u32 {
-        *self.frequency_map.get(category).unwrap_or(&0)
-    }
-
-    pub fn get_top_categories(&self, limit: usize) -> Vec<(String, u32)> {
-        let mut categories: Vec<_> = self.frequency_map.iter().collect();
-        categories.sort_by(|a, b| b.1.cmp(a.1));
-        
-        categories
-            .into_iter()
-            .take(limit)
-            .map(|(k, v)| (k.clone(), *v))
-            .collect()
-    }
+pub struct Statistics {
+    pub count: usize,
+    pub mean: f64,
+    pub std_dev: f64,
+    pub min: f64,
+    pub max: f64,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_data_processing() {
+    fn test_add_valid_dataset() {
         let mut processor = DataProcessor::new();
-        
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "category,value").unwrap();
-        writeln!(temp_file, "A,10.5").unwrap();
-        writeln!(temp_file, "B,20.3").unwrap();
-        writeln!(temp_file, "A,15.7").unwrap();
-        writeln!(temp_file, "C,8.9").unwrap();
-        
-        let result = processor.load_from_csv(temp_file.path().to_str().unwrap());
+        let result = processor.add_dataset("test".to_string(), vec![1.0, 2.0, 3.0]);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_add_invalid_dataset() {
+        let mut processor = DataProcessor::new();
+        let result = processor.add_dataset("test".to_string(), vec![]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_calculate_statistics() {
+        let mut processor = DataProcessor::new();
+        processor.add_dataset("test".to_string(), vec![1.0, 2.0, 3.0, 4.0, 5.0]).unwrap();
         
-        assert_eq!(processor.calculate_mean(), Some(13.85));
-        assert_eq!(processor.calculate_median(), Some(13.1));
-        assert_eq!(processor.get_category_frequency("A"), 2);
-        
-        let top_categories = processor.get_top_categories(2);
-        assert_eq!(top_categories.len(), 2);
-        assert_eq!(top_categories[0].0, "A");
+        let stats = processor.calculate_statistics("test").unwrap();
+        assert_eq!(stats.count, 5);
+        assert_eq!(stats.mean, 3.0);
+        assert_eq!(stats.min, 1.0);
+        assert_eq!(stats.max, 5.0);
     }
 }

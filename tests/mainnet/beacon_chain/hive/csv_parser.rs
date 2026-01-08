@@ -3,27 +3,18 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
+#[derive(Debug)]
 pub struct CsvParser {
     delimiter: char,
-    has_headers: bool,
+    has_header: bool,
 }
 
 impl CsvParser {
-    pub fn new() -> Self {
+    pub fn new(delimiter: char, has_header: bool) -> Self {
         CsvParser {
-            delimiter: ',',
-            has_headers: true,
+            delimiter,
+            has_header,
         }
-    }
-
-    pub fn delimiter(mut self, delimiter: char) -> Self {
-        self.delimiter = delimiter;
-        self
-    }
-
-    pub fn has_headers(mut self, has_headers: bool) -> Self {
-        self.has_headers = has_headers;
-        self
     }
 
     pub fn parse_file<P: AsRef<Path>>(&self, path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
@@ -31,20 +22,20 @@ impl CsvParser {
         let reader = BufReader::new(file);
         let mut records = Vec::new();
 
-        for (line_num, line) in reader.lines().enumerate() {
+        for (index, line) in reader.lines().enumerate() {
             let line = line?;
             
-            if line_num == 0 && self.has_headers {
+            if self.has_header && index == 0 {
                 continue;
             }
 
-            let record: Vec<String> = line
+            let fields: Vec<String> = line
                 .split(self.delimiter)
-                .map(|field| field.trim().to_string())
+                .map(|s| s.trim().to_string())
                 .collect();
-
-            if !record.is_empty() {
-                records.push(record);
+            
+            if !fields.is_empty() {
+                records.push(fields);
             }
         }
 
@@ -52,20 +43,25 @@ impl CsvParser {
     }
 
     pub fn parse_string(&self, content: &str) -> Vec<Vec<String>> {
-        let mut records = Vec::new();
-        
-        for line in content.lines() {
-            let record: Vec<String> = line
-                .split(self.delimiter)
-                .map(|field| field.trim().to_string())
-                .collect();
-
-            if !record.is_empty() {
-                records.push(record);
-            }
-        }
-
-        records
+        content
+            .lines()
+            .enumerate()
+            .filter_map(|(index, line)| {
+                if self.has_header && index == 0 {
+                    None
+                } else {
+                    let fields: Vec<String> = line
+                        .split(self.delimiter)
+                        .map(|s| s.trim().to_string())
+                        .collect();
+                    if fields.is_empty() {
+                        None
+                    } else {
+                        Some(fields)
+                    }
+                }
+            })
+            .collect()
     }
 }
 
@@ -76,8 +72,8 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_parse_string() {
-        let parser = CsvParser::new();
+    fn test_parse_string_with_header() {
+        let parser = CsvParser::new(',', true);
         let data = "name,age,city\nJohn,30,New York\nJane,25,London";
         let result = parser.parse_string(data);
         
@@ -87,35 +83,37 @@ mod tests {
     }
 
     #[test]
-    fn test_custom_delimiter() {
-        let parser = CsvParser::new().delimiter(';');
-        let data = "name;age;city\nJohn;30;New York";
+    fn test_parse_string_without_header() {
+        let parser = CsvParser::new(';', false);
+        let data = "John;30;New York\nJane;25;London";
         let result = parser.parse_string(data);
         
+        assert_eq!(result.len(), 2);
         assert_eq!(result[0], vec!["John", "30", "New York"]);
     }
 
     #[test]
     fn test_parse_file() {
         let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "name,age,city").unwrap();
-        writeln!(temp_file, "John,30,New York").unwrap();
-        writeln!(temp_file, "Jane,25,London").unwrap();
+        writeln!(temp_file, "id,value,status").unwrap();
+        writeln!(temp_file, "1,100,active").unwrap();
+        writeln!(temp_file, "2,200,inactive").unwrap();
         
-        let parser = CsvParser::new();
+        let parser = CsvParser::new(',', true);
         let result = parser.parse_file(temp_file.path()).unwrap();
         
         assert_eq!(result.len(), 2);
-        assert_eq!(result[0], vec!["John", "30", "New York"]);
+        assert_eq!(result[0], vec!["1", "100", "active"]);
     }
 
     #[test]
-    fn test_no_headers() {
-        let parser = CsvParser::new().has_headers(false);
-        let data = "John,30,New York\nJane,25,London";
+    fn test_empty_fields() {
+        let parser = CsvParser::new(',', false);
+        let data = "field1,,field3\n,field2,";
         let result = parser.parse_string(data);
         
         assert_eq!(result.len(), 2);
-        assert_eq!(result[0], vec!["John", "30", "New York"]);
+        assert_eq!(result[0], vec!["field1", "", "field3"]);
+        assert_eq!(result[1], vec!["", "field2", ""]);
     }
 }

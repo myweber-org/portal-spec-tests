@@ -256,3 +256,103 @@ mod tests {
         assert_eq!(names, vec!["Alice", "Bob"]);
     }
 }
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum DataError {
+    #[error("Invalid data format")]
+    InvalidFormat,
+    #[error("Missing required field: {0}")]
+    MissingField(String),
+    #[error("Validation failed: {0}")]
+    ValidationFailed(String),
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DataRecord {
+    pub id: u64,
+    pub timestamp: i64,
+    pub values: HashMap<String, f64>,
+    pub tags: Vec<String>,
+}
+
+impl DataRecord {
+    pub fn validate(&self) -> Result<(), DataError> {
+        if self.id == 0 {
+            return Err(DataError::ValidationFailed("ID cannot be zero".to_string()));
+        }
+        
+        if self.timestamp <= 0 {
+            return Err(DataError::ValidationFailed("Timestamp must be positive".to_string()));
+        }
+        
+        if self.values.is_empty() {
+            return Err(DataError::ValidationFailed("Values cannot be empty".to_string()));
+        }
+        
+        Ok(())
+    }
+    
+    pub fn transform(&mut self, multiplier: f64) {
+        for value in self.values.values_mut() {
+            *value *= multiplier;
+        }
+    }
+    
+    pub fn add_tag(&mut self, tag: String) {
+        if !self.tags.contains(&tag) {
+            self.tags.push(tag);
+        }
+    }
+}
+
+pub fn process_records(records: &mut [DataRecord], multiplier: f64) -> Result<(), DataError> {
+    for record in records.iter_mut() {
+        record.validate()?;
+        record.transform(multiplier);
+    }
+    Ok(())
+}
+
+pub fn filter_records_by_tag(records: &[DataRecord], tag: &str) -> Vec<DataRecord> {
+    records
+        .iter()
+        .filter(|r| r.tags.contains(&tag.to_string()))
+        .cloned()
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_record_validation() {
+        let mut record = DataRecord {
+            id: 1,
+            timestamp: 1234567890,
+            values: HashMap::from([("temperature".to_string(), 25.5)]),
+            tags: vec!["sensor".to_string()],
+        };
+        
+        assert!(record.validate().is_ok());
+        
+        record.id = 0;
+        assert!(record.validate().is_err());
+    }
+    
+    #[test]
+    fn test_record_transformation() {
+        let mut record = DataRecord {
+            id: 1,
+            timestamp: 1234567890,
+            values: HashMap::from([("pressure".to_string(), 100.0)]),
+            tags: vec![],
+        };
+        
+        record.transform(2.0);
+        assert_eq!(record.values.get("pressure"), Some(&200.0));
+    }
+}

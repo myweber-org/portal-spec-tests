@@ -212,4 +212,39 @@ mod tests {
         assert_eq!(obj.get("city").unwrap(), "Berlin");
         assert_eq!(obj.get("active").unwrap(), true);
     }
+}use serde_json::{Value, from_reader, to_writer_pretty};
+use std::fs::{File, OpenOptions};
+use std::io::{self, BufReader};
+use std::path::Path;
+
+pub fn merge_json_files(input_paths: &[&str], output_path: &str) -> io::Result<()> {
+    let mut merged_array = Vec::new();
+
+    for input_path in input_paths {
+        let path = Path::new(input_path);
+        if !path.exists() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("File not found: {}", input_path),
+            ));
+        }
+
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let json_value: Value = from_reader(reader)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+        merged_array.push(json_value);
+    }
+
+    let output_file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(output_path)?;
+
+    to_writer_pretty(output_file, &merged_array)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+
+    Ok(())
 }

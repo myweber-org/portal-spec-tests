@@ -506,3 +506,147 @@ mod tests {
         assert_eq!(filtered[0].id, 1);
     }
 }
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug)]
+pub struct ProcessingError {
+    details: String,
+}
+
+impl ProcessingError {
+    pub fn new(msg: &str) -> Self {
+        ProcessingError {
+            details: msg.to_string(),
+        }
+    }
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.details)
+    }
+}
+
+impl Error for ProcessingError {}
+
+pub struct DataRecord {
+    pub id: u32,
+    pub value: f64,
+    pub timestamp: i64,
+}
+
+impl DataRecord {
+    pub fn validate(&self) -> Result<(), ProcessingError> {
+        if self.id == 0 {
+            return Err(ProcessingError::new("Invalid record ID"));
+        }
+        
+        if self.value.is_nan() || self.value.is_infinite() {
+            return Err(ProcessingError::new("Invalid numeric value"));
+        }
+        
+        if self.timestamp < 0 {
+            return Err(ProcessingError::new("Invalid timestamp"));
+        }
+        
+        Ok(())
+    }
+    
+    pub fn normalize(&mut self, factor: f64) -> Result<(), ProcessingError> {
+        if factor == 0.0 {
+            return Err(ProcessingError::new("Normalization factor cannot be zero"));
+        }
+        
+        self.value /= factor;
+        Ok(())
+    }
+}
+
+pub fn process_records(records: &mut [DataRecord], normalization_factor: f64) -> Result<Vec<DataRecord>, ProcessingError> {
+    let mut processed = Vec::with_capacity(records.len());
+    
+    for record in records.iter_mut() {
+        record.validate()?;
+        record.normalize(normalization_factor)?;
+        processed.push(DataRecord {
+            id: record.id,
+            value: record.value,
+            timestamp: record.timestamp,
+        });
+    }
+    
+    Ok(processed)
+}
+
+pub fn calculate_statistics(records: &[DataRecord]) -> (f64, f64, f64) {
+    if records.is_empty() {
+        return (0.0, 0.0, 0.0);
+    }
+    
+    let sum: f64 = records.iter().map(|r| r.value).sum();
+    let count = records.len() as f64;
+    let mean = sum / count;
+    
+    let variance: f64 = records.iter()
+        .map(|r| (r.value - mean).powi(2))
+        .sum::<f64>() / count;
+    
+    let std_dev = variance.sqrt();
+    
+    (mean, variance, std_dev)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_valid_record() {
+        let record = DataRecord {
+            id: 1,
+            value: 42.5,
+            timestamp: 1672531200,
+        };
+        
+        assert!(record.validate().is_ok());
+    }
+    
+    #[test]
+    fn test_invalid_record_id() {
+        let record = DataRecord {
+            id: 0,
+            value: 42.5,
+            timestamp: 1672531200,
+        };
+        
+        assert!(record.validate().is_err());
+    }
+    
+    #[test]
+    fn test_normalization() {
+        let mut record = DataRecord {
+            id: 1,
+            value: 100.0,
+            timestamp: 1672531200,
+        };
+        
+        assert!(record.normalize(10.0).is_ok());
+        assert_eq!(record.value, 10.0);
+    }
+    
+    #[test]
+    fn test_statistics_calculation() {
+        let records = vec![
+            DataRecord { id: 1, value: 10.0, timestamp: 1672531200 },
+            DataRecord { id: 2, value: 20.0, timestamp: 1672531200 },
+            DataRecord { id: 3, value: 30.0, timestamp: 1672531200 },
+        ];
+        
+        let (mean, variance, std_dev) = calculate_statistics(&records);
+        
+        assert_eq!(mean, 20.0);
+        assert_eq!(variance, 66.66666666666667);
+        assert_eq!(std_dev, 8.16496580927726);
+    }
+}

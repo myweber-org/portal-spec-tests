@@ -1,50 +1,37 @@
 
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::{BufReader, Write};
 use serde_json::{Value, Map};
-use std::fs;
-use std::path::Path;
 
-pub fn merge_json_files<P: AsRef<Path>>(paths: &[P], output_path: P) -> Result<(), Box<dyn std::error::Error>> {
-    let mut merged = Map::new();
+pub fn merge_json_files(file_paths: &[String], output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let mut merged_map: Map<String, Value> = Map::new();
 
-    for path in paths {
-        let content = fs::read_to_string(path)?;
-        let json: Value = serde_json::from_str(&content)?;
+    for path in file_paths {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let json_value: Value = serde_json::from_reader(reader)?;
 
-        if let Value::Object(obj) = json {
-            for (key, value) in obj {
-                if merged.contains_key(&key) {
-                    let existing = merged.get(&key).unwrap();
-                    if existing != &value {
-                        let resolved = resolve_conflict(&key, existing, &value);
-                        merged.insert(key, resolved);
-                    }
-                } else {
-                    merged.insert(key, value);
-                }
+        if let Value::Object(map) = json_value {
+            for (key, value) in map {
+                merged_map.insert(key, value);
             }
+        } else {
+            return Err("Each JSON file must contain a JSON object".into());
         }
     }
 
-    let output_json = Value::Object(merged);
-    let serialized = serde_json::to_string_pretty(&output_json)?;
-    fs::write(output_path, serialized)?;
-
+    let output_file = File::create(output_path)?;
+    serde_json::to_writer_pretty(output_file, &Value::Object(merged_map))?;
     Ok(())
 }
 
-fn resolve_conflict(key: &str, existing: &Value, new: &Value) -> Value {
-    match (existing, new) {
-        (Value::Array(arr1), Value::Array(arr2)) => {
-            let mut combined = arr1.clone();
-            combined.extend(arr2.clone());
-            Value::Array(combined)
-        },
-        (Value::Number(_), Value::Number(n2)) => Value::Number(n2.clone()),
-        (Value::String(_), Value::String(s2)) => Value::String(s2.clone()),
-        (Value::Bool(_), Value::Bool(b2)) => Value::Bool(*b2),
-        _ => {
-            eprintln!("Conflict detected for key '{}', using new value", key);
-            new.clone()
-        }
-    }
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let files = vec![
+        "data1.json".to_string(),
+        "data2.json".to_string(),
+    ];
+    merge_json_files(&files, "merged_output.json")?;
+    println!("JSON files merged successfully.");
+    Ok(())
 }

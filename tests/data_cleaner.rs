@@ -1,72 +1,42 @@
-
-use std::collections::HashMap;
+use std::collections::HashSet;
 
 pub struct DataCleaner {
-    data: Vec<f64>,
-    thresholds: Option<(f64, f64)>,
+    dedupe_set: HashSet<String>,
 }
 
 impl DataCleaner {
-    pub fn new(data: Vec<f64>) -> Self {
+    pub fn new() -> Self {
         DataCleaner {
-            data,
-            thresholds: None,
+            dedupe_set: HashSet::new(),
         }
     }
 
-    pub fn calculate_iqr_thresholds(&mut self) -> (f64, f64) {
-        let mut sorted_data = self.data.clone();
-        sorted_data.sort_by(|a, b| a.partial_cmp(b).unwrap());
-
-        let q1_index = (sorted_data.len() as f64 * 0.25) as usize;
-        let q3_index = (sorted_data.len() as f64 * 0.75) as usize;
-
-        let q1 = sorted_data[q1_index];
-        let q3 = sorted_data[q3_index];
-        let iqr = q3 - q1;
-
-        let lower_bound = q1 - 1.5 * iqr;
-        let upper_bound = q3 + 1.5 * iqr;
-
-        self.thresholds = Some((lower_bound, upper_bound));
-        (lower_bound, upper_bound)
+    pub fn normalize_text(&self, input: &str) -> String {
+        input.trim().to_lowercase()
     }
 
-    pub fn remove_outliers(&self) -> Vec<f64> {
-        if let Some((lower, upper)) = self.thresholds {
-            self.data
-                .iter()
-                .filter(|&&x| x >= lower && x <= upper)
-                .cloned()
-                .collect()
+    pub fn is_duplicate(&mut self, item: &str) -> bool {
+        let normalized = self.normalize_text(item);
+        if self.dedupe_set.contains(&normalized) {
+            true
         } else {
-            self.data.clone()
+            self.dedupe_set.insert(normalized);
+            false
         }
     }
 
-    pub fn get_statistics(&self) -> HashMap<String, f64> {
-        let mut stats = HashMap::new();
-        
-        if self.data.is_empty() {
-            return stats;
+    pub fn clean_dataset(&mut self, data: Vec<String>) -> Vec<String> {
+        let mut cleaned = Vec::new();
+        for item in data {
+            if !self.is_duplicate(&item) {
+                cleaned.push(item);
+            }
         }
+        cleaned
+    }
 
-        let sum: f64 = self.data.iter().sum();
-        let mean = sum / self.data.len() as f64;
-        
-        let variance: f64 = self.data.iter()
-            .map(|&x| (x - mean).powi(2))
-            .sum::<f64>() / self.data.len() as f64;
-        
-        let std_dev = variance.sqrt();
-
-        stats.insert("mean".to_string(), mean);
-        stats.insert("std_dev".to_string(), std_dev);
-        stats.insert("min".to_string(), *self.data.iter().min_by(|a, b| a.partial_cmp(b).unwrap()).unwrap());
-        stats.insert("max".to_string(), *self.data.iter().max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap());
-        stats.insert("count".to_string(), self.data.len() as f64);
-
-        stats
+    pub fn get_unique_count(&self) -> usize {
+        self.dedupe_set.len()
     }
 }
 
@@ -75,23 +45,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_outlier_removal() {
-        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 100.0];
-        let mut cleaner = DataCleaner::new(data);
-        cleaner.calculate_iqr_thresholds();
-        let cleaned = cleaner.remove_outliers();
+    fn test_deduplication() {
+        let mut cleaner = DataCleaner::new();
+        let data = vec![
+            "apple".to_string(),
+            "APPLE".to_string(),
+            "banana".to_string(),
+            " banana ".to_string(),
+        ];
         
-        assert_eq!(cleaned.len(), 5);
-        assert!(!cleaned.contains(&100.0));
+        let cleaned = cleaner.clean_dataset(data);
+        assert_eq!(cleaned.len(), 2);
+        assert_eq!(cleaner.get_unique_count(), 2);
     }
 
     #[test]
-    fn test_statistics() {
-        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
-        let cleaner = DataCleaner::new(data);
-        let stats = cleaner.get_statistics();
-        
-        assert_eq!(stats.get("mean").unwrap(), &3.0);
-        assert_eq!(stats.get("count").unwrap(), &5.0);
+    fn test_normalization() {
+        let cleaner = DataCleaner::new();
+        assert_eq!(cleaner.normalize_text("  HELLO World  "), "hello world");
     }
 }

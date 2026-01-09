@@ -454,4 +454,124 @@ mod tests {
         assert_eq!(config.get("PASSWORD"), Some(&"secret123".to_string()));
         assert_eq!(config.get("NORMAL"), Some(&"plain_value".to_string()));
     }
+}use std::collections::HashMap;
+use std::env;
+use std::fs;
+
+#[derive(Debug, Clone)]
+pub struct Config {
+    pub database_url: String,
+    pub port: u16,
+    pub log_level: String,
+    pub features: HashMap<String, bool>,
+}
+
+impl Config {
+    pub fn new() -> Result<Self, String> {
+        let config_path = env::var("CONFIG_PATH").unwrap_or_else(|_| "config.toml".to_string());
+        
+        let mut config = Self::default();
+        
+        if let Ok(content) = fs::read_to_string(&config_path) {
+            config.parse_toml(&content)?;
+        }
+        
+        config.apply_environment_overrides();
+        
+        Ok(config)
+    }
+    
+    fn parse_toml(&mut self, content: &str) -> Result<(), String> {
+        let parsed: toml::Value = content.parse()
+            .map_err(|e| format!("Failed to parse TOML: {}", e))?;
+        
+        if let Some(table) = parsed.as_table() {
+            if let Some(url) = table.get("database_url").and_then(|v| v.as_str()) {
+                self.database_url = url.to_string();
+            }
+            
+            if let Some(port) = table.get("port").and_then(|v| v.as_integer()) {
+                self.port = port as u16;
+            }
+            
+            if let Some(level) = table.get("log_level").and_then(|v| v.as_str()) {
+                self.log_level = level.to_string();
+            }
+            
+            if let Some(features) = table.get("features").and_then(|v| v.as_table()) {
+                for (key, value) in features {
+                    if let Some(bool_val) = value.as_bool() {
+                        self.features.insert(key.clone(), bool_val);
+                    }
+                }
+            }
+        }
+        
+        Ok(())
+    }
+    
+    fn apply_environment_overrides(&mut self) {
+        if let Ok(url) = env::var("DATABASE_URL") {
+            self.database_url = url;
+        }
+        
+        if let Ok(port) = env::var("PORT") {
+            if let Ok(port_num) = port.parse::<u16>() {
+                self.port = port_num;
+            }
+        }
+        
+        if let Ok(level) = env::var("LOG_LEVEL") {
+            self.log_level = level;
+        }
+        
+        for (key, _) in env::vars() {
+            if key.starts_with("FEATURE_") {
+                let feature_name = key.trim_start_matches("FEATURE_").to_lowercase();
+                let enabled = env::var(&key)
+                    .map(|v| v.to_lowercase() == "true" || v == "1")
+                    .unwrap_or(false);
+                self.features.insert(feature_name, enabled);
+            }
+        }
+    }
+    
+    pub fn is_feature_enabled(&self, feature: &str) -> bool {
+        self.features.get(feature).copied().unwrap_or(false)
+    }
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            database_url: "postgres://localhost:5432/app".to_string(),
+            port: 8080,
+            log_level: "info".to_string(),
+            features: HashMap::new(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_default_config() {
+        let config = Config::default();
+        assert_eq!(config.database_url, "postgres://localhost:5432/app");
+        assert_eq!(config.port, 8080);
+        assert_eq!(config.log_level, "info");
+    }
+    
+    #[test]
+    fn test_feature_check() {
+        let mut config = Config::default();
+        config.features.insert("dark_mode".to_string(), true);
+        config.features.insert("experimental".to_string(), false);
+        
+        assert!(config.is_feature_enabled("dark_mode"));
+        assert!(!config.is_feature_enabled("experimental"));
+        assert!(!config.is_feature_enabled("nonexistent"));
+    }
 }

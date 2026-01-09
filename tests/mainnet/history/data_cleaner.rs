@@ -197,4 +197,76 @@ mod tests {
         
         Ok(())
     }
+}use std::collections::HashSet;
+
+pub struct DataCleaner {
+    records: Vec<String>,
+}
+
+impl DataCleaner {
+    pub fn new() -> Self {
+        DataCleaner {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn add_record(&mut self, record: &str) {
+        self.records.push(record.trim().to_string());
+    }
+
+    pub fn deduplicate(&mut self) {
+        let mut seen = HashSet::new();
+        self.records.retain(|r| seen.insert(r.clone()));
+    }
+
+    pub fn normalize_case(&mut self) {
+        for record in &mut self.records {
+            let words: Vec<String> = record
+                .split_whitespace()
+                .map(|word| {
+                    let mut chars = word.chars();
+                    match chars.next() {
+                        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                        None => String::new(),
+                    }
+                })
+                .collect();
+            *record = words.join(" ");
+        }
+    }
+
+    pub fn get_records(&self) -> &[String] {
+        &self.records
+    }
+
+    pub fn clear(&mut self) {
+        self.records.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_deduplication() {
+        let mut cleaner = DataCleaner::new();
+        cleaner.add_record("test record");
+        cleaner.add_record("test record");
+        cleaner.add_record("another record");
+        cleaner.deduplicate();
+        
+        assert_eq!(cleaner.get_records().len(), 2);
+    }
+
+    #[test]
+    fn test_normalization() {
+        let mut cleaner = DataCleaner::new();
+        cleaner.add_record("hello world");
+        cleaner.add_record("rust programming");
+        cleaner.normalize_case();
+        
+        assert_eq!(cleaner.get_records()[0], "Hello World");
+        assert_eq!(cleaner.get_records()[1], "Rust Programming");
+    }
 }

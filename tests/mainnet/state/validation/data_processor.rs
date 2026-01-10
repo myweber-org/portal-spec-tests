@@ -1,231 +1,132 @@
 
-use csv::Reader;
-use serde::Deserialize;
 use std::error::Error;
 use std::fs::File;
-
-#[derive(Debug, Deserialize)]
-struct Record {
-    id: u32,
-    name: String,
-    value: f64,
-    active: bool,
-}
-
-pub fn process_data_file(file_path: &str) -> Result<Vec<Record>, Box<dyn Error>> {
-    let file = File::open(file_path)?;
-    let mut reader = Reader::from_reader(file);
-    let mut records = Vec::new();
-
-    for result in reader.deserialize() {
-        let record: Record = result?;
-        validate_record(&record)?;
-        records.push(record);
-    }
-
-    Ok(records)
-}
-
-fn validate_record(record: &Record) -> Result<(), String> {
-    if record.name.is_empty() {
-        return Err(format!("Empty name for record ID {}", record.id));
-    }
-    
-    if record.value < 0.0 {
-        return Err(format!("Negative value for record ID {}", record.id));
-    }
-
-    Ok(())
-}
-
-pub fn calculate_statistics(records: &[Record]) -> (f64, f64, f64) {
-    let sum: f64 = records.iter().map(|r| r.value).sum();
-    let count = records.len() as f64;
-    let mean = if count > 0.0 { sum / count } else { 0.0 };
-    
-    let variance: f64 = records.iter()
-        .map(|r| (r.value - mean).powi(2))
-        .sum::<f64>() / count;
-    
-    let std_dev = variance.sqrt();
-    
-    (mean, variance, std_dev)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::NamedTempFile;
-    use std::io::Write;
-
-    #[test]
-    fn test_process_valid_data() {
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "id,name,value,active").unwrap();
-        writeln!(temp_file, "1,Test1,10.5,true").unwrap();
-        writeln!(temp_file, "2,Test2,20.0,false").unwrap();
-        
-        let result = process_data_file(temp_file.path().to_str().unwrap());
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap().len(), 2);
-    }
-
-    #[test]
-    fn test_invalid_data_handling() {
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "id,name,value,active").unwrap();
-        writeln!(temp_file, "1,,10.5,true").unwrap();
-        
-        let result = process_data_file(temp_file.path().to_str().unwrap());
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_statistics_calculation() {
-        let records = vec![
-            Record { id: 1, name: "A".to_string(), value: 10.0, active: true },
-            Record { id: 2, name: "B".to_string(), value: 20.0, active: false },
-            Record { id: 3, name: "C".to_string(), value: 30.0, active: true },
-        ];
-        
-        let (mean, variance, std_dev) = calculate_statistics(&records);
-        assert_eq!(mean, 20.0);
-        assert_eq!(variance, 66.66666666666667);
-        assert_eq!(std_dev, 8.16496580927726);
-    }
-}
-use std::error::Error;
-use std::fmt;
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ProcessedData {
-    pub id: u32,
-    pub value: f64,
-    pub category: String,
-    pub is_valid: bool,
-}
+use std::io::{BufRead, BufReader};
+use std::path::Path;
 
 #[derive(Debug)]
-pub enum DataError {
-    InvalidId,
-    InvalidValue,
-    EmptyCategory,
-    ValidationFailed(String),
+pub struct DataRecord {
+    id: u32,
+    value: f64,
+    category: String,
+    valid: bool,
 }
 
-impl fmt::Display for DataError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            DataError::InvalidId => write!(f, "ID must be greater than 0"),
-            DataError::InvalidValue => write!(f, "Value must be between 0.0 and 1000.0"),
-            DataError::EmptyCategory => write!(f, "Category cannot be empty"),
-            DataError::ValidationFailed(msg) => write!(f, "Validation failed: {}", msg),
+impl DataRecord {
+    pub fn new(id: u32, value: f64, category: String) -> Self {
+        let valid = value >= 0.0 && !category.is_empty();
+        DataRecord {
+            id,
+            value,
+            category,
+            valid,
         }
+    }
+
+    pub fn is_valid(&self) -> bool {
+        self.valid
+    }
+
+    pub fn get_value(&self) -> f64 {
+        self.value
     }
 }
 
-impl Error for DataError {}
-
 pub struct DataProcessor {
-    threshold: f64,
+    records: Vec<DataRecord>,
+    total_value: f64,
+    valid_count: usize,
 }
 
 impl DataProcessor {
-    pub fn new(threshold: f64) -> Self {
-        DataProcessor { threshold }
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+            total_value: 0.0,
+            valid_count: 0,
+        }
     }
 
-    pub fn process_raw_data(
-        &self,
-        id: u32,
-        value: f64,
-        category: &str,
-    ) -> Result<ProcessedData, DataError> {
-        self.validate_input(id, value, category)?;
+    pub fn load_from_file<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
 
-        let processed_value = self.transform_value(value);
-        let is_valid = processed_value >= self.threshold;
+        for (line_num, line) in reader.lines().enumerate() {
+            let line = line?;
+            if line.trim().is_empty() || line.starts_with('#') {
+                continue;
+            }
 
-        Ok(ProcessedData {
-            id,
-            value: processed_value,
-            category: category.to_string(),
-            is_valid,
-        })
-    }
+            let parts: Vec<&str> = line.split(',').collect();
+            if parts.len() != 3 {
+                continue;
+            }
 
-    fn validate_input(&self, id: u32, value: f64, category: &str) -> Result<(), DataError> {
-        if id == 0 {
-            return Err(DataError::InvalidId);
-        }
+            let id = parts[0].parse::<u32>().unwrap_or(0);
+            let value = parts[1].parse::<f64>().unwrap_or(0.0);
+            let category = parts[2].to_string();
 
-        if value < 0.0 || value > 1000.0 {
-            return Err(DataError::InvalidValue);
-        }
-
-        if category.trim().is_empty() {
-            return Err(DataError::EmptyCategory);
+            let record = DataRecord::new(id, value, category);
+            if record.is_valid() {
+                self.total_value += record.get_value();
+                self.valid_count += 1;
+            }
+            self.records.push(record);
         }
 
         Ok(())
     }
 
-    fn transform_value(&self, value: f64) -> f64 {
-        (value * 1.1).round() / 1.0
+    pub fn get_average_value(&self) -> f64 {
+        if self.valid_count == 0 {
+            0.0
+        } else {
+            self.total_value / self.valid_count as f64
+        }
     }
 
-    pub fn batch_process(
-        &self,
-        data_points: &[(u32, f64, &str)],
-    ) -> Vec<Result<ProcessedData, DataError>> {
-        data_points
-            .iter()
-            .map(|&(id, value, category)| self.process_raw_data(id, value, category))
-            .collect()
+    pub fn get_valid_records(&self) -> Vec<&DataRecord> {
+        self.records.iter().filter(|r| r.is_valid()).collect()
+    }
+
+    pub fn count_records(&self) -> usize {
+        self.records.len()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_valid_data_processing() {
-        let processor = DataProcessor::new(50.0);
-        let result = processor.process_raw_data(1, 45.5, "analytics");
+    fn test_data_processor() {
+        let mut processor = DataProcessor::new();
+        
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "1,10.5,CategoryA").unwrap();
+        writeln!(temp_file, "2,-5.0,CategoryB").unwrap();
+        writeln!(temp_file, "3,20.0,").unwrap();
+        writeln!(temp_file, "# Comment line").unwrap();
+        writeln!(temp_file, "4,15.0,CategoryC").unwrap();
 
-        assert!(result.is_ok());
-        let data = result.unwrap();
-        assert_eq!(data.id, 1);
-        assert!(data.value > 45.5);
-        assert_eq!(data.category, "analytics");
+        processor.load_from_file(temp_file.path()).unwrap();
+        
+        assert_eq!(processor.count_records(), 3);
+        assert_eq!(processor.get_valid_records().len(), 2);
+        assert_eq!(processor.get_average_value(), 12.75);
     }
 
     #[test]
-    fn test_invalid_id() {
-        let processor = DataProcessor::new(50.0);
-        let result = processor.process_raw_data(0, 45.5, "analytics");
+    fn test_data_record_validation() {
+        let valid_record = DataRecord::new(1, 10.0, "Test".to_string());
+        assert!(valid_record.is_valid());
 
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            DataError::InvalidId => (),
-            _ => panic!("Expected InvalidId error"),
-        }
-    }
+        let invalid_value = DataRecord::new(2, -1.0, "Test".to_string());
+        assert!(!invalid_value.is_valid());
 
-    #[test]
-    fn test_batch_processing() {
-        let processor = DataProcessor::new(50.0);
-        let data_points = vec![
-            (1, 45.5, "analytics"),
-            (2, 60.0, "metrics"),
-            (3, 30.0, "logs"),
-        ];
-
-        let results = processor.batch_process(&data_points);
-        assert_eq!(results.len(), 3);
-        assert!(results[0].is_ok());
-        assert!(results[1].is_ok());
-        assert!(results[2].is_ok());
+        let invalid_category = DataRecord::new(3, 5.0, "".to_string());
+        assert!(!invalid_category.is_valid());
     }
 }

@@ -103,3 +103,169 @@ mod tests {
         Ok(())
     }
 }
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub value: f64,
+    pub category: String,
+}
+
+#[derive(Debug)]
+pub enum ProcessingError {
+    InvalidValue(f64),
+    InvalidCategory(String),
+    EmptyData,
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProcessingError::InvalidValue(v) => write!(f, "Invalid value: {}", v),
+            ProcessingError::InvalidCategory(c) => write!(f, "Invalid category: {}", c),
+            ProcessingError::EmptyData => write!(f, "Empty data provided"),
+        }
+    }
+}
+
+impl Error for ProcessingError {}
+
+pub struct DataProcessor {
+    records: Vec<DataRecord>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn add_record(&mut self, record: DataRecord) -> Result<(), ProcessingError> {
+        Self::validate_record(&record)?;
+        self.records.push(record);
+        Ok(())
+    }
+
+    pub fn process_records(&self) -> Result<Vec<DataRecord>, ProcessingError> {
+        if self.records.is_empty() {
+            return Err(ProcessingError::EmptyData);
+        }
+
+        let mut processed = Vec::with_capacity(self.records.len());
+        for record in &self.records {
+            let transformed = Self::transform_record(record)?;
+            processed.push(transformed);
+        }
+
+        Ok(processed)
+    }
+
+    fn validate_record(record: &DataRecord) -> Result<(), ProcessingError> {
+        if record.value < 0.0 || record.value > 1000.0 {
+            return Err(ProcessingError::InvalidValue(record.value));
+        }
+
+        if record.category.is_empty() || record.category.len() > 50 {
+            return Err(ProcessingError::InvalidCategory(record.category.clone()));
+        }
+
+        Ok(())
+    }
+
+    fn transform_record(record: &DataRecord) -> Result<DataRecord, ProcessingError> {
+        let transformed_value = if record.value > 500.0 {
+            record.value * 0.9
+        } else {
+            record.value * 1.1
+        };
+
+        let transformed_category = if record.category.starts_with("temp_") {
+            record.category.replace("temp_", "permanent_")
+        } else {
+            record.category.clone()
+        };
+
+        Ok(DataRecord {
+            id: record.id,
+            value: transformed_value,
+            category: transformed_category,
+        })
+    }
+
+    pub fn calculate_statistics(&self) -> Option<(f64, f64, f64)> {
+        if self.records.is_empty() {
+            return None;
+        }
+
+        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        let count = self.records.len() as f64;
+        let mean = sum / count;
+
+        let variance: f64 = self.records
+            .iter()
+            .map(|r| (r.value - mean).powi(2))
+            .sum::<f64>() / count;
+
+        let std_dev = variance.sqrt();
+
+        Some((mean, variance, std_dev))
+    }
+}
+
+impl Default for DataProcessor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_record_processing() {
+        let mut processor = DataProcessor::new();
+        let record = DataRecord {
+            id: 1,
+            value: 100.0,
+            category: "temp_data".to_string(),
+        };
+
+        assert!(processor.add_record(record).is_ok());
+        assert!(processor.process_records().is_ok());
+    }
+
+    #[test]
+    fn test_invalid_value() {
+        let mut processor = DataProcessor::new();
+        let record = DataRecord {
+            id: 1,
+            value: -10.0,
+            category: "data".to_string(),
+        };
+
+        assert!(processor.add_record(record).is_err());
+    }
+
+    #[test]
+    fn test_statistics_calculation() {
+        let mut processor = DataProcessor::new();
+        let records = vec![
+            DataRecord { id: 1, value: 10.0, category: "a".to_string() },
+            DataRecord { id: 2, value: 20.0, category: "b".to_string() },
+            DataRecord { id: 3, value: 30.0, category: "c".to_string() },
+        ];
+
+        for record in records {
+            processor.add_record(record).unwrap();
+        }
+
+        let stats = processor.calculate_statistics();
+        assert!(stats.is_some());
+        let (mean, _, _) = stats.unwrap();
+        assert_eq!(mean, 20.0);
+    }
+}

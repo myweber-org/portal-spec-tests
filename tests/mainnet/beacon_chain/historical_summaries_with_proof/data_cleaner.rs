@@ -1,32 +1,53 @@
-
-use csv::{ReaderBuilder, WriterBuilder};
+use csv::{Reader, Writer};
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::error::Error;
 use std::fs::File;
-use std::io::{BufReader, BufWriter};
 
-pub fn remove_duplicates(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
-    let input_file = File::open(input_path)?;
-    let reader = BufReader::new(input_file);
-    let mut csv_reader = ReaderBuilder::new().has_headers(true).from_reader(reader);
+#[derive(Debug, Deserialize, Serialize, Clone)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    category: String,
+}
 
-    let output_file = File::create(output_path)?;
-    let writer = BufWriter::new(output_file);
-    let mut csv_writer = WriterBuilder::new().has_headers(true).from_writer(writer);
-
-    let headers = csv_reader.headers()?.clone();
-    csv_writer.write_record(&headers)?;
-
-    let mut seen = HashSet::new();
-    for result in csv_reader.records() {
-        let record = result?;
-        let row_string = record.iter().collect::<String>();
+fn clean_csv(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
+    let mut reader = Reader::from_path(input_path)?;
+    let mut writer = Writer::from_path(output_path)?;
+    
+    let mut seen_ids = HashSet::new();
+    let mut cleaned_count = 0;
+    
+    for result in reader.deserialize() {
+        let record: Record = result?;
         
-        if seen.insert(row_string) {
-            csv_writer.write_record(&record)?;
+        if seen_ids.contains(&record.id) {
+            continue;
         }
+        
+        seen_ids.insert(record.id);
+        
+        let cleaned_record = Record {
+            id: record.id,
+            name: record.name.trim().to_string(),
+            value: if record.value.is_nan() { 0.0 } else { record.value },
+            category: record.category.to_uppercase(),
+        };
+        
+        writer.serialize(&cleaned_record)?;
+        cleaned_count += 1;
     }
-
-    csv_writer.flush()?;
+    
+    writer.flush()?;
+    println!("Cleaned {} records, removed duplicates", cleaned_count);
+    
     Ok(())
+}
+
+fn main() {
+    if let Err(e) = clean_csv("input.csv", "output.csv") {
+        eprintln!("Error cleaning CSV: {}", e);
+        std::process::exit(1);
+    }
 }

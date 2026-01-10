@@ -4,77 +4,80 @@ use std::io::{BufRead, BufReader};
 use regex::Regex;
 
 pub struct LogAnalyzer {
-    error_patterns: HashMap<String, usize>,
-    total_lines: usize,
-    time_range: (String, String),
+    error_pattern: Regex,
+    warn_pattern: Regex,
+    info_pattern: Regex,
 }
 
 impl LogAnalyzer {
     pub fn new() -> Self {
         LogAnalyzer {
-            error_patterns: HashMap::new(),
-            total_lines: 0,
-            time_range: (String::new(), String::new()),
+            error_pattern: Regex::new(r"ERROR").unwrap(),
+            warn_pattern: Regex::new(r"WARN").unwrap(),
+            info_pattern: Regex::new(r"INFO").unwrap(),
         }
     }
 
-    pub fn analyze_file(&mut self, filepath: &str) -> Result<(), String> {
-        let file = File::open(filepath)
+    pub fn analyze_file(&self, file_path: &str) -> Result<HashMap<String, usize>, String> {
+        let file = File::open(file_path)
             .map_err(|e| format!("Failed to open file: {}", e))?;
         
         let reader = BufReader::new(file);
-        let error_regex = Regex::new(r"ERROR|FATAL|CRITICAL").unwrap();
-        let timestamp_regex = Regex::new(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}").unwrap();
-
-        for (line_num, line_result) in reader.lines().enumerate() {
-            let line = line_result.map_err(|e| format!("Line read error: {}", e))?;
-            self.total_lines += 1;
-
-            if let Some(timestamp) = timestamp_regex.find(&line) {
-                let ts = timestamp.as_str().to_string();
-                if line_num == 0 {
-                    self.time_range.0 = ts.clone();
-                }
-                self.time_range.1 = ts;
-            }
-
-            if error_regex.is_match(&line) {
-                let error_key = extract_error_type(&line);
-                *self.error_patterns.entry(error_key).or_insert(0) += 1;
-            }
+        let mut stats = HashMap::new();
+        
+        for line in reader.lines() {
+            let line = line.map_err(|e| format!("Failed to read line: {}", e))?;
+            self.process_line(&line, &mut stats);
         }
-
-        Ok(())
+        
+        Ok(stats)
     }
 
-    pub fn generate_report(&self) -> String {
-        let mut report = String::new();
-        report.push_str(&format!("Total lines processed: {}\n", self.total_lines));
-        report.push_str(&format!("Time range: {} - {}\n", self.time_range.0, self.time_range.1));
-        report.push_str("Error distribution:\n");
-        
-        for (error, count) in &self.error_patterns {
-            report.push_str(&format!("  {}: {} occurrences\n", error, count));
+    fn process_line(&self, line: &str, stats: &mut HashMap<String, usize>) {
+        if self.error_pattern.is_match(line) {
+            *stats.entry("ERROR".to_string()).or_insert(0) += 1;
+        } else if self.warn_pattern.is_match(line) {
+            *stats.entry("WARN".to_string()).or_insert(0) += 1;
+        } else if self.info_pattern.is_match(line) {
+            *stats.entry("INFO".to_string()).or_insert(0) += 1;
         }
+    }
+
+    pub fn generate_report(&self, stats: &HashMap<String, usize>) -> String {
+        let mut report = String::from("Log Analysis Report\n");
+        report.push_str("===================\n");
+        
+        for (level, count) in stats {
+            report.push_str(&format!("{}: {}\n", level, count));
+        }
+        
+        let total: usize = stats.values().sum();
+        report.push_str(&format!("\nTotal log entries: {}", total));
         
         report
     }
 }
 
-fn extract_error_type(line: &str) -> String {
-    let patterns = [
-        ("Database", r"database|sql|connection"),
-        ("Network", r"network|timeout|connection refused"),
-        ("Authentication", r"auth|login|permission"),
-        ("Memory", r"memory|out of memory|heap"),
-    ];
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
 
-    for (category, pattern) in patterns.iter() {
-        let re = Regex::new(pattern).unwrap();
-        if re.is_match(&line.to_lowercase()) {
-            return category.to_string();
-        }
+    #[test]
+    fn test_log_analysis() {
+        let analyzer = LogAnalyzer::new();
+        
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "INFO: Application started").unwrap();
+        writeln!(temp_file, "WARN: Low memory").unwrap();
+        writeln!(temp_file, "ERROR: Connection failed").unwrap();
+        writeln!(temp_file, "INFO: User logged in").unwrap();
+        
+        let stats = analyzer.analyze_file(temp_file.path().to_str().unwrap()).unwrap();
+        
+        assert_eq!(stats.get("INFO"), Some(&2));
+        assert_eq!(stats.get("WARN"), Some(&1));
+        assert_eq!(stats.get("ERROR"), Some(&1));
     }
-    
-    "Unknown".to_string()
 }

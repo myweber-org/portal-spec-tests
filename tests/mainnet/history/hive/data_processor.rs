@@ -494,4 +494,99 @@ mod tests {
         assert_eq!(variance, 66.66666666666667);
         assert_eq!(std_dev, 8.16496580927726);
     }
+}use csv::Reader;
+use serde::Deserialize;
+use std::error::Error;
+use std::path::Path;
+
+#[derive(Debug, Deserialize)]
+pub struct DataRecord {
+    pub id: u32,
+    pub value: f64,
+    pub category: String,
+    pub timestamp: String,
+}
+
+pub struct DataProcessor {
+    records: Vec<DataRecord>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn Error>> {
+        let mut reader = Reader::from_path(path)?;
+        for result in reader.deserialize() {
+            let record: DataRecord = result?;
+            self.validate_record(&record)?;
+            self.records.push(record);
+        }
+        Ok(())
+    }
+
+    fn validate_record(&self, record: &DataRecord) -> Result<(), String> {
+        if record.id == 0 {
+            return Err("Invalid ID: zero is not allowed".to_string());
+        }
+        if record.value < 0.0 {
+            return Err("Negative values are not permitted".to_string());
+        }
+        if record.category.is_empty() {
+            return Err("Category cannot be empty".to_string());
+        }
+        Ok(())
+    }
+
+    pub fn calculate_average(&self) -> Option<f64> {
+        if self.records.is_empty() {
+            return None;
+        }
+        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        Some(sum / self.records.len() as f64)
+    }
+
+    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
+        self.records
+            .iter()
+            .filter(|record| record.category == category)
+            .collect()
+    }
+
+    pub fn count_records(&self) -> usize {
+        self.records.len()
+    }
+
+    pub fn get_records(&self) -> &[DataRecord] {
+        &self.records
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_data_processing() {
+        let mut processor = DataProcessor::new();
+        
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,value,category,timestamp").unwrap();
+        writeln!(temp_file, "1,42.5,alpha,2023-01-01").unwrap();
+        writeln!(temp_file, "2,33.7,beta,2023-01-02").unwrap();
+        writeln!(temp_file, "3,55.2,alpha,2023-01-03").unwrap();
+        
+        processor.load_from_csv(temp_file.path()).unwrap();
+        
+        assert_eq!(processor.count_records(), 3);
+        assert_eq!(processor.filter_by_category("alpha").len(), 2);
+        
+        let avg = processor.calculate_average().unwrap();
+        assert!((avg - 43.8).abs() < 0.1);
+    }
 }

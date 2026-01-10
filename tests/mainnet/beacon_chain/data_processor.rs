@@ -131,4 +131,140 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(result.unwrap()[0], 75.0);
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+pub struct DataProcessor {
+    delimiter: char,
+    has_header: bool,
+}
+
+impl DataProcessor {
+    pub fn new(delimiter: char, has_header: bool) -> Self {
+        DataProcessor {
+            delimiter,
+            has_header,
+        }
+    }
+
+    pub fn process_file<P: AsRef<Path>>(&self, path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut records = Vec::new();
+
+        for (line_number, line) in reader.lines().enumerate() {
+            let line = line?;
+            
+            if line_number == 0 && self.has_header {
+                continue;
+            }
+
+            let record: Vec<String> = line
+                .split(self.delimiter)
+                .map(|field| field.trim().to_string())
+                .collect();
+
+            if !record.is_empty() {
+                records.push(record);
+            }
+        }
+
+        Ok(records)
+    }
+
+    pub fn validate_records(&self, records: &[Vec<String>]) -> Vec<usize> {
+        let mut invalid_indices = Vec::new();
+
+        for (index, record) in records.iter().enumerate() {
+            if record.iter().any(|field| field.is_empty()) {
+                invalid_indices.push(index);
+            }
+        }
+
+        invalid_indices
+    }
+
+    pub fn calculate_column_averages(&self, records: &[Vec<String>]) -> Result<Vec<f64>, Box<dyn Error>> {
+        if records.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let column_count = records[0].len();
+        let mut sums = vec![0.0; column_count];
+        let mut counts = vec![0; column_count];
+
+        for record in records {
+            for (i, field) in record.iter().enumerate() {
+                if let Ok(value) = field.parse::<f64>() {
+                    sums[i] += value;
+                    counts[i] += 1;
+                }
+            }
+        }
+
+        let averages: Vec<f64> = sums
+            .iter()
+            .zip(counts.iter())
+            .map(|(&sum, &count)| {
+                if count > 0 {
+                    sum / count as f64
+                } else {
+                    0.0
+                }
+            })
+            .collect();
+
+        Ok(averages)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_process_file_with_header() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,salary").unwrap();
+        writeln!(temp_file, "Alice,30,50000").unwrap();
+        writeln!(temp_file, "Bob,25,45000").unwrap();
+
+        let processor = DataProcessor::new(',', true);
+        let result = processor.process_file(temp_file.path()).unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], vec!["Alice", "30", "50000"]);
+    }
+
+    #[test]
+    fn test_validate_records() {
+        let records = vec![
+            vec!["a".to_string(), "b".to_string(), "c".to_string()],
+            vec!["x".to_string(), "".to_string(), "z".to_string()],
+            vec!["".to_string(), "".to_string(), "".to_string()],
+        ];
+
+        let processor = DataProcessor::new(',', false);
+        let invalid = processor.validate_records(&records);
+
+        assert_eq!(invalid, vec![1, 2]);
+    }
+
+    #[test]
+    fn test_calculate_averages() {
+        let records = vec![
+            vec!["10".to_string(), "20".to_string()],
+            vec!["20".to_string(), "30".to_string()],
+            vec!["30".to_string(), "40".to_string()],
+        ];
+
+        let processor = DataProcessor::new(',', false);
+        let averages = processor.calculate_column_averages(&records).unwrap();
+
+        assert_eq!(averages, vec![20.0, 30.0]);
+    }
 }

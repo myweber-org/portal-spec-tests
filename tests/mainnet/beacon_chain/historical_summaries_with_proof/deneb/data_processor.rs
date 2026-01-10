@@ -1,74 +1,135 @@
 
 use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
 
-pub struct DataProcessor {
-    cache: HashMap<String, Vec<f64>>,
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    id: u32,
+    values: Vec<f64>,
+    metadata: HashMap<String, String>,
 }
 
-impl DataProcessor {
-    pub fn new() -> Self {
-        DataProcessor {
-            cache: HashMap::new(),
+#[derive(Debug)]
+pub enum ProcessingError {
+    InvalidData(String),
+    TransformationError(String),
+    ValidationFailed(String),
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProcessingError::InvalidData(msg) => write!(f, "Invalid data: {}", msg),
+            ProcessingError::TransformationError(msg) => write!(f, "Transformation error: {}", msg),
+            ProcessingError::ValidationFailed(msg) => write!(f, "Validation failed: {}", msg),
+        }
+    }
+}
+
+impl Error for ProcessingError {}
+
+impl DataRecord {
+    pub fn new(id: u32, values: Vec<f64>) -> Self {
+        Self {
+            id,
+            values,
+            metadata: HashMap::new(),
         }
     }
 
-    pub fn process_dataset(&mut self, key: &str, data: &[f64]) -> Result<Vec<f64>, String> {
-        if data.is_empty() {
-            return Err("Empty dataset provided".to_string());
-        }
-
-        if let Some(cached) = self.cache.get(key) {
-            return Ok(cached.clone());
-        }
-
-        let validated = self.validate_data(data)?;
-        let normalized = self.normalize_data(&validated);
-        let transformed = self.apply_transformations(&normalized);
-
-        self.cache.insert(key.to_string(), transformed.clone());
-        Ok(transformed)
+    pub fn add_metadata(&mut self, key: String, value: String) {
+        self.metadata.insert(key, value);
     }
 
-    fn validate_data(&self, data: &[f64]) -> Result<Vec<f64>, String> {
-        let mut validated = Vec::with_capacity(data.len());
-        
-        for &value in data {
+    pub fn validate(&self) -> Result<(), ProcessingError> {
+        if self.id == 0 {
+            return Err(ProcessingError::ValidationFailed(
+                "ID cannot be zero".to_string(),
+            ));
+        }
+
+        if self.values.is_empty() {
+            return Err(ProcessingError::ValidationFailed(
+                "Values cannot be empty".to_string(),
+            ));
+        }
+
+        for (i, &value) in self.values.iter().enumerate() {
             if value.is_nan() || value.is_infinite() {
-                return Err(format!("Invalid numeric value detected: {}", value));
+                return Err(ProcessingError::ValidationFailed(format!(
+                    "Invalid value at position {}: {}",
+                    i, value
+                )));
             }
-            validated.push(value);
-        }
-        
-        Ok(validated)
-    }
-
-    fn normalize_data(&self, data: &[f64]) -> Vec<f64> {
-        let min = data.iter().fold(f64::INFINITY, |a, &b| a.min(b));
-        let max = data.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
-        
-        if (max - min).abs() < f64::EPSILON {
-            return vec![0.5; data.len()];
         }
 
-        data.iter()
-            .map(|&x| (x - min) / (max - min))
-            .collect()
+        Ok(())
     }
 
-    fn apply_transformations(&self, data: &[f64]) -> Vec<f64> {
-        data.iter()
-            .map(|&x| x.ln_1p().abs())
-            .collect()
+    pub fn normalize(&mut self) -> Result<(), ProcessingError> {
+        self.validate()?;
+
+        let sum: f64 = self.values.iter().sum();
+        if sum == 0.0 {
+            return Err(ProcessingError::TransformationError(
+                "Cannot normalize zero vector".to_string(),
+            ));
+        }
+
+        for value in self.values.iter_mut() {
+            *value /= sum;
+        }
+
+        Ok(())
     }
 
-    pub fn clear_cache(&mut self) {
-        self.cache.clear();
+    pub fn calculate_statistics(&self) -> Result<HashMap<String, f64>, ProcessingError> {
+        self.validate()?;
+
+        let mut stats = HashMap::new();
+        let count = self.values.len() as f64;
+
+        let sum: f64 = self.values.iter().sum();
+        let mean = sum / count;
+
+        let variance: f64 = self
+            .values
+            .iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>()
+            / count;
+
+        let min = self
+            .values
+            .iter()
+            .fold(f64::INFINITY, |a, &b| a.min(b));
+        let max = self
+            .values
+            .iter()
+            .fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+
+        stats.insert("count".to_string(), count);
+        stats.insert("sum".to_string(), sum);
+        stats.insert("mean".to_string(), mean);
+        stats.insert("variance".to_string(), variance);
+        stats.insert("min".to_string(), min);
+        stats.insert("max".to_string(), max);
+
+        Ok(stats)
+    }
+}
+
+pub fn process_records(records: &mut [DataRecord]) -> Result<Vec<HashMap<String, f64>>, ProcessingError> {
+    let mut results = Vec::new();
+
+    for record in records.iter_mut() {
+        record.normalize()?;
+        let stats = record.calculate_statistics()?;
+        results.push(stats);
     }
 
-    pub fn cache_stats(&self) -> (usize, usize) {
-        let total_items: usize = self.cache.values().map(|v| v.len()).sum();
-        (self.cache.len(), total_items)
-    }
+    Ok(results)
 }
 
 #[cfg(test)]
@@ -76,36 +137,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_empty_dataset() {
-        let mut processor = DataProcessor::new();
-        let result = processor.process_dataset("test", &[]);
-        assert!(result.is_err());
+    fn test_valid_record() {
+        let record = DataRecord::new(1, vec![1.0, 2.0, 3.0]);
+        assert!(record.validate().is_ok());
     }
 
     #[test]
-    fn test_valid_processing() {
-        let mut processor = DataProcessor::new();
-        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
-        
-        let result = processor.process_dataset("numbers", &data);
-        assert!(result.is_ok());
-        
-        let processed = result.unwrap();
-        assert_eq!(processed.len(), data.len());
+    fn test_invalid_id() {
+        let record = DataRecord::new(0, vec![1.0, 2.0]);
+        assert!(record.validate().is_err());
     }
 
     #[test]
-    fn test_cache_functionality() {
-        let mut processor = DataProcessor::new();
-        let data = vec![10.0, 20.0, 30.0];
+    fn test_normalization() {
+        let mut record = DataRecord::new(1, vec![1.0, 2.0, 3.0]);
+        assert!(record.normalize().is_ok());
         
-        let first_result = processor.process_dataset("cached", &data).unwrap();
-        let second_result = processor.process_dataset("cached", &data).unwrap();
+        let sum: f64 = record.values.iter().sum();
+        assert!((sum - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_statistics_calculation() {
+        let record = DataRecord::new(1, vec![1.0, 2.0, 3.0, 4.0]);
+        let stats = record.calculate_statistics().unwrap();
         
-        assert_eq!(first_result, second_result);
-        
-        let (unique_keys, total_values) = processor.cache_stats();
-        assert_eq!(unique_keys, 1);
-        assert_eq!(total_values, 3);
+        assert_eq!(stats["count"], 4.0);
+        assert_eq!(stats["sum"], 10.0);
+        assert_eq!(stats["mean"], 2.5);
     }
 }

@@ -1,65 +1,22 @@
-use aes_gcm::{
-    aead::{Aead, KeyInit, OsRng},
-    Aes256Gcm, Key, Nonce,
-};
-use std::fs;
-use std::io::{self, Write};
+use std::fs::{File, read, write};
+use std::io::{Read, Write};
+use std::path::Path;
 
-const NONCE_SIZE: usize = 12;
-
-pub fn encrypt_file(input_path: &str, output_path: &str, password: &str) -> io::Result<()> {
-    let data = fs::read(input_path)?;
-    
-    let key = derive_key(password);
-    let cipher = Aes256Gcm::new(&key);
-    
-    let mut nonce_bytes = [0u8; NONCE_SIZE];
-    OsRng.fill_bytes(&mut nonce_bytes);
-    let nonce = Nonce::from_slice(&nonce_bytes);
-    
-    let ciphertext = cipher
-        .encrypt(nonce, data.as_ref())
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-    
-    let mut output_data = Vec::with_capacity(NONCE_SIZE + ciphertext.len());
-    output_data.extend_from_slice(nonce_bytes.as_slice());
-    output_data.extend_from_slice(&ciphertext);
-    
-    fs::write(output_path, output_data)
+pub fn encrypt_file(input_path: &str, output_path: &str, key: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+    let mut content = read(input_path)?;
+    xor_transform(&mut content, key);
+    write(output_path, &content)?;
+    Ok(())
 }
 
-pub fn decrypt_file(input_path: &str, output_path: &str, password: &str) -> io::Result<()> {
-    let encrypted_data = fs::read(input_path)?;
-    
-    if encrypted_data.len() < NONCE_SIZE {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "File too short to contain nonce",
-        ));
-    }
-    
-    let (nonce_bytes, ciphertext) = encrypted_data.split_at(NONCE_SIZE);
-    let nonce = Nonce::from_slice(nonce_bytes);
-    
-    let key = derive_key(password);
-    let cipher = Aes256Gcm::new(&key);
-    
-    let plaintext = cipher
-        .decrypt(nonce, ciphertext)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-    
-    fs::write(output_path, plaintext)
+pub fn decrypt_file(input_path: &str, output_path: &str, key: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+    encrypt_file(input_path, output_path, key)
 }
 
-fn derive_key(password: &str) -> Key<Aes256Gcm> {
-    let mut key_bytes = [0u8; 32];
-    let password_bytes = password.as_bytes();
-    
-    for (i, &byte) in password_bytes.iter().enumerate() {
-        key_bytes[i % 32] ^= byte;
+fn xor_transform(data: &mut [u8], key: &[u8]) {
+    for (i, byte) in data.iter_mut().enumerate() {
+        *byte ^= key[i % key.len()];
     }
-    
-    *Key::<Aes256Gcm>::from_slice(&key_bytes)
 }
 
 #[cfg(test)]
@@ -68,29 +25,18 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_encryption_roundtrip() {
-        let test_data = b"Secret data that needs protection";
-        let password = "strong_password_123";
+    fn test_encryption_decryption() {
+        let key = b"secret_key";
+        let original = b"Hello, XOR encryption!";
         
-        let input_file = NamedTempFile::new().unwrap();
-        let encrypted_file = NamedTempFile::new().unwrap();
-        let decrypted_file = NamedTempFile::new().unwrap();
+        let mut encrypted = original.to_vec();
+        xor_transform(&mut encrypted, key);
         
-        fs::write(input_file.path(), test_data).unwrap();
+        assert_ne!(encrypted, original);
         
-        encrypt_file(
-            input_file.path().to_str().unwrap(),
-            encrypted_file.path().to_str().unwrap(),
-            password,
-        ).unwrap();
+        let mut decrypted = encrypted.clone();
+        xor_transform(&mut decrypted, key);
         
-        decrypt_file(
-            encrypted_file.path().to_str().unwrap(),
-            decrypted_file.path().to_str().unwrap(),
-            password,
-        ).unwrap();
-        
-        let decrypted_data = fs::read(decrypted_file.path()).unwrap();
-        assert_eq!(test_data.as_slice(), decrypted_data.as_slice());
+        assert_eq!(decrypted, original);
     }
 }

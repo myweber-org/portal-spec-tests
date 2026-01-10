@@ -531,3 +531,76 @@ mod tests {
         fs::remove_file(decrypted_file).unwrap();
     }
 }
+use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
+use rand::RngCore;
+use std::fs;
+use std::io::{Read, Write};
+
+type Aes256CbcEnc = cbc::Encryptor<aes::Aes256>;
+type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
+
+pub fn encrypt_file(input_path: &str, output_path: &str, key: &[u8; 32]) -> Result<(), String> {
+    let mut file = fs::File::open(input_path).map_err(|e| format!("Failed to open input file: {}", e))?;
+    let mut plaintext = Vec::new();
+    file.read_to_end(&mut plaintext).map_err(|e| format!("Failed to read file: {}", e))?;
+
+    let mut iv = [0u8; 16];
+    rand::thread_rng().fill_bytes(&mut iv);
+
+    let ciphertext = Aes256CbcEnc::new(key.into(), &iv.into())
+        .encrypt_padded_vec_mut::<Pkcs7>(&plaintext);
+
+    let mut output = fs::File::create(output_path).map_err(|e| format!("Failed to create output file: {}", e))?;
+    output.write_all(&iv).map_err(|e| format!("Failed to write IV: {}", e))?;
+    output.write_all(&ciphertext).map_err(|e| format!("Failed to write ciphertext: {}", e))?;
+
+    Ok(())
+}
+
+pub fn decrypt_file(input_path: &str, output_path: &str, key: &[u8; 32]) -> Result<(), String> {
+    let mut file = fs::File::open(input_path).map_err(|e| format!("Failed to open input file: {}", e))?;
+    let mut encrypted_data = Vec::new();
+    file.read_to_end(&mut encrypted_data).map_err(|e| format!("Failed to read file: {}", e))?;
+
+    if encrypted_data.len() < 16 {
+        return Err("File too short to contain IV".to_string());
+    }
+
+    let (iv, ciphertext) = encrypted_data.split_at(16);
+    let plaintext = Aes256CbcDec::new(key.into(), iv.into())
+        .decrypt_padded_vec_mut::<Pkcs7>(ciphertext)
+        .map_err(|e| format!("Decryption failed: {}", e))?;
+
+    fs::write(output_path, plaintext).map_err(|e| format!("Failed to write output file: {}", e))?;
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_encryption_decryption() {
+        let key = [0x42u8; 32];
+        let plaintext = b"Secret data that needs protection";
+
+        let input_file = NamedTempFile::new().unwrap();
+        let encrypted_file = NamedTempFile::new().unwrap();
+        let decrypted_file = NamedTempFile::new().unwrap();
+
+        fs::write(input_file.path(), plaintext).unwrap();
+
+        encrypt_file(input_file.path().to_str().unwrap(), 
+                    encrypted_file.path().to_str().unwrap(), 
+                    &key).unwrap();
+
+        decrypt_file(encrypted_file.path().to_str().unwrap(),
+                    decrypted_file.path().to_str().unwrap(),
+                    &key).unwrap();
+
+        let decrypted_content = fs::read(decrypted_file.path()).unwrap();
+        assert_eq!(plaintext.to_vec(), decrypted_content);
+    }
+}

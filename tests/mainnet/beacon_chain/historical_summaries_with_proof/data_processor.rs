@@ -1,97 +1,220 @@
-use csv::Reader;
-use serde::Deserialize;
-use std::error::Error;
-use std::path::Path;
 
-#[derive(Debug, Deserialize)]
-pub struct Record {
-    id: u32,
-    name: String,
-    value: f64,
-    category: String,
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub tags: Vec<String>,
 }
 
+#[derive(Debug)]
+pub enum ProcessingError {
+    InvalidId,
+    EmptyName,
+    NegativeValue,
+    DuplicateTag,
+    ValidationFailed(String),
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProcessingError::InvalidId => write!(f, "ID must be greater than zero"),
+            ProcessingError::EmptyName => write!(f, "Name cannot be empty"),
+            ProcessingError::NegativeValue => write!(f, "Value cannot be negative"),
+            ProcessingError::DuplicateTag => write!(f, "Duplicate tags are not allowed"),
+            ProcessingError::ValidationFailed(msg) => write!(f, "Validation failed: {}", msg),
+        }
+    }
+}
+
+impl Error for ProcessingError {}
+
 pub struct DataProcessor {
-    records: Vec<Record>,
+    records: HashMap<u32, DataRecord>,
+    statistics: ProcessingStats,
+}
+
+#[derive(Debug, Default)]
+pub struct ProcessingStats {
+    pub total_records: usize,
+    pub total_value: f64,
+    pub average_value: f64,
 }
 
 impl DataProcessor {
     pub fn new() -> Self {
         DataProcessor {
-            records: Vec::new(),
+            records: HashMap::new(),
+            statistics: ProcessingStats::default(),
         }
     }
 
-    pub fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
-        let path = Path::new(file_path);
-        if !path.exists() {
-            return Err("File does not exist".into());
+    pub fn add_record(&mut self, record: DataRecord) -> Result<(), ProcessingError> {
+        self.validate_record(&record)?;
+        
+        if self.records.contains_key(&record.id) {
+            return Err(ProcessingError::ValidationFailed(
+                format!("Record with ID {} already exists", record.id)
+            ));
         }
 
-        let mut rdr = Reader::from_path(file_path)?;
-        for result in rdr.deserialize() {
-            let record: Record = result?;
-            self.records.push(record);
-        }
-
+        self.update_statistics(&record);
+        self.records.insert(record.id, record);
         Ok(())
     }
 
-    pub fn validate_records(&self) -> Vec<&Record> {
-        self.records
-            .iter()
-            .filter(|r| r.value >= 0.0 && !r.name.is_empty())
+    pub fn get_record(&self, id: u32) -> Option<&DataRecord> {
+        self.records.get(&id)
+    }
+
+    pub fn remove_record(&mut self, id: u32) -> Option<DataRecord> {
+        if let Some(record) = self.records.remove(&id) {
+            self.statistics.total_records -= 1;
+            self.statistics.total_value -= record.value;
+            self.recalculate_average();
+            Some(record)
+        } else {
+            None
+        }
+    }
+
+    pub fn transform_records<F>(&mut self, transform_fn: F) -> Vec<DataRecord>
+    where
+        F: Fn(&DataRecord) -> DataRecord,
+    {
+        let mut transformed = Vec::new();
+        
+        for record in self.records.values() {
+            let transformed_record = transform_fn(record);
+            transformed.push(transformed_record);
+        }
+        
+        transformed
+    }
+
+    pub fn filter_records<F>(&self, predicate: F) -> Vec<&DataRecord>
+    where
+        F: Fn(&DataRecord) -> bool,
+    {
+        self.records.values()
+            .filter(|record| predicate(record))
             .collect()
     }
 
-    pub fn calculate_average(&self) -> Option<f64> {
-        let valid_records: Vec<&Record> = self.validate_records();
-        if valid_records.is_empty() {
-            return None;
-        }
-
-        let sum: f64 = valid_records.iter().map(|r| r.value).sum();
-        Some(sum / valid_records.len() as f64)
+    pub fn get_statistics(&self) -> &ProcessingStats {
+        &self.statistics
     }
 
-    pub fn group_by_category(&self) -> std::collections::HashMap<String, Vec<&Record>> {
-        let mut groups = std::collections::HashMap::new();
-        for record in &self.records {
-            groups
-                .entry(record.category.clone())
-                .or_insert_with(Vec::new)
-                .push(record);
+    fn validate_record(&self, record: &DataRecord) -> Result<(), ProcessingError> {
+        if record.id == 0 {
+            return Err(ProcessingError::InvalidId);
         }
-        groups
+        
+        if record.name.trim().is_empty() {
+            return Err(ProcessingError::EmptyName);
+        }
+        
+        if record.value < 0.0 {
+            return Err(ProcessingError::NegativeValue);
+        }
+        
+        let mut seen_tags = std::collections::HashSet::new();
+        for tag in &record.tags {
+            if !seen_tags.insert(tag) {
+                return Err(ProcessingError::DuplicateTag);
+            }
+        }
+        
+        Ok(())
     }
+
+    fn update_statistics(&mut self, record: &DataRecord) {
+        self.statistics.total_records += 1;
+        self.statistics.total_value += record.value;
+        self.recalculate_average();
+    }
+
+    fn recalculate_average(&mut self) {
+        if self.statistics.total_records > 0 {
+            self.statistics.average_value = 
+                self.statistics.total_value / self.statistics.total_records as f64;
+        } else {
+            self.statistics.average_value = 0.0;
+        }
+    }
+}
+
+pub fn process_data_batch(records: Vec<DataRecord>) -> Result<DataProcessor, ProcessingError> {
+    let mut processor = DataProcessor::new();
+    
+    for record in records {
+        processor.add_record(record)?;
+    }
+    
+    Ok(processor)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_data_processing() {
-        let mut file = NamedTempFile::new().unwrap();
-        writeln!(
-            file,
-            "id,name,value,category\n1,ItemA,10.5,Category1\n2,ItemB,-5.0,Category2\n3,,15.0,Category1"
-        )
-        .unwrap();
-
+    fn test_add_valid_record() {
         let mut processor = DataProcessor::new();
-        let result = processor.load_from_csv(file.path().to_str().unwrap());
-        assert!(result.is_ok());
+        let record = DataRecord {
+            id: 1,
+            name: "Test Record".to_string(),
+            value: 100.0,
+            tags: vec!["tag1".to_string(), "tag2".to_string()],
+        };
+        
+        assert!(processor.add_record(record).is_ok());
+        assert_eq!(processor.get_statistics().total_records, 1);
+    }
 
-        let valid_records = processor.validate_records();
-        assert_eq!(valid_records.len(), 1);
+    #[test]
+    fn test_add_invalid_record() {
+        let mut processor = DataProcessor::new();
+        let record = DataRecord {
+            id: 0,
+            name: "".to_string(),
+            value: -10.0,
+            tags: vec![],
+        };
+        
+        assert!(processor.add_record(record).is_err());
+    }
 
-        let avg = processor.calculate_average();
-        assert_eq!(avg, Some(10.5));
-
-        let groups = processor.group_by_category();
-        assert_eq!(groups.get("Category1").unwrap().len(), 2);
+    #[test]
+    fn test_filter_records() {
+        let mut processor = DataProcessor::new();
+        
+        let records = vec![
+            DataRecord {
+                id: 1,
+                name: "Record A".to_string(),
+                value: 50.0,
+                tags: vec![],
+            },
+            DataRecord {
+                id: 2,
+                name: "Record B".to_string(),
+                value: 150.0,
+                tags: vec![],
+            },
+        ];
+        
+        for record in records {
+            processor.add_record(record).unwrap();
+        }
+        
+        let high_value = processor.filter_records(|r| r.value > 100.0);
+        assert_eq!(high_value.len(), 1);
+        assert_eq!(high_value[0].name, "Record B");
     }
 }

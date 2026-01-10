@@ -125,3 +125,96 @@ mod tests {
         assert_eq!(std_dev, 200.0_f64.sqrt());
     }
 }
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug)]
+pub struct ProcessingError {
+    details: String,
+}
+
+impl ProcessingError {
+    fn new(msg: &str) -> ProcessingError {
+        ProcessingError {
+            details: msg.to_string(),
+        }
+    }
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.details)
+    }
+}
+
+impl Error for ProcessingError {}
+
+pub struct DataRecord {
+    pub id: u32,
+    pub value: f64,
+    pub timestamp: i64,
+}
+
+impl DataRecord {
+    pub fn validate(&self) -> Result<(), ProcessingError> {
+        if self.id == 0 {
+            return Err(ProcessingError::new("Invalid record ID"));
+        }
+        if self.value.is_nan() || self.value.is_infinite() {
+            return Err(ProcessingError::new("Invalid numeric value"));
+        }
+        if self.timestamp < 0 {
+            return Err(ProcessingError::new("Invalid timestamp"));
+        }
+        Ok(())
+    }
+
+    pub fn transform(&mut self, multiplier: f64) -> Result<(), ProcessingError> {
+        self.validate()?;
+        self.value *= multiplier;
+        Ok(())
+    }
+}
+
+pub fn process_records(records: &mut [DataRecord], multiplier: f64) -> Result<(), ProcessingError> {
+    for record in records.iter_mut() {
+        record.transform(multiplier)?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_record() {
+        let record = DataRecord {
+            id: 1,
+            value: 42.5,
+            timestamp: 1625097600,
+        };
+        assert!(record.validate().is_ok());
+    }
+
+    #[test]
+    fn test_invalid_id() {
+        let record = DataRecord {
+            id: 0,
+            value: 42.5,
+            timestamp: 1625097600,
+        };
+        assert!(record.validate().is_err());
+    }
+
+    #[test]
+    fn test_record_transformation() {
+        let mut record = DataRecord {
+            id: 1,
+            value: 10.0,
+            timestamp: 1625097600,
+        };
+        assert!(record.transform(2.5).is_ok());
+        assert_eq!(record.value, 25.0);
+    }
+}

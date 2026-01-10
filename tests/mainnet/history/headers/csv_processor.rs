@@ -1,153 +1,102 @@
-
 use std::error::Error;
 use std::fs::File;
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader};
 use std::path::Path;
 
-pub struct CsvConfig {
-    input_path: String,
-    output_path: Option<String>,
-    selected_columns: Vec<usize>,
+pub struct CsvProcessor {
     delimiter: char,
-    has_headers: bool,
+    has_header: bool,
 }
 
-impl CsvConfig {
-    pub fn new(input_path: String) -> Self {
-        CsvConfig {
-            input_path,
-            output_path: None,
-            selected_columns: Vec::new(),
-            delimiter: ',',
-            has_headers: true,
+impl CsvProcessor {
+    pub fn new(delimiter: char, has_header: bool) -> Self {
+        CsvProcessor {
+            delimiter,
+            has_header,
         }
     }
 
-    pub fn with_output_path(mut self, path: String) -> Self {
-        self.output_path = Some(path);
-        self
-    }
+    pub fn filter_rows<P, F>(
+        &self,
+        file_path: P,
+        predicate: F,
+    ) -> Result<Vec<Vec<String>>, Box<dyn Error>>
+    where
+        P: AsRef<Path>,
+        F: Fn(&[String]) -> bool,
+    {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        let mut lines = reader.lines();
+        let mut result = Vec::new();
 
-    pub fn with_selected_columns(mut self, columns: Vec<usize>) -> Self {
-        self.selected_columns = columns;
-        self
-    }
+        if self.has_header {
+            lines.next();
+        }
 
-    pub fn with_delimiter(mut self, delimiter: char) -> Self {
-        self.delimiter = delimiter;
-        self
-    }
-
-    pub fn with_headers(mut self, has_headers: bool) -> Self {
-        self.has_headers = has_headers;
-        self
-    }
-}
-
-pub fn process_csv(config: CsvConfig) -> Result<(), Box<dyn Error>> {
-    let input_file = File::open(&config.input_path)?;
-    let reader = BufReader::new(input_file);
-    
-    let output: Box<dyn Write> = match &config.output_path {
-        Some(path) => Box::new(File::create(path)?),
-        None => Box::new(io::stdout()),
-    };
-    let mut writer = io::BufWriter::new(output);
-
-    let mut lines = reader.lines();
-    
-    if config.has_headers {
-        if let Some(header_line) = lines.next() {
-            let headers: Vec<String> = header_line?
-                .split(config.delimiter)
+        for line in lines {
+            let line = line?;
+            let fields: Vec<String> = line
+                .split(self.delimiter)
                 .map(|s| s.trim().to_string())
                 .collect();
-            
-            if config.selected_columns.is_empty() {
-                writeln!(writer, "{}", headers.join(&config.delimiter.to_string()))?;
-            } else {
-                let selected_headers: Vec<String> = config.selected_columns
-                    .iter()
-                    .filter_map(|&idx| headers.get(idx).cloned())
-                    .collect();
-                writeln!(writer, "{}", selected_headers.join(&config.delimiter.to_string()))?;
+
+            if predicate(&fields) {
+                result.push(fields);
             }
+        }
+
+        Ok(result)
+    }
+
+    pub fn extract_column(&self, data: &[Vec<String>], column_index: usize) -> Vec<String> {
+        data.iter()
+            .filter_map(|row| row.get(column_index).cloned())
+            .collect()
+    }
+}
+
+pub fn calculate_average(values: &[String]) -> Option<f64> {
+    let mut sum = 0.0;
+    let mut count = 0;
+
+    for value in values {
+        if let Ok(num) = value.parse::<f64>() {
+            sum += num;
+            count += 1;
         }
     }
 
-    for line_result in lines {
-        let line = line_result?;
-        let fields: Vec<&str> = line.split(config.delimiter).collect();
-        
-        let selected_fields = if config.selected_columns.is_empty() {
-            fields.iter().map(|&s| s).collect()
-        } else {
-            config.selected_columns
-                .iter()
-                .filter_map(|&idx| fields.get(idx))
-                .copied()
-                .collect()
-        };
-        
-        writeln!(writer, "{}", selected_fields.join(&config.delimiter.to_string()))?;
-    }
-
-    writer.flush()?;
-    Ok(())
-}
-
-pub fn validate_csv_file(path: &str) -> Result<bool, Box<dyn Error>> {
-    let file_path = Path::new(path);
-    if !file_path.exists() {
-        return Ok(false);
-    }
-    
-    let file = File::open(path)?;
-    let reader = BufReader::new(file);
-    
-    let first_line = reader.lines().next();
-    match first_line {
-        Some(Ok(line)) => Ok(!line.trim().is_empty()),
-        _ => Ok(false),
+    if count > 0 {
+        Some(sum / count as f64)
+    } else {
+        None
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
+    use std::io::Write;
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_csv_processing() {
-        let input_content = "name,age,city\nAlice,30,London\nBob,25,Paris";
-        let input_file = NamedTempFile::new().unwrap();
-        fs::write(input_file.path(), input_content).unwrap();
-        
-        let output_file = NamedTempFile::new().unwrap();
-        
-        let config = CsvConfig::new(input_file.path().to_str().unwrap().to_string())
-            .with_output_path(output_file.path().to_str().unwrap().to_string())
-            .with_selected_columns(vec![0, 2])
-            .with_headers(true);
-        
-        assert!(process_csv(config).is_ok());
-        
-        let output_content = fs::read_to_string(output_file.path()).unwrap();
-        assert_eq!(output_content, "name,city\nAlice,London\nBob,Paris\n");
-    }
+    fn test_filter_and_average() {
+        let csv_data = "name,age,salary\nAlice,30,50000\nBob,25,45000\nCharlie,35,60000";
+        let mut temp_file = NamedTempFile::new().unwrap();
+        write!(temp_file, "{}", csv_data).unwrap();
 
-    #[test]
-    fn test_file_validation() {
-        let valid_file = NamedTempFile::new().unwrap();
-        fs::write(valid_file.path(), "test,data\n").unwrap();
-        
-        let result = validate_csv_file(valid_file.path().to_str().unwrap());
-        assert!(result.is_ok());
-        assert!(result.unwrap());
-        
-        let invalid_result = validate_csv_file("non_existent_file.csv");
-        assert!(invalid_result.is_ok());
-        assert!(!invalid_result.unwrap());
+        let processor = CsvProcessor::new(',', true);
+        let filtered = processor
+            .filter_rows(temp_file.path(), |row| {
+                row.get(1).and_then(|age| age.parse::<i32>().ok()).map_or(false, |age| age >= 30)
+            })
+            .unwrap();
+
+        let salaries = processor.extract_column(&filtered, 2);
+        let avg_salary = calculate_average(&salaries).unwrap();
+
+        assert_eq!(filtered.len(), 2);
+        assert!((avg_salary - 55000.0).abs() < 0.001);
     }
 }

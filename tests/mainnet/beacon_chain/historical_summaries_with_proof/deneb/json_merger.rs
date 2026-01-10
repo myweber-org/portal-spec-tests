@@ -248,3 +248,47 @@ pub fn merge_json_files(input_paths: &[&str], output_path: &str) -> io::Result<(
 
     Ok(())
 }
+use serde_json::{Map, Value};
+use std::fs;
+use std::path::Path;
+
+pub fn merge_json_files<P: AsRef<Path>>(paths: &[P]) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut merged = Map::new();
+
+    for path in paths {
+        let content = fs::read_to_string(path)?;
+        let json: Value = serde_json::from_str(&content)?;
+
+        if let Value::Object(obj) = json {
+            for (key, value) in obj {
+                merge_value(&mut merged, key, value);
+            }
+        }
+    }
+
+    Ok(Value::Object(merged))
+}
+
+fn merge_value(map: &mut Map<String, Value>, key: String, new_value: Value) {
+    match map.get_mut(&key) {
+        Some(existing) => {
+            if let (Value::Object(existing_obj), Value::Object(new_obj)) = (existing, &new_value) {
+                let mut existing_obj = existing_obj.as_object_mut().unwrap();
+                for (nested_key, nested_value) in new_obj {
+                    merge_value(&mut existing_obj, nested_key.clone(), nested_value.clone());
+                }
+            } else if existing != &new_value {
+                *existing = Value::Array(vec![existing.clone(), new_value]);
+            }
+        }
+        None => {
+            map.insert(key, new_value);
+        }
+    }
+}
+
+pub fn write_merged_json<P: AsRef<Path>>(output_path: P, value: &Value) -> Result<(), Box<dyn std::error::Error>> {
+    let json_string = serde_json::to_string_pretty(value)?;
+    fs::write(output_path, json_string)?;
+    Ok(())
+}

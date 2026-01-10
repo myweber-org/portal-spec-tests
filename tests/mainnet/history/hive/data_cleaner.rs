@@ -78,4 +78,95 @@ mod tests {
         assert!(!validate_email("invalid-email").unwrap());
         assert!(validate_email("test@sub.domain.co.uk").unwrap());
     }
+}use csv::{Reader, Writer};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+use log::{info, warn};
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    category: String,
+}
+
+fn clean_csv_data(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
+    let input_file = File::open(input_path)?;
+    let mut reader = Reader::from_reader(input_file);
+    
+    let output_file = File::create(output_path)?;
+    let mut writer = Writer::from_writer(output_file);
+    
+    let mut cleaned_count = 0;
+    let mut skipped_count = 0;
+    
+    for result in reader.deserialize() {
+        let record: Record = match result {
+            Ok(r) => r,
+            Err(e) => {
+                warn!("Skipping malformed record: {}", e);
+                skipped_count += 1;
+                continue;
+            }
+        };
+        
+        let cleaned_record = Record {
+            id: record.id,
+            name: record.name.trim().to_string(),
+            value: if record.value.is_finite() {
+                record.value
+            } else {
+                0.0
+            },
+            category: record.category.to_uppercase(),
+        };
+        
+        writer.serialize(&cleaned_record)?;
+        cleaned_count += 1;
+    }
+    
+    writer.flush()?;
+    
+    info!("Data cleaning completed: {} records processed, {} cleaned, {} skipped", 
+          cleaned_count + skipped_count, cleaned_count, skipped_count);
+    
+    Ok(())
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    env_logger::init();
+    
+    let input_file = "raw_data.csv";
+    let output_file = "cleaned_data.csv";
+    
+    match clean_csv_data(input_file, output_file) {
+        Ok(_) => info!("Successfully cleaned data from {} to {}", input_file, output_file),
+        Err(e) => eprintln!("Error cleaning data: {}", e),
+    }
+    
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+    use std::io::Write;
+    
+    #[test]
+    fn test_clean_csv_data() {
+        let input_data = "id,name,value,category\n1, test ,3.14,science\n2,data,inf,engineering\n";
+        
+        let mut input_file = NamedTempFile::new().unwrap();
+        write!(input_file, "{}", input_data).unwrap();
+        
+        let output_file = NamedTempFile::new().unwrap();
+        
+        let result = clean_csv_data(input_file.path().to_str().unwrap(), 
+                                   output_file.path().to_str().unwrap());
+        
+        assert!(result.is_ok());
+    }
 }

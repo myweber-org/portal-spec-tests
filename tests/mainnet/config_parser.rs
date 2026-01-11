@@ -583,4 +583,97 @@ mod tests {
         assert_eq!(config.get("SECRET").unwrap(), "super_secret_value");
         assert_eq!(config.get("NORMAL").unwrap(), "regular_value");
     }
+}use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::Path;
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ServerConfig {
+    pub host: String,
+    pub port: u16,
+    pub max_connections: usize,
+    pub enable_tls: bool,
+}
+
+impl Default for ServerConfig {
+    fn default() -> Self {
+        ServerConfig {
+            host: String::from("127.0.0.1"),
+            port: 8080,
+            max_connections: 100,
+            enable_tls: false,
+        }
+    }
+}
+
+pub fn load_config<P: AsRef<Path>>(path: P) -> Result<ServerConfig, Box<dyn std::error::Error>> {
+    let config_str = fs::read_to_string(path)?;
+    let mut config: ServerConfig = toml::from_str(&config_str)?;
+    
+    validate_config(&mut config)?;
+    Ok(config)
+}
+
+fn validate_config(config: &mut ServerConfig) -> Result<(), String> {
+    if config.port == 0 {
+        return Err(String::from("Port cannot be zero"));
+    }
+    
+    if config.max_connections == 0 {
+        config.max_connections = ServerConfig::default().max_connections;
+    }
+    
+    if config.host.trim().is_empty() {
+        config.host = ServerConfig::default().host;
+    }
+    
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_default_config() {
+        let config = ServerConfig::default();
+        assert_eq!(config.host, "127.0.0.1");
+        assert_eq!(config.port, 8080);
+        assert_eq!(config.max_connections, 100);
+        assert!(!config.enable_tls);
+    }
+
+    #[test]
+    fn test_load_valid_config() {
+        let config_content = r#"
+            host = "0.0.0.0"
+            port = 9000
+            max_connections = 500
+            enable_tls = true
+        "#;
+        
+        let mut file = NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), config_content).unwrap();
+        
+        let config = load_config(file.path()).unwrap();
+        assert_eq!(config.host, "0.0.0.0");
+        assert_eq!(config.port, 9000);
+        assert_eq!(config.max_connections, 500);
+        assert!(config.enable_tls);
+    }
+
+    #[test]
+    fn test_validation_fixes_empty_host() {
+        let config_content = r#"
+            host = ""
+            port = 3000
+        "#;
+        
+        let mut file = NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), config_content).unwrap();
+        
+        let config = load_config(file.path()).unwrap();
+        assert_eq!(config.host, "127.0.0.1");
+    }
 }

@@ -1,42 +1,88 @@
-use std::fs::{File, read, write};
-use std::io::{Read, Write};
+
+use std::fs;
+use std::io::{self, Read, Write};
 use std::path::Path;
 
-pub fn encrypt_file(input_path: &str, output_path: &str, key: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
-    let mut content = read(input_path)?;
-    xor_transform(&mut content, key);
-    write(output_path, &content)?;
+const DEFAULT_KEY: u8 = 0x55;
+
+pub fn encrypt_file(input_path: &str, output_path: &str, key: Option<u8>) -> io::Result<()> {
+    let encryption_key = key.unwrap_or(DEFAULT_KEY);
+    
+    let mut input_file = fs::File::open(input_path)?;
+    let mut buffer = Vec::new();
+    input_file.read_to_end(&mut buffer)?;
+    
+    for byte in buffer.iter_mut() {
+        *byte ^= encryption_key;
+    }
+    
+    let mut output_file = fs::File::create(output_path)?;
+    output_file.write_all(&buffer)?;
+    
     Ok(())
 }
 
-pub fn decrypt_file(input_path: &str, output_path: &str, key: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+pub fn decrypt_file(input_path: &str, output_path: &str, key: Option<u8>) -> io::Result<()> {
     encrypt_file(input_path, output_path, key)
-}
-
-fn xor_transform(data: &mut [u8], key: &[u8]) {
-    for (i, byte) in data.iter_mut().enumerate() {
-        *byte ^= key[i % key.len()];
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::NamedTempFile;
-
+    
     #[test]
     fn test_encryption_decryption() {
-        let key = b"secret_key";
-        let original = b"Hello, XOR encryption!";
+        let original_content = b"Hello, World! This is a test message.";
         
-        let mut encrypted = original.to_vec();
-        xor_transform(&mut encrypted, key);
+        let input_file = NamedTempFile::new().unwrap();
+        let encrypted_file = NamedTempFile::new().unwrap();
+        let decrypted_file = NamedTempFile::new().unwrap();
         
-        assert_ne!(encrypted, original);
+        fs::write(input_file.path(), original_content).unwrap();
         
-        let mut decrypted = encrypted.clone();
-        xor_transform(&mut decrypted, key);
+        encrypt_file(
+            input_file.path().to_str().unwrap(),
+            encrypted_file.path().to_str().unwrap(),
+            Some(0xAA)
+        ).unwrap();
         
-        assert_eq!(decrypted, original);
+        let encrypted_content = fs::read(encrypted_file.path()).unwrap();
+        assert_ne!(encrypted_content, original_content);
+        
+        decrypt_file(
+            encrypted_file.path().to_str().unwrap(),
+            decrypted_file.path().to_str().unwrap(),
+            Some(0xAA)
+        ).unwrap();
+        
+        let decrypted_content = fs::read(decrypted_file.path()).unwrap();
+        assert_eq!(decrypted_content, original_content);
+    }
+    
+    #[test]
+    fn test_default_key() {
+        let original_content = b"Testing with default key";
+        
+        let input_file = NamedTempFile::new().unwrap();
+        let encrypted_file = NamedTempFile::new().unwrap();
+        let decrypted_file = NamedTempFile::new().unwrap();
+        
+        fs::write(input_file.path(), original_content).unwrap();
+        
+        encrypt_file(
+            input_file.path().to_str().unwrap(),
+            encrypted_file.path().to_str().unwrap(),
+            None
+        ).unwrap();
+        
+        decrypt_file(
+            encrypted_file.path().to_str().unwrap(),
+            decrypted_file.path().to_str().unwrap(),
+            None
+        ).unwrap();
+        
+        let decrypted_content = fs::read(decrypted_file.path()).unwrap();
+        assert_eq!(decrypted_content, original_content);
     }
 }

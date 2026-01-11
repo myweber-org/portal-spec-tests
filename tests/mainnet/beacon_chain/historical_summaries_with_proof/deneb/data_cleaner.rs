@@ -53,3 +53,108 @@ mod tests {
         assert_eq!(cleaner.data[1][0], Some("C".to_string()));
     }
 }
+use std::collections::HashSet;
+
+pub struct DataCleaner {
+    pub records: Vec<String>,
+}
+
+impl DataCleaner {
+    pub fn new() -> Self {
+        DataCleaner {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn add_record(&mut self, record: String) {
+        self.records.push(record);
+    }
+
+    pub fn remove_duplicates(&mut self) -> usize {
+        let mut unique_set = HashSet::new();
+        let mut unique_records = Vec::new();
+        let mut removed_count = 0;
+
+        for record in self.records.drain(..) {
+            if unique_set.insert(record.clone()) {
+                unique_records.push(record);
+            } else {
+                removed_count += 1;
+            }
+        }
+
+        self.records = unique_records;
+        removed_count
+    }
+
+    pub fn validate_records(&self) -> (usize, usize) {
+        let mut valid_count = 0;
+        let mut invalid_count = 0;
+
+        for record in &self.records {
+            if !record.trim().is_empty() && record.len() <= 1000 {
+                valid_count += 1;
+            } else {
+                invalid_count += 1;
+            }
+        }
+
+        (valid_count, invalid_count)
+    }
+
+    pub fn get_statistics(&self) -> (usize, usize, f64) {
+        let total = self.records.len();
+        let total_chars: usize = self.records.iter().map(|s| s.len()).sum();
+        let avg_length = if total > 0 {
+            total_chars as f64 / total as f64
+        } else {
+            0.0
+        };
+
+        (total, total_chars, avg_length)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_duplicate_removal() {
+        let mut cleaner = DataCleaner::new();
+        cleaner.add_record("record1".to_string());
+        cleaner.add_record("record2".to_string());
+        cleaner.add_record("record1".to_string());
+        cleaner.add_record("record3".to_string());
+        cleaner.add_record("record2".to_string());
+
+        let removed = cleaner.remove_duplicates();
+        assert_eq!(removed, 2);
+        assert_eq!(cleaner.records.len(), 3);
+    }
+
+    #[test]
+    fn test_validation() {
+        let mut cleaner = DataCleaner::new();
+        cleaner.add_record("valid".to_string());
+        cleaner.add_record("".to_string());
+        cleaner.add_record(&"x".repeat(1001));
+
+        let (valid, invalid) = cleaner.validate_records();
+        assert_eq!(valid, 1);
+        assert_eq!(invalid, 2);
+    }
+
+    #[test]
+    fn test_statistics() {
+        let mut cleaner = DataCleaner::new();
+        cleaner.add_record("hello".to_string());
+        cleaner.add_record("world".to_string());
+        cleaner.add_record("test".to_string());
+
+        let (total, chars, avg) = cleaner.get_statistics();
+        assert_eq!(total, 3);
+        assert_eq!(chars, 14);
+        assert!((avg - 4.666).abs() < 0.001);
+    }
+}

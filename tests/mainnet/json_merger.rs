@@ -510,4 +510,81 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Successfully merged {} file(s) into '{}'", input_paths.len(), output_path);
     Ok(())
+}use serde_json::{Map, Value};
+use std::fs;
+use std::path::Path;
+
+pub fn merge_json_files(file_paths: &[&str]) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut merged_map = Map::new();
+
+    for path_str in file_paths {
+        let path = Path::new(path_str);
+        if !path.exists() {
+            return Err(format!("File not found: {}", path_str).into());
+        }
+
+        let content = fs::read_to_string(path)?;
+        let json_value: Value = serde_json::from_str(&content)?;
+
+        if let Value::Object(obj) = json_value {
+            for (key, value) in obj {
+                if merged_map.contains_key(&key) {
+                    eprintln!("Warning: Key '{}' already exists, overwriting.", key);
+                }
+                merged_map.insert(key, value);
+            }
+        } else {
+            return Err("Top-level JSON must be an object".into());
+        }
+    }
+
+    Ok(Value::Object(merged_map))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_merge_json_files() {
+        let mut file1 = NamedTempFile::new().unwrap();
+        let mut file2 = NamedTempFile::new().unwrap();
+
+        let json1 = json!({"name": "Alice", "age": 30});
+        let json2 = json!({"city": "Berlin", "age": 31});
+
+        writeln!(file1, "{}", json1.to_string()).unwrap();
+        writeln!(file2, "{}", json2.to_string()).unwrap();
+
+        let result = merge_json_files(&[
+            file1.path().to_str().unwrap(),
+            file2.path().to_str().unwrap(),
+        ]).unwrap();
+
+        let expected = json!({
+            "name": "Alice",
+            "age": 31,
+            "city": "Berlin"
+        });
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_file_not_found() {
+        let result = merge_json_files(&["nonexistent.json"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_invalid_json_structure() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "[1, 2, 3]").unwrap();
+
+        let result = merge_json_files(&[file.path().to_str().unwrap()]);
+        assert!(result.is_err());
+    }
 }

@@ -283,4 +283,134 @@ mod tests {
         expected.insert("key".to_string(), JsonValue::String("value".to_string()));
         assert_eq!(parser.parse(), Ok(JsonValue::Object(expected)));
     }
+}use serde::{Deserialize, Serialize};
+use serde_json::{Result, Value};
+use std::collections::HashMap;
+use std::fs;
+
+#[derive(Debug, Serialize, Deserialize)]
+struct User {
+    id: u64,
+    name: String,
+    email: String,
+    active: bool,
+    preferences: HashMap<String, Value>,
+}
+
+impl User {
+    fn from_json_file(path: &str) -> Result<Self> {
+        let content = fs::read_to_string(path)
+            .map_err(|e| serde_json::Error::io(e))?;
+        
+        let user: User = serde_json::from_str(&content)?;
+        
+        if user.email.is_empty() || !user.email.contains('@') {
+            return Err(serde_json::Error::custom("Invalid email format"));
+        }
+        
+        Ok(user)
+    }
+    
+    fn to_pretty_json(&self) -> Result<String> {
+        serde_json::to_string_pretty(self)
+    }
+    
+    fn update_preference(&mut self, key: &str, value: Value) {
+        self.preferences.insert(key.to_string(), value);
+    }
+}
+
+fn validate_json_structure(json_str: &str) -> Result<()> {
+    let value: Value = serde_json::from_str(json_str)?;
+    
+    if !value.is_object() {
+        return Err(serde_json::Error::custom("Expected JSON object"));
+    }
+    
+    let obj = value.as_object().unwrap();
+    if !obj.contains_key("id") || !obj.contains_key("name") {
+        return Err(serde_json::Error::custom("Missing required fields"));
+    }
+    
+    Ok(())
+}
+
+fn parse_json_array(json_str: &str) -> Result<Vec<User>> {
+    let users: Vec<User> = serde_json::from_str(json_str)?;
+    
+    for user in &users {
+        if user.id == 0 {
+            return Err(serde_json::Error::custom("Invalid user ID"));
+        }
+    }
+    
+    Ok(users)
+}
+
+fn main() -> Result<()> {
+    let sample_json = r#"
+        {
+            "id": 42,
+            "name": "John Doe",
+            "email": "john@example.com",
+            "active": true,
+            "preferences": {
+                "theme": "dark",
+                "notifications": true
+            }
+        }
+    "#;
+    
+    validate_json_structure(sample_json)?;
+    
+    let mut user: User = serde_json::from_str(sample_json)?;
+    println!("Parsed user: {:?}", user);
+    
+    user.update_preference("language", Value::String("en-US".to_string()));
+    
+    let json_output = user.to_pretty_json()?;
+    println!("Updated JSON:\n{}", json_output);
+    
+    let users_json = r#"
+        [
+            {
+                "id": 1,
+                "name": "Alice",
+                "email": "alice@example.com",
+                "active": true,
+                "preferences": {}
+            },
+            {
+                "id": 2,
+                "name": "Bob",
+                "email": "bob@example.com",
+                "active": false,
+                "preferences": {}
+            }
+        ]
+    "#;
+    
+    let users = parse_json_array(users_json)?;
+    println!("Parsed {} users", users.len());
+    
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_valid_json_parsing() {
+        let json = r#"{"id": 100, "name": "Test", "email": "test@example.com", "active": true, "preferences": {}}"#;
+        let result: Result<User> = serde_json::from_str(json);
+        assert!(result.is_ok());
+    }
+    
+    #[test]
+    fn test_invalid_email() {
+        let json = r#"{"id": 100, "name": "Test", "email": "", "active": true, "preferences": {}}"#;
+        let result: Result<User> = serde_json::from_str(json);
+        assert!(result.is_err());
+    }
 }

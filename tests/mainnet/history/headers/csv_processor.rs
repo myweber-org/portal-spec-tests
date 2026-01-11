@@ -1,76 +1,78 @@
 use std::error::Error;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
-use std::path::Path;
 
 pub struct CsvProcessor {
-    delimiter: char,
-    has_header: bool,
+    headers: Vec<String>,
+    records: Vec<Vec<String>>,
 }
 
 impl CsvProcessor {
-    pub fn new(delimiter: char, has_header: bool) -> Self {
+    pub fn new() -> Self {
         CsvProcessor {
-            delimiter,
-            has_header,
+            headers: Vec::new(),
+            records: Vec::new(),
         }
     }
 
-    pub fn filter_rows<P, F>(
-        &self,
-        file_path: P,
-        predicate: F,
-    ) -> Result<Vec<Vec<String>>, Box<dyn Error>>
-    where
-        P: AsRef<Path>,
-        F: Fn(&[String]) -> bool,
-    {
+    pub fn load_from_file(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
         let file = File::open(file_path)?;
         let reader = BufReader::new(file);
         let mut lines = reader.lines();
-        let mut result = Vec::new();
 
-        if self.has_header {
-            lines.next();
+        if let Some(header_line) = lines.next() {
+            let header_line = header_line?;
+            self.headers = header_line.split(',').map(|s| s.trim().to_string()).collect();
         }
 
         for line in lines {
             let line = line?;
-            let fields: Vec<String> = line
-                .split(self.delimiter)
-                .map(|s| s.trim().to_string())
-                .collect();
-
-            if predicate(&fields) {
-                result.push(fields);
+            let record: Vec<String> = line.split(',').map(|s| s.trim().to_string()).collect();
+            if record.len() == self.headers.len() {
+                self.records.push(record);
             }
         }
 
-        Ok(result)
+        Ok(())
     }
 
-    pub fn extract_column(&self, data: &[Vec<String>], column_index: usize) -> Vec<String> {
-        data.iter()
-            .filter_map(|row| row.get(column_index).cloned())
+    pub fn filter_by_column(&self, column_name: &str, value: &str) -> Vec<Vec<String>> {
+        let column_index = match self.headers.iter().position(|h| h == column_name) {
+            Some(index) => index,
+            None => return Vec::new(),
+        };
+
+        self.records
+            .iter()
+            .filter(|record| record.get(column_index).map_or(false, |v| v == value))
+            .cloned()
             .collect()
     }
-}
 
-pub fn calculate_average(values: &[String]) -> Option<f64> {
-    let mut sum = 0.0;
-    let mut count = 0;
+    pub fn get_column_summary(&self, column_name: &str) -> Option<(usize, String)> {
+        let column_index = self.headers.iter().position(|h| h == column_name)?;
+        
+        let values: Vec<&String> = self.records
+            .iter()
+            .filter_map(|record| record.get(column_index))
+            .collect();
 
-    for value in values {
-        if let Ok(num) = value.parse::<f64>() {
-            sum += num;
-            count += 1;
+        if values.is_empty() {
+            return None;
         }
+
+        let unique_count = values.iter().collect::<std::collections::HashSet<_>>().len();
+        let sample_value = values[0].clone();
+
+        Some((unique_count, sample_value))
     }
 
-    if count > 0 {
-        Some(sum / count as f64)
-    } else {
-        None
+    pub fn record_count(&self) -> usize {
+        self.records.len()
+    }
+
+    pub fn header_count(&self) -> usize {
+        self.headers.len()
     }
 }
 
@@ -80,23 +82,29 @@ mod tests {
     use std::io::Write;
     use tempfile::NamedTempFile;
 
-    #[test]
-    fn test_filter_and_average() {
-        let csv_data = "name,age,salary\nAlice,30,50000\nBob,25,45000\nCharlie,35,60000";
+    fn create_test_csv() -> NamedTempFile {
         let mut temp_file = NamedTempFile::new().unwrap();
-        write!(temp_file, "{}", csv_data).unwrap();
+        writeln!(temp_file, "id,name,age").unwrap();
+        writeln!(temp_file, "1,Alice,30").unwrap();
+        writeln!(temp_file, "2,Bob,25").unwrap();
+        writeln!(temp_file, "3,Alice,35").unwrap();
+        temp_file
+    }
 
-        let processor = CsvProcessor::new(',', true);
-        let filtered = processor
-            .filter_rows(temp_file.path(), |row| {
-                row.get(1).and_then(|age| age.parse::<i32>().ok()).map_or(false, |age| age >= 30)
-            })
-            .unwrap();
-
-        let salaries = processor.extract_column(&filtered, 2);
-        let avg_salary = calculate_average(&salaries).unwrap();
-
-        assert_eq!(filtered.len(), 2);
-        assert!((avg_salary - 55000.0).abs() < 0.001);
+    #[test]
+    fn test_load_and_filter() {
+        let temp_file = create_test_csv();
+        let mut processor = CsvProcessor::new();
+        
+        processor.load_from_file(temp_file.path().to_str().unwrap()).unwrap();
+        
+        assert_eq!(processor.record_count(), 3);
+        assert_eq!(processor.header_count(), 3);
+        
+        let alice_records = processor.filter_by_column("name", "Alice");
+        assert_eq!(alice_records.len(), 2);
+        
+        let summary = processor.get_column_summary("name").unwrap();
+        assert_eq!(summary.0, 2);
     }
 }

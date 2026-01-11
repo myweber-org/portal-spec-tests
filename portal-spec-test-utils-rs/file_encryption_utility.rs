@@ -103,4 +103,52 @@ mod tests {
         assert_eq!(key2.len(), 32);
         assert_ne!(key1, key2);
     }
+}use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce,
+};
+use std::error::Error;
+
+pub struct EncryptionManager {
+    cipher: Aes256Gcm,
+}
+
+impl EncryptionManager {
+    pub fn new() -> Self {
+        let key = Key::<Aes256Gcm>::generate(&mut OsRng);
+        let cipher = Aes256Gcm::new(&key);
+        Self { cipher }
+    }
+
+    pub fn encrypt(&self, plaintext: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+        let nonce = Nonce::generate(&mut OsRng);
+        let ciphertext = self.cipher.encrypt(&nonce, plaintext)?;
+        let mut result = nonce.to_vec();
+        result.extend(ciphertext);
+        Ok(result)
+    }
+
+    pub fn decrypt(&self, ciphertext: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+        if ciphertext.len() < 12 {
+            return Err("Invalid ciphertext length".into());
+        }
+        let nonce = Nonce::from_slice(&ciphertext[..12]);
+        let ciphertext_data = &ciphertext[12..];
+        let plaintext = self.cipher.decrypt(nonce, ciphertext_data)?;
+        Ok(plaintext)
+    }
+}
+
+pub fn process_encryption() -> Result<(), Box<dyn Error>> {
+    let manager = EncryptionManager::new();
+    let secret_data = b"Confidential information";
+    
+    let encrypted = manager.encrypt(secret_data)?;
+    println!("Encrypted data length: {} bytes", encrypted.len());
+    
+    let decrypted = manager.decrypt(&encrypted)?;
+    assert_eq!(decrypted, secret_data);
+    println!("Decryption successful");
+    
+    Ok(())
 }

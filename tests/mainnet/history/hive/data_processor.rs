@@ -141,3 +141,111 @@ mod tests {
         assert_eq!(groups.get("category_a").unwrap().len(), 2);
     }
 }
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    id: u32,
+    name: String,
+    value: f64,
+    metadata: HashMap<String, String>,
+}
+
+#[derive(Debug)]
+pub enum ValidationError {
+    InvalidId,
+    InvalidName,
+    InvalidValue,
+    MissingMetadata,
+}
+
+impl fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ValidationError::InvalidId => write!(f, "ID must be greater than 0"),
+            ValidationError::InvalidName => write!(f, "Name cannot be empty"),
+            ValidationError::InvalidValue => write!(f, "Value must be between 0.0 and 1000.0"),
+            ValidationError::MissingMetadata => write!(f, "Required metadata fields are missing"),
+        }
+    }
+}
+
+impl Error for ValidationError {}
+
+impl DataRecord {
+    pub fn new(id: u32, name: String, value: f64) -> Self {
+        DataRecord {
+            id,
+            name,
+            value,
+            metadata: HashMap::new(),
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        if self.id == 0 {
+            return Err(ValidationError::InvalidId);
+        }
+        
+        if self.name.trim().is_empty() {
+            return Err(ValidationError::InvalidName);
+        }
+        
+        if self.value < 0.0 || self.value > 1000.0 {
+            return Err(ValidationError::InvalidValue);
+        }
+        
+        if self.metadata.is_empty() {
+            return Err(ValidationError::MissingMetadata);
+        }
+        
+        Ok(())
+    }
+
+    pub fn add_metadata(&mut self, key: String, value: String) {
+        self.metadata.insert(key, value);
+    }
+
+    pub fn transform_value(&mut self, multiplier: f64) -> Result<(), Box<dyn Error>> {
+        if multiplier <= 0.0 {
+            return Err("Multiplier must be positive".into());
+        }
+        
+        self.value *= multiplier;
+        Ok(())
+    }
+
+    pub fn get_normalized_value(&self, scale: f64) -> f64 {
+        self.value / scale
+    }
+
+    pub fn merge_metadata(&mut self, other: HashMap<String, String>) {
+        for (key, value) in other {
+            self.metadata.entry(key).or_insert(value);
+        }
+    }
+}
+
+pub fn process_records(records: &mut [DataRecord]) -> Result<Vec<f64>, Box<dyn Error>> {
+    let mut results = Vec::new();
+    
+    for record in records {
+        record.validate()?;
+        
+        record.transform_value(1.5)?;
+        
+        let normalized = record.get_normalized_value(100.0);
+        results.push(normalized);
+    }
+    
+    Ok(results)
+}
+
+pub fn create_sample_record() -> DataRecord {
+    let mut record = DataRecord::new(1, "Sample".to_string(), 50.0);
+    record.add_metadata("category".to_string(), "test".to_string());
+    record.add_metadata("version".to_string(), "1.0".to_string());
+    record
+}

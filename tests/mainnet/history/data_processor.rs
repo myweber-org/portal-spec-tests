@@ -218,3 +218,176 @@ mod tests {
         assert_eq!(record.value, 25.0);
     }
 }
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug)]
+pub enum ProcessingError {
+    InvalidId,
+    InvalidValue,
+    EmptyName,
+    DuplicateTag,
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProcessingError::InvalidId => write!(f, "ID must be greater than zero"),
+            ProcessingError::InvalidValue => write!(f, "Value must be positive"),
+            ProcessingError::EmptyName => write!(f, "Name cannot be empty"),
+            ProcessingError::DuplicateTag => write!(f, "Tags must be unique"),
+        }
+    }
+}
+
+impl Error for ProcessingError {}
+
+pub struct DataProcessor {
+    records: HashMap<u32, DataRecord>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: HashMap::new(),
+        }
+    }
+
+    pub fn add_record(&mut self, record: DataRecord) -> Result<(), ProcessingError> {
+        self.validate_record(&record)?;
+        
+        if self.records.contains_key(&record.id) {
+            return Err(ProcessingError::InvalidId);
+        }
+        
+        self.records.insert(record.id, record);
+        Ok(())
+    }
+
+    pub fn get_record(&self, id: u32) -> Option<&DataRecord> {
+        self.records.get(&id)
+    }
+
+    pub fn update_value(&mut self, id: u32, new_value: f64) -> Result<(), ProcessingError> {
+        if new_value <= 0.0 {
+            return Err(ProcessingError::InvalidValue);
+        }
+        
+        if let Some(record) = self.records.get_mut(&id) {
+            record.value = new_value;
+            Ok(())
+        } else {
+            Err(ProcessingError::InvalidId)
+        }
+    }
+
+    pub fn calculate_total(&self) -> f64 {
+        self.records.values().map(|r| r.value).sum()
+    }
+
+    pub fn find_by_tag(&self, tag: &str) -> Vec<&DataRecord> {
+        self.records
+            .values()
+            .filter(|r| r.tags.iter().any(|t| t == tag))
+            .collect()
+    }
+
+    fn validate_record(&self, record: &DataRecord) -> Result<(), ProcessingError> {
+        if record.id == 0 {
+            return Err(ProcessingError::InvalidId);
+        }
+        
+        if record.value <= 0.0 {
+            return Err(ProcessingError::InvalidValue);
+        }
+        
+        if record.name.trim().is_empty() {
+            return Err(ProcessingError::EmptyName);
+        }
+        
+        let mut seen_tags = std::collections::HashSet::new();
+        for tag in &record.tags {
+            if !seen_tags.insert(tag) {
+                return Err(ProcessingError::DuplicateTag);
+            }
+        }
+        
+        Ok(())
+    }
+}
+
+pub fn process_data_batch(records: Vec<DataRecord>) -> Result<DataProcessor, ProcessingError> {
+    let mut processor = DataProcessor::new();
+    
+    for record in records {
+        processor.add_record(record)?;
+    }
+    
+    Ok(processor)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_record() {
+        let record = DataRecord {
+            id: 1,
+            name: "Test".to_string(),
+            value: 10.5,
+            tags: vec!["tag1".to_string(), "tag2".to_string()],
+        };
+        
+        let mut processor = DataProcessor::new();
+        assert!(processor.add_record(record).is_ok());
+    }
+
+    #[test]
+    fn test_invalid_value() {
+        let record = DataRecord {
+            id: 1,
+            name: "Test".to_string(),
+            value: -5.0,
+            tags: vec![],
+        };
+        
+        let mut processor = DataProcessor::new();
+        assert!(processor.add_record(record).is_err());
+    }
+
+    #[test]
+    fn test_calculate_total() {
+        let mut processor = DataProcessor::new();
+        
+        let records = vec![
+            DataRecord {
+                id: 1,
+                name: "Item1".to_string(),
+                value: 10.0,
+                tags: vec!["a".to_string()],
+            },
+            DataRecord {
+                id: 2,
+                name: "Item2".to_string(),
+                value: 20.0,
+                tags: vec!["b".to_string()],
+            },
+        ];
+        
+        for record in records {
+            processor.add_record(record).unwrap();
+        }
+        
+        assert_eq!(processor.calculate_total(), 30.0);
+    }
+}

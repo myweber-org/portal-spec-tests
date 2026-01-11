@@ -1,50 +1,86 @@
 use std::collections::HashMap;
-use std::env;
 use std::fs;
+use std::path::Path;
 
+#[derive(Debug, Clone)]
 pub struct Config {
-    values: HashMap<String, String>,
+    pub settings: HashMap<String, String>,
+    pub defaults: HashMap<String, String>,
 }
 
 impl Config {
-    pub fn from_file(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
-        let content = fs::read_to_string(path)?;
-        let mut values = HashMap::new();
+    pub fn new() -> Self {
+        Config {
+            settings: HashMap::new(),
+            defaults: HashMap::from([
+                ("timeout".to_string(), "30".to_string()),
+                ("retries".to_string(), "3".to_string()),
+                ("log_level".to_string(), "info".to_string()),
+            ]),
+        }
+    }
 
+    pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self, String> {
+        let content = fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read config file: {}", e))?;
+
+        let mut config = Config::new();
+        
         for line in content.lines() {
             let trimmed = line.trim();
             if trimmed.is_empty() || trimmed.starts_with('#') {
                 continue;
             }
 
-            if let Some((key, value)) = trimmed.split_once('=') {
-                let processed_value = Self::process_value(value.trim());
-                values.insert(key.trim().to_string(), processed_value);
+            let parts: Vec<&str> = trimmed.splitn(2, '=').collect();
+            if parts.len() != 2 {
+                return Err(format!("Invalid config line: {}", line));
             }
+
+            let key = parts[0].trim().to_string();
+            let value = parts[1].trim().to_string();
+            
+            if key.is_empty() {
+                return Err(format!("Empty key in config line: {}", line));
+            }
+
+            config.settings.insert(key, value);
         }
 
-        Ok(Config { values })
-    }
-
-    fn process_value(value: &str) -> String {
-        if value.starts_with('$') {
-            let var_name = &value[1..];
-            env::var(var_name).unwrap_or_else(|_| value.to_string())
-        } else {
-            value.to_string()
-        }
+        Ok(config)
     }
 
     pub fn get(&self, key: &str) -> Option<&String> {
-        self.values.get(key)
+        self.settings.get(key).or_else(|| self.defaults.get(key))
     }
 
-    pub fn get_or_default(&self, key: &str, default: &str) -> String {
-        self.values
-            .get(key)
-            .map(|s| s.as_str())
-            .unwrap_or(default)
-            .to_string()
+    pub fn get_with_default(&self, key: &str, default: &str) -> String {
+        self.get(key).map(|s| s.as_str()).unwrap_or(default).to_string()
+    }
+
+    pub fn validate_required(&self, required_keys: &[&str]) -> Result<(), Vec<String>> {
+        let mut missing = Vec::new();
+        
+        for key in required_keys {
+            if !self.settings.contains_key(*key) && !self.defaults.contains_key(*key) {
+                missing.push(key.to_string());
+            }
+        }
+
+        if missing.is_empty() {
+            Ok(())
+        } else {
+            Err(missing)
+        }
+    }
+
+    pub fn merge(&mut self, other: Config) {
+        for (key, value) in other.settings {
+            self.settings.insert(key, value);
+        }
+        for (key, value) in other.defaults {
+            self.defaults.entry(key).or_insert(value);
+        }
     }
 }
 
@@ -55,41 +91,35 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_basic_parsing() {
+    fn test_load_valid_config() {
         let mut file = NamedTempFile::new().unwrap();
-        writeln!(file, "HOST=localhost").unwrap();
-        writeln!(file, "PORT=8080").unwrap();
+        writeln!(file, "server=localhost").unwrap();
+        writeln!(file, "port=8080").unwrap();
         writeln!(file, "# This is a comment").unwrap();
         writeln!(file, "").unwrap();
-        writeln!(file, "TIMEOUT=30").unwrap();
+        writeln!(file, "timeout=60").unwrap();
 
-        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
-        assert_eq!(config.get("HOST"), Some(&"localhost".to_string()));
-        assert_eq!(config.get("PORT"), Some(&"8080".to_string()));
-        assert_eq!(config.get("TIMEOUT"), Some(&"30".to_string()));
-        assert_eq!(config.get("MISSING"), None);
+        let config = Config::load_from_file(file.path()).unwrap();
+        assert_eq!(config.get("server"), Some(&"localhost".to_string()));
+        assert_eq!(config.get("port"), Some(&"8080".to_string()));
+        assert_eq!(config.get("timeout"), Some(&"60".to_string()));
+        assert_eq!(config.get("retries"), Some(&"3".to_string()));
     }
 
     #[test]
-    fn test_env_substitution() {
-        env::set_var("DB_PASSWORD", "secret123");
-        
-        let mut file = NamedTempFile::new().unwrap();
-        writeln!(file, "PASSWORD=$DB_PASSWORD").unwrap();
-        writeln!(file, "NORMAL=value").unwrap();
-
-        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
-        assert_eq!(config.get("PASSWORD"), Some(&"secret123".to_string()));
-        assert_eq!(config.get("NORMAL"), Some(&"value".to_string()));
+    fn test_missing_config_uses_default() {
+        let config = Config::new();
+        assert_eq!(config.get("log_level"), Some(&"info".to_string()));
+        assert_eq!(config.get("nonexistent"), None);
     }
 
     #[test]
-    fn test_get_or_default() {
-        let mut file = NamedTempFile::new().unwrap();
-        writeln!(file, "EXISTING=found").unwrap();
-
-        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
-        assert_eq!(config.get_or_default("EXISTING", "default"), "found");
-        assert_eq!(config.get_or_default("MISSING", "default"), "default");
+    fn test_validation() {
+        let config = Config::new();
+        let required = vec!["timeout", "retries", "missing_key"];
+        let result = config.validate_required(&required);
+        assert!(result.is_err());
+        let missing = result.unwrap_err();
+        assert!(missing.contains(&"missing_key".to_string()));
     }
 }

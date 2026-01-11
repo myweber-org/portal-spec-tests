@@ -172,3 +172,279 @@ mod tests {
         assert!(std_dev - 1.63299 < 0.00001);
     }
 }
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub category: String,
+}
+
+#[derive(Debug)]
+pub enum DataError {
+    InvalidId,
+    InvalidValue,
+    EmptyName,
+    InvalidCategory,
+    DuplicateRecord,
+}
+
+impl fmt::Display for DataError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DataError::InvalidId => write!(f, "ID must be greater than 0"),
+            DataError::InvalidValue => write!(f, "Value must be between 0.0 and 1000.0"),
+            DataError::EmptyName => write!(f, "Name cannot be empty"),
+            DataError::InvalidCategory => write!(f, "Category must be one of: A, B, C, D"),
+            DataError::DuplicateRecord => write!(f, "Record with this ID already exists"),
+        }
+    }
+}
+
+impl Error for DataError {}
+
+pub struct DataProcessor {
+    records: HashMap<u32, DataRecord>,
+    category_stats: HashMap<String, (f64, usize)>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: HashMap::new(),
+            category_stats: HashMap::new(),
+        }
+    }
+
+    pub fn add_record(&mut self, record: DataRecord) -> Result<(), DataError> {
+        self.validate_record(&record)?;
+        
+        if self.records.contains_key(&record.id) {
+            return Err(DataError::DuplicateRecord);
+        }
+
+        self.update_category_stats(&record, true);
+        self.records.insert(record.id, record);
+        
+        Ok(())
+    }
+
+    pub fn remove_record(&mut self, id: u32) -> Option<DataRecord> {
+        if let Some(record) = self.records.remove(&id) {
+            self.update_category_stats(&record, false);
+            Some(record)
+        } else {
+            None
+        }
+    }
+
+    pub fn get_record(&self, id: u32) -> Option<&DataRecord> {
+        self.records.get(&id)
+    }
+
+    pub fn get_category_average(&self, category: &str) -> Option<f64> {
+        self.category_stats.get(category).map(|(sum, count)| sum / *count as f64)
+    }
+
+    pub fn transform_records<F>(&mut self, transform_fn: F) 
+    where
+        F: Fn(&DataRecord) -> DataRecord,
+    {
+        let transformed: Vec<DataRecord> = self.records
+            .values()
+            .map(|record| transform_fn(record))
+            .collect();
+
+        self.records.clear();
+        self.category_stats.clear();
+
+        for record in transformed {
+            if self.validate_record(&record).is_ok() {
+                self.update_category_stats(&record, true);
+                self.records.insert(record.id, record);
+            }
+        }
+    }
+
+    pub fn filter_records<F>(&self, predicate: F) -> Vec<&DataRecord>
+    where
+        F: Fn(&DataRecord) -> bool,
+    {
+        self.records
+            .values()
+            .filter(|record| predicate(record))
+            .collect()
+    }
+
+    fn validate_record(&self, record: &DataRecord) -> Result<(), DataError> {
+        if record.id == 0 {
+            return Err(DataError::InvalidId);
+        }
+
+        if record.name.trim().is_empty() {
+            return Err(DataError::EmptyName);
+        }
+
+        if !(0.0..=1000.0).contains(&record.value) {
+            return Err(DataError::InvalidValue);
+        }
+
+        let valid_categories = ["A", "B", "C", "D"];
+        if !valid_categories.contains(&record.category.as_str()) {
+            return Err(DataError::InvalidCategory);
+        }
+
+        Ok(())
+    }
+
+    fn update_category_stats(&mut self, record: &DataRecord, is_add: bool) {
+        let entry = self.category_stats
+            .entry(record.category.clone())
+            .or_insert((0.0, 0));
+
+        if is_add {
+            entry.0 += record.value;
+            entry.1 += 1;
+        } else {
+            entry.0 -= record.value;
+            entry.1 -= 1;
+            
+            if entry.1 == 0 {
+                self.category_stats.remove(&record.category);
+            }
+        }
+    }
+
+    pub fn total_records(&self) -> usize {
+        self.records.len()
+    }
+
+    pub fn clear(&mut self) {
+        self.records.clear();
+        self.category_stats.clear();
+    }
+}
+
+impl Default for DataProcessor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_add_valid_record() {
+        let mut processor = DataProcessor::new();
+        let record = DataRecord {
+            id: 1,
+            name: "Test".to_string(),
+            value: 100.0,
+            category: "A".to_string(),
+        };
+
+        assert!(processor.add_record(record).is_ok());
+        assert_eq!(processor.total_records(), 1);
+    }
+
+    #[test]
+    fn test_add_invalid_record() {
+        let mut processor = DataProcessor::new();
+        let record = DataRecord {
+            id: 0,
+            name: "".to_string(),
+            value: -10.0,
+            category: "X".to_string(),
+        };
+
+        assert!(processor.add_record(record).is_err());
+        assert_eq!(processor.total_records(), 0);
+    }
+
+    #[test]
+    fn test_duplicate_record() {
+        let mut processor = DataProcessor::new();
+        let record1 = DataRecord {
+            id: 1,
+            name: "First".to_string(),
+            value: 50.0,
+            category: "B".to_string(),
+        };
+
+        let record2 = DataRecord {
+            id: 1,
+            name: "Second".to_string(),
+            value: 75.0,
+            category: "C".to_string(),
+        };
+
+        assert!(processor.add_record(record1).is_ok());
+        assert!(processor.add_record(record2).is_err());
+        assert_eq!(processor.total_records(), 1);
+    }
+
+    #[test]
+    fn test_category_average() {
+        let mut processor = DataProcessor::new();
+        
+        let records = vec![
+            DataRecord { id: 1, name: "R1".to_string(), value: 50.0, category: "A".to_string() },
+            DataRecord { id: 2, name: "R2".to_string(), value: 100.0, category: "A".to_string() },
+            DataRecord { id: 3, name: "R3".to_string(), value: 150.0, category: "A".to_string() },
+        ];
+
+        for record in records {
+            processor.add_record(record).unwrap();
+        }
+
+        let avg = processor.get_category_average("A");
+        assert_eq!(avg, Some(100.0));
+    }
+
+    #[test]
+    fn test_transform_records() {
+        let mut processor = DataProcessor::new();
+        
+        processor.add_record(DataRecord {
+            id: 1,
+            name: "Original".to_string(),
+            value: 50.0,
+            category: "A".to_string(),
+        }).unwrap();
+
+        processor.transform_records(|record| DataRecord {
+            id: record.id,
+            name: format!("{}_transformed", record.name),
+            value: record.value * 2.0,
+            category: record.category.clone(),
+        });
+
+        let record = processor.get_record(1).unwrap();
+        assert_eq!(record.name, "Original_transformed");
+        assert_eq!(record.value, 100.0);
+    }
+
+    #[test]
+    fn test_filter_records() {
+        let mut processor = DataProcessor::new();
+        
+        let records = vec![
+            DataRecord { id: 1, name: "Low".to_string(), value: 10.0, category: "A".to_string() },
+            DataRecord { id: 2, name: "High".to_string(), value: 500.0, category: "B".to_string() },
+            DataRecord { id: 3, name: "Medium".to_string(), value: 250.0, category: "A".to_string() },
+        ];
+
+        for record in records {
+            processor.add_record(record).unwrap();
+        }
+
+        let high_value_records = processor.filter_records(|r| r.value > 100.0);
+        assert_eq!(high_value_records.len(), 2);
+    }
+}

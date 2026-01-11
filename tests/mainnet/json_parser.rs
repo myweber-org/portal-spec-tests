@@ -271,4 +271,275 @@ mod tests {
         expected.insert("key".to_string(), JsonValue::String("value".to_string()));
         assert_eq!(parser.parse(), Ok(JsonValue::Object(expected)));
     }
+}use std::collections::HashMap;
+
+#[derive(Debug, PartialEq)]
+pub enum JsonValue {
+    Null,
+    Bool(bool),
+    Number(f64),
+    String(String),
+    Array(Vec<JsonValue>),
+    Object(HashMap<String, JsonValue>),
+}
+
+#[derive(Debug)]
+pub enum ParseError {
+    UnexpectedEnd,
+    InvalidToken,
+    ExpectedColon,
+    ExpectedComma,
+    TrailingComma,
+    InvalidNumber,
+    InvalidEscape,
+    UnterminatedString,
+}
+
+pub struct JsonParser {
+    input: Vec<char>,
+    position: usize,
+}
+
+impl JsonParser {
+    pub fn new(input: &str) -> Self {
+        JsonParser {
+            input: input.chars().collect(),
+            position: 0,
+        }
+    }
+
+    fn peek(&self) -> Option<char> {
+        self.input.get(self.position).copied()
+    }
+
+    fn consume(&mut self) -> Option<char> {
+        let ch = self.peek();
+        if ch.is_some() {
+            self.position += 1;
+        }
+        ch
+    }
+
+    fn skip_whitespace(&mut self) {
+        while let Some(ch) = self.peek() {
+            if ch.is_whitespace() {
+                self.consume();
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn parse_string(&mut self) -> Result<String, ParseError> {
+        let mut result = String::new();
+        self.consume(); // consume opening quote
+
+        while let Some(ch) = self.consume() {
+            match ch {
+                '"' => return Ok(result),
+                '\\' => {
+                    let escaped = self.consume().ok_or(ParseError::UnexpectedEnd)?;
+                    match escaped {
+                        '"' => result.push('"'),
+                        '\\' => result.push('\\'),
+                        '/' => result.push('/'),
+                        'b' => result.push('\x08'),
+                        'f' => result.push('\x0c'),
+                        'n' => result.push('\n'),
+                        'r' => result.push('\r'),
+                        't' => result.push('\t'),
+                        _ => return Err(ParseError::InvalidEscape),
+                    }
+                }
+                _ => result.push(ch),
+            }
+        }
+
+        Err(ParseError::UnterminatedString)
+    }
+
+    fn parse_number(&mut self) -> Result<f64, ParseError> {
+        let start = self.position;
+        let mut has_dot = false;
+
+        while let Some(ch) = self.peek() {
+            if ch.is_ascii_digit() {
+                self.consume();
+            } else if ch == '.' && !has_dot {
+                has_dot = true;
+                self.consume();
+            } else {
+                break;
+            }
+        }
+
+        let num_str: String = self.input[start..self.position].iter().collect();
+        num_str.parse().map_err(|_| ParseError::InvalidNumber)
+    }
+
+    fn parse_array(&mut self) -> Result<Vec<JsonValue>, ParseError> {
+        let mut array = Vec::new();
+        self.consume(); // consume opening bracket
+
+        self.skip_whitespace();
+        if self.peek() == Some(']') {
+            self.consume();
+            return Ok(array);
+        }
+
+        loop {
+            self.skip_whitespace();
+            let value = self.parse_value()?;
+            array.push(value);
+
+            self.skip_whitespace();
+            match self.peek() {
+                Some(',') => {
+                    self.consume();
+                    self.skip_whitespace();
+                    if self.peek() == Some(']') {
+                        return Err(ParseError::TrailingComma);
+                    }
+                }
+                Some(']') => {
+                    self.consume();
+                    break;
+                }
+                _ => return Err(ParseError::ExpectedComma),
+            }
+        }
+
+        Ok(array)
+    }
+
+    fn parse_object(&mut self) -> Result<HashMap<String, JsonValue>, ParseError> {
+        let mut map = HashMap::new();
+        self.consume(); // consume opening brace
+
+        self.skip_whitespace();
+        if self.peek() == Some('}') {
+            self.consume();
+            return Ok(map);
+        }
+
+        loop {
+            self.skip_whitespace();
+            if self.peek() != Some('"') {
+                return Err(ParseError::InvalidToken);
+            }
+
+            let key = self.parse_string()?;
+            self.skip_whitespace();
+
+            if self.peek() != Some(':') {
+                return Err(ParseError::ExpectedColon);
+            }
+            self.consume();
+
+            self.skip_whitespace();
+            let value = self.parse_value()?;
+            map.insert(key, value);
+
+            self.skip_whitespace();
+            match self.peek() {
+                Some(',') => {
+                    self.consume();
+                    self.skip_whitespace();
+                    if self.peek() == Some('}') {
+                        return Err(ParseError::TrailingComma);
+                    }
+                }
+                Some('}') => {
+                    self.consume();
+                    break;
+                }
+                _ => return Err(ParseError::ExpectedComma),
+            }
+        }
+
+        Ok(map)
+    }
+
+    fn parse_value(&mut self) -> Result<JsonValue, ParseError> {
+        self.skip_whitespace();
+        match self.peek() {
+            Some('n') => {
+                if self.consume() == Some('n')
+                    && self.consume() == Some('u')
+                    && self.consume() == Some('l')
+                    && self.consume() == Some('l')
+                {
+                    Ok(JsonValue::Null)
+                } else {
+                    Err(ParseError::InvalidToken)
+                }
+            }
+            Some('t') => {
+                if self.consume() == Some('t')
+                    && self.consume() == Some('r')
+                    && self.consume() == Some('u')
+                    && self.consume() == Some('e')
+                {
+                    Ok(JsonValue::Bool(true))
+                } else {
+                    Err(ParseError::InvalidToken)
+                }
+            }
+            Some('f') => {
+                if self.consume() == Some('f')
+                    && self.consume() == Some('a')
+                    && self.consume() == Some('l')
+                    && self.consume() == Some('s')
+                    && self.consume() == Some('e')
+                {
+                    Ok(JsonValue::Bool(false))
+                } else {
+                    Err(ParseError::InvalidToken)
+                }
+            }
+            Some('"') => self.parse_string().map(JsonValue::String),
+            Some('[') => self.parse_array().map(JsonValue::Array),
+            Some('{') => self.parse_object().map(JsonValue::Object),
+            Some(ch) if ch.is_ascii_digit() || ch == '-' => {
+                self.parse_number().map(JsonValue::Number)
+            }
+            _ => Err(ParseError::InvalidToken),
+        }
+    }
+
+    pub fn parse(&mut self) -> Result<JsonValue, ParseError> {
+        let result = self.parse_value()?;
+        self.skip_whitespace();
+        if self.peek().is_some() {
+            Err(ParseError::InvalidToken)
+        } else {
+            Ok(result)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_simple_object() {
+        let mut parser = JsonParser::new(r#"{"name": "test", "value": 42}"#);
+        let result = parser.parse();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_parse_array() {
+        let mut parser = JsonParser::new(r#"[1, 2, 3, "four"]"#);
+        let result = parser.parse();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_invalid_json() {
+        let mut parser = JsonParser::new(r#"{"unclosed": string}"#);
+        let result = parser.parse();
+        assert!(result.is_err());
+    }
 }

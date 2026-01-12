@@ -231,3 +231,74 @@ pub fn merge_json_files(file_paths: &[&str]) -> Result<serde_json::Value, Box<dy
 
     Ok(serde_json::Value::Object(merged_map))
 }
+use serde_json::{Value, Map};
+use std::fs;
+use std::path::Path;
+
+pub fn merge_json_files<P: AsRef<Path>>(paths: &[P]) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut merged_map = Map::new();
+
+    for path in paths {
+        let content = fs::read_to_string(path)?;
+        let json_value: Value = serde_json::from_str(&content)?;
+
+        if let Value::Object(obj) = json_value {
+            merge_objects(&mut merged_map, obj);
+        }
+    }
+
+    Ok(Value::Object(merged_map))
+}
+
+fn merge_objects(base: &mut Map<String, Value>, extension: Map<String, Value>) {
+    for (key, value) in extension {
+        if let Some(existing_value) = base.get_mut(&key) {
+            match (existing_value, value) {
+                (Value::Object(ref mut base_obj), Value::Object(ext_obj)) => {
+                    merge_objects(base_obj, ext_obj);
+                }
+                (Value::Array(ref mut base_arr), Value::Array(mut ext_arr)) => {
+                    base_arr.append(&mut ext_arr);
+                }
+                _ => {
+                    *existing_value = value;
+                }
+            }
+        } else {
+            base.insert(key, value);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_basic_merge() {
+        let file1 = json!({
+            "name": "Project",
+            "version": "1.0",
+            "dependencies": {
+                "serde": "1.0"
+            }
+        });
+
+        let file2 = json!({
+            "version": "2.0",
+            "dependencies": {
+                "tokio": "1.0"
+            },
+            "features": ["async"]
+        });
+
+        let merged = merge_json_files(&[&file1.to_string(), &file2.to_string()]).unwrap();
+        
+        assert_eq!(merged["name"], "Project");
+        assert_eq!(merged["version"], "2.0");
+        assert_eq!(merged["dependencies"]["serde"], "1.0");
+        assert_eq!(merged["dependencies"]["tokio"], "1.0");
+        assert_eq!(merged["features"][0], "async");
+    }
+}

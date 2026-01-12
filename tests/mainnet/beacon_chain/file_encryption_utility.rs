@@ -372,3 +372,149 @@ mod tests {
         assert_eq!(decrypted, test_data);
     }
 }
+use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce,
+};
+use pbkdf2::{
+    password_hash::{PasswordHasher, SaltString},
+    Pbkdf2,
+};
+use std::fs;
+use std::io::{self, Read, Write};
+
+const SALT_LENGTH: usize = 16;
+const NONCE_LENGTH: usize = 12;
+
+pub struct EncryptionResult {
+    pub ciphertext: Vec<u8>,
+    pub salt: [u8; SALT_LENGTH],
+    pub nonce: [u8; NONCE_LENGTH],
+}
+
+pub fn derive_key(password: &str, salt: &[u8]) -> Result<Key<Aes256Gcm>, String> {
+    let salt_string = SaltString::encode_b64(salt).map_err(|e| e.to_string())?;
+    let password_hash = Pbkdf2
+        .hash_password(password.as_bytes(), &salt_string)
+        .map_err(|e| e.to_string())?;
+
+    let hash_bytes = password_hash.hash.ok_or("Hash generation failed")?;
+    let key_bytes: [u8; 32] = hash_bytes.as_bytes()[..32]
+        .try_into()
+        .map_err(|_| "Invalid hash length")?;
+
+    Ok(Key::<Aes256Gcm>::from_slice(&key_bytes).clone())
+}
+
+pub fn encrypt_file(
+    input_path: &str,
+    output_path: &str,
+    password: &str,
+) -> Result<EncryptionResult, String> {
+    let mut file = fs::File::open(input_path).map_err(|e| e.to_string())?;
+    let mut plaintext = Vec::new();
+    file.read_to_end(&mut plaintext).map_err(|e| e.to_string())?;
+
+    let mut salt = [0u8; SALT_LENGTH];
+    OsRng.fill_bytes(&mut salt);
+
+    let key = derive_key(password, &salt)?;
+
+    let mut nonce_bytes = [0u8; NONCE_LENGTH];
+    OsRng.fill_bytes(&mut nonce_bytes);
+    let nonce = Nonce::from_slice(&nonce_bytes);
+
+    let cipher = Aes256Gcm::new(&key);
+    let ciphertext = cipher
+        .encrypt(nonce, plaintext.as_ref())
+        .map_err(|e| e.to_string())?;
+
+    let mut output_file = fs::File::create(output_path).map_err(|e| e.to_string())?;
+    output_file
+        .write_all(&ciphertext)
+        .map_err(|e| e.to_string())?;
+
+    Ok(EncryptionResult {
+        ciphertext,
+        salt,
+        nonce: nonce_bytes,
+    })
+}
+
+pub fn decrypt_file(
+    input_path: &str,
+    output_path: &str,
+    password: &str,
+    salt: &[u8],
+    nonce: &[u8],
+) -> Result<Vec<u8>, String> {
+    let mut file = fs::File::open(input_path).map_err(|e| e.to_string())?;
+    let mut ciphertext = Vec::new();
+    file.read_to_end(&mut ciphertext).map_err(|e| e.to_string())?;
+
+    let key = derive_key(password, salt)?;
+    let nonce = Nonce::from_slice(nonce);
+
+    let cipher = Aes256Gcm::new(&key);
+    let plaintext = cipher
+        .decrypt(nonce, ciphertext.as_ref())
+        .map_err(|e| e.to_string())?;
+
+    let mut output_file = fs::File::create(output_path).map_err(|e| e.to_string())?;
+    output_file
+        .write_all(&plaintext)
+        .map_err(|e| e.to_string())?;
+
+    Ok(plaintext)
+}
+
+pub fn generate_random_key() -> [u8; 32] {
+    let mut key = [0u8; 32];
+    OsRng.fill_bytes(&mut key);
+    key
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_encryption_decryption() {
+        let plaintext = b"Test encryption and decryption functionality";
+        let password = "secure_password_123";
+
+        let mut input_file = NamedTempFile::new().unwrap();
+        input_file.write_all(plaintext).unwrap();
+
+        let output_encrypted = NamedTempFile::new().unwrap();
+        let output_decrypted = NamedTempFile::new().unwrap();
+
+        let enc_result = encrypt_file(
+            input_file.path().to_str().unwrap(),
+            output_encrypted.path().to_str().unwrap(),
+            password,
+        )
+        .unwrap();
+
+        let decrypted = decrypt_file(
+            output_encrypted.path().to_str().unwrap(),
+            output_decrypted.path().to_str().unwrap(),
+            password,
+            &enc_result.salt,
+            &enc_result.nonce,
+        )
+        .unwrap();
+
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn test_key_generation() {
+        let key1 = generate_random_key();
+        let key2 = generate_random_key();
+        assert_ne!(key1, key2);
+        assert_eq!(key1.len(), 32);
+        assert_eq!(key2.len(), 32);
+    }
+}

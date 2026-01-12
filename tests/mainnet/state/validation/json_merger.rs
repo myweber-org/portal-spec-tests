@@ -1,31 +1,32 @@
+
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::{BufReader, Read};
+use std::fs;
 use std::path::Path;
 
-type JsonValue = serde_json::Value;
+pub fn merge_json_files(file_paths: &[&str]) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    let mut merged_map = HashMap::new();
 
-pub fn merge_json_files(file_paths: &[impl AsRef<Path>]) -> Result<JsonValue, Box<dyn std::error::Error>> {
-    let mut merged = HashMap::new();
+    for path_str in file_paths {
+        let path = Path::new(path_str);
+        if !path.exists() {
+            return Err(format!("File not found: {}", path_str).into());
+        }
 
-    for path in file_paths {
-        let file = File::open(path.as_ref())?;
-        let mut reader = BufReader::new(file);
-        let mut contents = String::new();
-        reader.read_to_string(&mut contents)?;
+        let content = fs::read_to_string(path)?;
+        let json_value: serde_json::Value = serde_json::from_str(&content)?;
 
-        let json_data: JsonValue = serde_json::from_str(&contents)?;
-
-        if let JsonValue::Object(map) = json_data {
-            for (key, value) in map {
-                merged.insert(key, value);
+        if let serde_json::Value::Object(obj) = json_value {
+            for (key, value) in obj {
+                merged_map.insert(key, value);
             }
         } else {
             return Err("Each JSON file must contain a JSON object".into());
         }
     }
 
-    Ok(serde_json::to_value(merged)?)
+    Ok(serde_json::Value::Object(
+        merged_map.into_iter().collect()
+    ))
 }
 
 #[cfg(test)]
@@ -39,15 +40,40 @@ mod tests {
         let mut file1 = NamedTempFile::new().unwrap();
         let mut file2 = NamedTempFile::new().unwrap();
 
-        writeln!(file1, r#"{"a": 1, "b": "test"}"#).unwrap();
-        writeln!(file2, r#"{"c": true, "d": [1,2,3]}"#).unwrap();
+        writeln!(file1, r#"{{ "name": "Alice", "age": 30 }}"#).unwrap();
+        writeln!(file2, r#"{{ "city": "London", "active": true }}"#).unwrap();
 
-        let result = merge_json_files(&[file1.path(), file2.path()]).unwrap();
-        let obj = result.as_object().unwrap();
+        let paths = [
+            file1.path().to_str().unwrap(),
+            file2.path().to_str().unwrap(),
+        ];
 
-        assert_eq!(obj.get("a").unwrap().as_i64(), Some(1));
-        assert_eq!(obj.get("b").unwrap().as_str(), Some("test"));
-        assert_eq!(obj.get("c").unwrap().as_bool(), Some(true));
-        assert!(obj.get("d").unwrap().is_array());
+        let result = merge_json_files(&paths).unwrap();
+        let result_obj = result.as_object().unwrap();
+
+        assert_eq!(result_obj.get("name").unwrap(), "Alice");
+        assert_eq!(result_obj.get("age").unwrap(), 30);
+        assert_eq!(result_obj.get("city").unwrap(), "London");
+        assert_eq!(result_obj.get("active").unwrap(), true);
+    }
+
+    #[test]
+    fn test_merge_with_duplicate_keys() {
+        let mut file1 = NamedTempFile::new().unwrap();
+        let mut file2 = NamedTempFile::new().unwrap();
+
+        writeln!(file1, r#"{{ "id": 1, "value": "first" }}"#).unwrap();
+        writeln!(file2, r#"{{ "id": 2, "value": "second" }}"#).unwrap();
+
+        let paths = [
+            file1.path().to_str().unwrap(),
+            file2.path().to_str().unwrap(),
+        ];
+
+        let result = merge_json_files(&paths).unwrap();
+        let result_obj = result.as_object().unwrap();
+
+        assert_eq!(result_obj.get("id").unwrap(), 2);
+        assert_eq!(result_obj.get("value").unwrap(), "second");
     }
 }

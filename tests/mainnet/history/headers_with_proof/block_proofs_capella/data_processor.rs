@@ -549,4 +549,104 @@ impl DataProcessor {
     pub fn record_count(&self) -> usize {
         self.records.len()
     }
+}use std::collections::HashMap;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
+}
+
+impl DataRecord {
+    pub fn new(id: u32, values: Vec<f64>) -> Self {
+        Self {
+            id,
+            values,
+            metadata: HashMap::new(),
+        }
+    }
+
+    pub fn is_valid(&self) -> bool {
+        !self.values.is_empty() && self.id > 0
+    }
+
+    pub fn calculate_mean(&self) -> Option<f64> {
+        if self.values.is_empty() {
+            return None;
+        }
+        let sum: f64 = self.values.iter().sum();
+        Some(sum / self.values.len() as f64)
+    }
+
+    pub fn add_metadata(&mut self, key: String, value: String) {
+        self.metadata.insert(key, value);
+    }
+}
+
+pub fn normalize_values(values: &[f64]) -> Vec<f64> {
+    if values.is_empty() {
+        return Vec::new();
+    }
+    
+    let min = values.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+    let max = values.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+    
+    if (max - min).abs() < f64::EPSILON {
+        return vec![0.0; values.len()];
+    }
+    
+    values.iter()
+        .map(|&v| (v - min) / (max - min))
+        .collect()
+}
+
+pub fn process_records(records: Vec<DataRecord>) -> Vec<DataRecord> {
+    records.into_iter()
+        .filter(|r| r.is_valid())
+        .map(|mut r| {
+            if let Some(mean) = r.calculate_mean() {
+                r.add_metadata("mean_value".to_string(), format!("{:.4}", mean));
+            }
+            r
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_data_record_validation() {
+        let valid_record = DataRecord::new(1, vec![1.0, 2.0, 3.0]);
+        assert!(valid_record.is_valid());
+
+        let invalid_record = DataRecord::new(0, vec![]);
+        assert!(!invalid_record.is_valid());
+    }
+
+    #[test]
+    fn test_normalize_values() {
+        let values = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let normalized = normalize_values(&values);
+        
+        assert_eq!(normalized.len(), 5);
+        assert!((normalized[0] - 0.0).abs() < 0.001);
+        assert!((normalized[4] - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_process_records() {
+        let records = vec![
+            DataRecord::new(1, vec![1.0, 2.0, 3.0]),
+            DataRecord::new(2, vec![]),
+            DataRecord::new(3, vec![4.0, 5.0]),
+        ];
+
+        let processed = process_records(records);
+        assert_eq!(processed.len(), 2);
+        assert_eq!(processed[0].id, 1);
+        assert_eq!(processed[1].id, 3);
+    }
 }

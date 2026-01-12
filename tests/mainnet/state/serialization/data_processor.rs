@@ -1,118 +1,61 @@
 
-use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 
 #[derive(Debug, Clone)]
-pub struct DataRecord {
-    pub id: u32,
-    pub name: String,
-    pub value: f64,
-    pub category: String,
+pub struct ValidationError {
+    message: String,
 }
 
-#[derive(Debug)]
-pub enum DataError {
-    InvalidId,
-    InvalidValue,
-    EmptyName,
-    UnknownCategory,
-}
-
-impl fmt::Display for DataError {
+impl fmt::Display for ValidationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            DataError::InvalidId => write!(f, "ID must be greater than 0"),
-            DataError::InvalidValue => write!(f, "Value must be between 0.0 and 1000.0"),
-            DataError::EmptyName => write!(f, "Name cannot be empty"),
-            DataError::UnknownCategory => write!(f, "Category not recognized"),
-        }
+        write!(f, "Validation error: {}", self.message)
     }
 }
 
-impl Error for DataError {}
+impl Error for ValidationError {}
 
 pub struct DataProcessor {
-    records: HashMap<u32, DataRecord>,
-    valid_categories: Vec<String>,
+    threshold: f64,
 }
 
 impl DataProcessor {
-    pub fn new(valid_categories: Vec<String>) -> Self {
-        DataProcessor {
-            records: HashMap::new(),
-            valid_categories,
+    pub fn new(threshold: f64) -> Result<Self, ValidationError> {
+        if threshold < 0.0 || threshold > 1.0 {
+            return Err(ValidationError {
+                message: format!("Threshold {} must be between 0.0 and 1.0", threshold),
+            });
         }
+        Ok(Self { threshold })
     }
 
-    pub fn add_record(&mut self, record: DataRecord) -> Result<(), DataError> {
-        self.validate_record(&record)?;
-        self.records.insert(record.id, record);
-        Ok(())
-    }
-
-    pub fn get_record(&self, id: u32) -> Option<&DataRecord> {
-        self.records.get(&id)
-    }
-
-    pub fn remove_record(&mut self, id: u32) -> Option<DataRecord> {
-        self.records.remove(&id)
-    }
-
-    pub fn calculate_average(&self) -> f64 {
-        if self.records.is_empty() {
-            return 0.0;
-        }
-        
-        let sum: f64 = self.records.values().map(|r| r.value).sum();
-        sum / self.records.len() as f64
-    }
-
-    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
-        self.records
-            .values()
-            .filter(|record| record.category == category)
+    pub fn process_values(&self, values: &[f64]) -> Vec<f64> {
+        values
+            .iter()
+            .filter(|&&v| v >= self.threshold)
+            .map(|&v| v * 2.0)
             .collect()
     }
 
-    pub fn transform_values<F>(&mut self, transform_fn: F) 
-    where
-        F: Fn(f64) -> f64,
-    {
-        for record in self.records.values_mut() {
-            record.value = transform_fn(record.value);
+    pub fn calculate_statistics(&self, values: &[f64]) -> (f64, f64, f64) {
+        let count = values.len() as f64;
+        if count == 0.0 {
+            return (0.0, 0.0, 0.0);
         }
-    }
 
-    fn validate_record(&self, record: &DataRecord) -> Result<(), DataError> {
-        if record.id == 0 {
-            return Err(DataError::InvalidId);
-        }
-        
-        if record.name.trim().is_empty() {
-            return Err(DataError::EmptyName);
-        }
-        
-        if record.value < 0.0 || record.value > 1000.0 {
-            return Err(DataError::InvalidValue);
-        }
-        
-        if !self.valid_categories.contains(&record.category) {
-            return Err(DataError::UnknownCategory);
-        }
-        
-        Ok(())
-    }
-}
+        let sum: f64 = values.iter().sum();
+        let mean = sum / count;
 
-pub fn create_sample_processor() -> DataProcessor {
-    let categories = vec![
-        "analytics".to_string(),
-        "monitoring".to_string(),
-        "reporting".to_string(),
-    ];
-    
-    DataProcessor::new(categories)
+        let variance: f64 = values
+            .iter()
+            .map(|&v| (v - mean).powi(2))
+            .sum::<f64>()
+            / count;
+
+        let std_dev = variance.sqrt();
+
+        (mean, variance, std_dev)
+    }
 }
 
 #[cfg(test)]
@@ -120,112 +63,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_add_valid_record() {
-        let mut processor = create_sample_processor();
-        let record = DataRecord {
-            id: 1,
-            name: "Test Record".to_string(),
-            value: 100.0,
-            category: "analytics".to_string(),
-        };
-        
-        assert!(processor.add_record(record).is_ok());
-        assert_eq!(processor.records.len(), 1);
+    fn test_valid_processor_creation() {
+        let processor = DataProcessor::new(0.5);
+        assert!(processor.is_ok());
     }
 
     #[test]
-    fn test_add_invalid_record() {
-        let mut processor = create_sample_processor();
-        let record = DataRecord {
-            id: 0,
-            name: "".to_string(),
-            value: -10.0,
-            category: "unknown".to_string(),
-        };
-        
-        assert!(processor.add_record(record).is_err());
+    fn test_invalid_processor_creation() {
+        let processor = DataProcessor::new(1.5);
+        assert!(processor.is_err());
     }
 
     #[test]
-    fn test_calculate_average() {
-        let mut processor = create_sample_processor();
-        
-        let records = vec![
-            DataRecord {
-                id: 1,
-                name: "Record 1".to_string(),
-                value: 50.0,
-                category: "analytics".to_string(),
-            },
-            DataRecord {
-                id: 2,
-                name: "Record 2".to_string(),
-                value: 100.0,
-                category: "monitoring".to_string(),
-            },
-            DataRecord {
-                id: 3,
-                name: "Record 3".to_string(),
-                value: 150.0,
-                category: "reporting".to_string(),
-            },
-        ];
-        
-        for record in records {
-            processor.add_record(record).unwrap();
-        }
-        
-        assert_eq!(processor.calculate_average(), 100.0);
+    fn test_process_values() {
+        let processor = DataProcessor::new(0.3).unwrap();
+        let values = vec![0.1, 0.4, 0.2, 0.5, 0.6];
+        let result = processor.process_values(&values);
+        assert_eq!(result, vec![0.8, 1.0, 1.2]);
     }
 
     #[test]
-    fn test_filter_by_category() {
-        let mut processor = create_sample_processor();
+    fn test_calculate_statistics() {
+        let processor = DataProcessor::new(0.0).unwrap();
+        let values = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let (mean, variance, std_dev) = processor.calculate_statistics(&values);
         
-        let records = vec![
-            DataRecord {
-                id: 1,
-                name: "Analytics 1".to_string(),
-                value: 50.0,
-                category: "analytics".to_string(),
-            },
-            DataRecord {
-                id: 2,
-                name: "Analytics 2".to_string(),
-                value: 75.0,
-                category: "analytics".to_string(),
-            },
-            DataRecord {
-                id: 3,
-                name: "Monitoring 1".to_string(),
-                value: 100.0,
-                category: "monitoring".to_string(),
-            },
-        ];
-        
-        for record in records {
-            processor.add_record(record).unwrap();
-        }
-        
-        let analytics_records = processor.filter_by_category("analytics");
-        assert_eq!(analytics_records.len(), 2);
-    }
-
-    #[test]
-    fn test_transform_values() {
-        let mut processor = create_sample_processor();
-        
-        let record = DataRecord {
-            id: 1,
-            name: "Test Record".to_string(),
-            value: 50.0,
-            category: "analytics".to_string(),
-        };
-        
-        processor.add_record(record).unwrap();
-        processor.transform_values(|x| x * 2.0);
-        
-        let updated_record = processor.get_record(1).unwrap();
-        assert_eq!(updated_record.value, 100.0);
+        assert_eq!(mean, 3.0);
+        assert_eq!(variance, 2.0);
+        assert!((std_dev - 1.4142135623730951).abs() < 1e-10);
     }
 }

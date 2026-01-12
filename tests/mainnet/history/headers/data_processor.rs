@@ -170,4 +170,112 @@ mod tests {
         assert!(average.is_some());
         assert_eq!(average.unwrap(), 20.0);
     }
+}use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    id: u32,
+    value: f64,
+    category: String,
+}
+
+#[derive(Debug)]
+pub enum ProcessingError {
+    InvalidValue,
+    InvalidCategory,
+    TransformationFailed,
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProcessingError::InvalidValue => write!(f, "Value must be positive"),
+            ProcessingError::InvalidCategory => write!(f, "Category cannot be empty"),
+            ProcessingError::TransformationFailed => write!(f, "Data transformation failed"),
+        }
+    }
+}
+
+impl Error for ProcessingError {}
+
+impl DataRecord {
+    pub fn new(id: u32, value: f64, category: &str) -> Result<Self, ProcessingError> {
+        if value <= 0.0 {
+            return Err(ProcessingError::InvalidValue);
+        }
+        if category.trim().is_empty() {
+            return Err(ProcessingError::InvalidCategory);
+        }
+
+        Ok(DataRecord {
+            id,
+            value,
+            category: category.to_string(),
+        })
+    }
+
+    pub fn transform(&self, multiplier: f64) -> Result<f64, ProcessingError> {
+        if multiplier <= 0.0 {
+            return Err(ProcessingError::TransformationFailed);
+        }
+        Ok(self.value * multiplier)
+    }
+
+    pub fn normalize(&self, max_value: f64) -> f64 {
+        if max_value > 0.0 {
+            self.value / max_value
+        } else {
+            0.0
+        }
+    }
+}
+
+pub fn process_records(records: &[DataRecord]) -> Vec<Result<f64, ProcessingError>> {
+    records
+        .iter()
+        .map(|record| record.transform(2.5))
+        .collect()
+}
+
+pub fn calculate_average(records: &[DataRecord]) -> Option<f64> {
+    if records.is_empty() {
+        return None;
+    }
+
+    let sum: f64 = records.iter().map(|r| r.value).sum();
+    Some(sum / records.len() as f64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_record_creation() {
+        let record = DataRecord::new(1, 42.5, "analytics").unwrap();
+        assert_eq!(record.id, 1);
+        assert_eq!(record.value, 42.5);
+        assert_eq!(record.category, "analytics");
+    }
+
+    #[test]
+    fn test_invalid_value() {
+        let result = DataRecord::new(2, -5.0, "test");
+        assert!(matches!(result, Err(ProcessingError::InvalidValue)));
+    }
+
+    #[test]
+    fn test_transformation() {
+        let record = DataRecord::new(3, 10.0, "data").unwrap();
+        let transformed = record.transform(3.0).unwrap();
+        assert_eq!(transformed, 30.0);
+    }
+
+    #[test]
+    fn test_normalize() {
+        let record = DataRecord::new(4, 75.0, "metrics").unwrap();
+        let normalized = record.normalize(100.0);
+        assert_eq!(normalized, 0.75);
+    }
 }

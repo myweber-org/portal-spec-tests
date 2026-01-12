@@ -1,74 +1,60 @@
 
 use std::fs;
 use std::io::{self, Read, Write};
-use base64::{Engine as _, engine::general_purpose};
+use std::path::Path;
 
-const KEY: &[u8] = b"secret-encryption-key-32-bytes-long!";
+const BUFFER_SIZE: usize = 8192;
 
-fn xor_cipher(data: &mut [u8], key: &[u8]) {
-    for (i, byte) in data.iter_mut().enumerate() {
-        *byte ^= key[i % key.len()];
-    }
-}
-
-pub fn encrypt_file(input_path: &str, output_path: &str) -> io::Result<()> {
-    let mut file_content = fs::read(input_path)?;
+pub fn xor_encrypt_file(input_path: &Path, output_path: &Path, key: &[u8]) -> io::Result<()> {
+    let mut input_file = fs::File::open(input_path)?;
+    let mut output_file = fs::File::create(output_path)?;
     
-    xor_cipher(&mut file_content, KEY);
-    let encoded = general_purpose::STANDARD.encode(&file_content);
+    let mut buffer = [0u8; BUFFER_SIZE];
+    let key_len = key.len();
+    let mut key_index = 0;
     
-    fs::write(output_path, encoded)
-}
-
-pub fn decrypt_file(input_path: &str, output_path: &str) -> io::Result<()> {
-    let encoded = fs::read_to_string(input_path)?;
-    let mut decoded = general_purpose::STANDARD.decode(encoded)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-    
-    xor_cipher(&mut decoded, KEY);
-    fs::write(output_path, decoded)
-}
-
-pub fn process_stream<R: Read, W: Write>(mut reader: R, mut writer: W, encrypt: bool) -> io::Result<()> {
-    let mut buffer = Vec::new();
-    reader.read_to_end(&mut buffer)?;
-    
-    if encrypt {
-        xor_cipher(&mut buffer, KEY);
-        let encoded = general_purpose::STANDARD.encode(&buffer);
-        writer.write_all(encoded.as_bytes())?;
-    } else {
-        let decoded = general_purpose::STANDARD.decode(&buffer)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        let mut decrypted = decoded;
-        xor_cipher(&mut decrypted, KEY);
-        writer.write_all(&decrypted)?;
+    loop {
+        let bytes_read = input_file.read(&mut buffer)?;
+        if bytes_read == 0 {
+            break;
+        }
+        
+        for i in 0..bytes_read {
+            buffer[i] ^= key[key_index];
+            key_index = (key_index + 1) % key_len;
+        }
+        
+        output_file.write_all(&buffer[..bytes_read])?;
     }
     
     Ok(())
 }
 
+pub fn xor_decrypt_file(input_path: &Path, output_path: &Path, key: &[u8]) -> io::Result<()> {
+    xor_encrypt_file(input_path, output_path, key)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
     use tempfile::NamedTempFile;
-
+    
     #[test]
     fn test_encryption_decryption() {
-        let original = b"Hello, this is a secret message!";
-        let mut temp_input = NamedTempFile::new().unwrap();
-        let temp_output = NamedTempFile::new().unwrap();
-        let temp_decrypted = NamedTempFile::new().unwrap();
-
-        temp_input.write_all(original).unwrap();
+        let key = b"secret_key";
+        let original_data = b"This is a test message for encryption.";
         
-        encrypt_file(temp_input.path().to_str().unwrap(), 
-                    temp_output.path().to_str().unwrap()).unwrap();
+        let mut input_file = NamedTempFile::new().unwrap();
+        input_file.write_all(original_data).unwrap();
         
-        decrypt_file(temp_output.path().to_str().unwrap(),
-                    temp_decrypted.path().to_str().unwrap()).unwrap();
+        let encrypted_file = NamedTempFile::new().unwrap();
+        let decrypted_file = NamedTempFile::new().unwrap();
         
-        let decrypted_content = fs::read(temp_decrypted.path()).unwrap();
-        assert_eq!(original.as_slice(), decrypted_content);
+        xor_encrypt_file(input_file.path(), encrypted_file.path(), key).unwrap();
+        xor_decrypt_file(encrypted_file.path(), decrypted_file.path(), key).unwrap();
+        
+        let decrypted_data = fs::read(decrypted_file.path()).unwrap();
+        assert_eq!(original_data.to_vec(), decrypted_data);
     }
 }

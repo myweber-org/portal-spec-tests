@@ -496,4 +496,57 @@ mod tests {
         let mean: f64 = normalized.iter().sum::<f64>() / normalized.len() as f64;
         assert!(mean.abs() < 1e-10);
     }
+}use csv::Reader;
+use serde::Deserialize;
+use std::error::Error;
+
+#[derive(Debug, Deserialize)]
+struct Record {
+    id: u32,
+    value: f64,
+    category: String,
+}
+
+pub struct DataProcessor {
+    records: Vec<Record>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_csv(&mut self, path: &str) -> Result<(), Box<dyn Error>> {
+        let mut rdr = Reader::from_path(path)?;
+        for result in rdr.deserialize() {
+            let record: Record = result?;
+            self.records.push(record);
+        }
+        Ok(())
+    }
+
+    pub fn calculate_mean(&self) -> Option<f64> {
+        if self.records.is_empty() {
+            return None;
+        }
+        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        Some(sum / self.records.len() as f64)
+    }
+
+    pub fn filter_by_category(&self, category: &str) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|r| r.category == category)
+            .collect()
+    }
+
+    pub fn max_value(&self) -> Option<f64> {
+        self.records.iter().map(|r| r.value).max_by(|a, b| a.partial_cmp(b).unwrap())
+    }
+
+    pub fn record_count(&self) -> usize {
+        self.records.len()
+    }
 }

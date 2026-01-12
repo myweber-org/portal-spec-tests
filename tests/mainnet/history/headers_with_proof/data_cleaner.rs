@@ -1,69 +1,39 @@
+
 use std::collections::HashSet;
+use std::io::{self, BufRead, Write};
 
-pub struct DataCleaner {
-    records: Vec<String>,
+pub fn clean_data(input: &str) -> String {
+    let lines: Vec<&str> = input.lines().collect();
+    let unique_lines: HashSet<&str> = lines.iter().cloned().collect();
+    let mut sorted_lines: Vec<&str> = unique_lines.into_iter().collect();
+    sorted_lines.sort();
+    sorted_lines.join("\n")
 }
 
-impl DataCleaner {
-    pub fn new() -> Self {
-        DataCleaner {
-            records: Vec::new(),
+fn main() {
+    println!("Enter data to clean (press Ctrl+D when finished):");
+    
+    let stdin = io::stdin();
+    let mut input = String::new();
+    
+    for line in stdin.lock().lines() {
+        match line {
+            Ok(text) => input.push_str(&text),
+            Err(_) => break,
         }
+        input.push('\n');
     }
-
-    pub fn add_record(&mut self, record: String) {
-        self.records.push(record);
-    }
-
-    pub fn clean(&mut self) -> Vec<String> {
-        let mut seen = HashSet::new();
-        let mut cleaned = Vec::new();
-
-        for record in self.records.drain(..) {
-            if seen.insert(record.clone()) {
-                cleaned.push(record);
-            }
-        }
-
-        cleaned
-    }
-
-    pub fn filter_by_prefix(&self, prefix: &str) -> Vec<String> {
-        self.records
-            .iter()
-            .filter(|record| record.starts_with(prefix))
-            .cloned()
-            .collect()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_deduplication() {
-        let mut cleaner = DataCleaner::new();
-        cleaner.add_record("apple".to_string());
-        cleaner.add_record("banana".to_string());
-        cleaner.add_record("apple".to_string());
-        
-        let cleaned = cleaner.clean();
-        assert_eq!(cleaned.len(), 2);
-        assert!(cleaned.contains(&"apple".to_string()));
-        assert!(cleaned.contains(&"banana".to_string()));
-    }
-
-    #[test]
-    fn test_filtering() {
-        let mut cleaner = DataCleaner::new();
-        cleaner.add_record("apple".to_string());
-        cleaner.add_record("apricot".to_string());
-        cleaner.add_record("banana".to_string());
-        
-        let filtered = cleaner.filter_by_prefix("ap");
-        assert_eq!(filtered.len(), 2);
-        assert!(filtered.contains(&"apple".to_string()));
-        assert!(filtered.contains(&"apricot".to_string()));
-    }
+    
+    let cleaned = clean_data(&input);
+    
+    println!("\nCleaned data:");
+    println!("{}", cleaned);
+    
+    let mut output_file = std::fs::File::create("cleaned_output.txt")
+        .expect("Failed to create output file");
+    
+    output_file.write_all(cleaned.as_bytes())
+        .expect("Failed to write to output file");
+    
+    println!("Results saved to cleaned_output.txt");
 }

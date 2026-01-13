@@ -248,4 +248,107 @@ mod tests {
 
         assert!(decrypt_result.is_err());
     }
+}use std::fs;
+use std::io::{self, Read, Write};
+use std::path::Path;
+
+pub struct XorCipher {
+    key: Vec<u8>,
+}
+
+impl XorCipher {
+    pub fn new(key: &str) -> Self {
+        XorCipher {
+            key: key.as_bytes().to_vec(),
+        }
+    }
+
+    pub fn encrypt_file(&self, input_path: &Path, output_path: &Path) -> io::Result<()> {
+        self.process_file(input_path, output_path)
+    }
+
+    pub fn decrypt_file(&self, input_path: &Path, output_path: &Path) -> io::Result<()> {
+        self.process_file(input_path, output_path)
+    }
+
+    fn process_file(&self, input_path: &Path, output_path: &Path) -> io::Result<()> {
+        let mut input_file = fs::File::open(input_path)?;
+        let mut buffer = Vec::new();
+        input_file.read_to_end(&mut buffer)?;
+
+        let processed_data: Vec<u8> = buffer
+            .iter()
+            .enumerate()
+            .map(|(i, &byte)| byte ^ self.key[i % self.key.len()])
+            .collect();
+
+        let mut output_file = fs::File::create(output_path)?;
+        output_file.write_all(&processed_data)?;
+
+        Ok(())
+    }
+}
+
+pub fn validate_key(key: &str) -> Result<(), &'static str> {
+    if key.is_empty() {
+        return Err("Encryption key cannot be empty");
+    }
+    if key.len() < 8 {
+        return Err("Encryption key must be at least 8 characters long");
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_xor_cipher_symmetry() {
+        let cipher = XorCipher::new("secure_key_123");
+        let test_data = b"Hello, this is a secret message!";
+        
+        let encrypted: Vec<u8> = test_data
+            .iter()
+            .enumerate()
+            .map(|(i, &byte)| byte ^ cipher.key[i % cipher.key.len()])
+            .collect();
+        
+        let decrypted: Vec<u8> = encrypted
+            .iter()
+            .enumerate()
+            .map(|(i, &byte)| byte ^ cipher.key[i % cipher.key.len()])
+            .collect();
+        
+        assert_eq!(test_data.to_vec(), decrypted);
+    }
+
+    #[test]
+    fn test_file_encryption() -> io::Result<()> {
+        let cipher = XorCipher::new("test_password");
+        
+        let mut input_file = NamedTempFile::new()?;
+        write!(input_file, "Sensitive data that needs protection")?;
+        
+        let output_file = NamedTempFile::new()?;
+        let decrypted_file = NamedTempFile::new()?;
+        
+        cipher.encrypt_file(input_file.path(), output_file.path())?;
+        cipher.decrypt_file(output_file.path(), decrypted_file.path())?;
+        
+        let original_content = fs::read_to_string(input_file.path())?;
+        let decrypted_content = fs::read_to_string(decrypted_file.path())?;
+        
+        assert_eq!(original_content, decrypted_content);
+        Ok(())
+    }
+
+    #[test]
+    fn test_key_validation() {
+        assert!(validate_key("").is_err());
+        assert!(validate_key("short").is_err());
+        assert!(validate_key("valid_long_key").is_ok());
+    }
 }

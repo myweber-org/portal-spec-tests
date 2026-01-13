@@ -1,91 +1,91 @@
-use std::env;
+use serde::{Deserialize, Serialize};
 use std::fs;
-use std::collections::HashMap;
+use std::path::Path;
 
-pub struct Config {
-    values: HashMap<String, String>,
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AppConfig {
+    pub server: ServerConfig,
+    pub database: DatabaseConfig,
+    pub logging: LoggingConfig,
 }
 
-impl Config {
-    pub fn from_file(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
-        let contents = fs::read_to_string(path)?;
-        let mut values = HashMap::new();
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ServerConfig {
+    pub host: String,
+    pub port: u16,
+    pub timeout_seconds: u64,
+}
 
-        for line in contents.lines() {
-            let trimmed = line.trim();
-            if trimmed.is_empty() || trimmed.starts_with('#') {
-                continue;
-            }
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DatabaseConfig {
+    pub url: String,
+    pub max_connections: u32,
+    pub min_connections: u32,
+}
 
-            if let Some((key, value)) = trimmed.split_once('=') {
-                let key = key.trim().to_string();
-                let mut value = value.trim().to_string();
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LoggingConfig {
+    pub level: String,
+    pub file_path: String,
+    pub max_file_size_mb: u64,
+}
 
-                if value.starts_with("${") && value.ends_with('}') {
-                    let env_var = &value[2..value.len() - 1];
-                    value = env::var(env_var).unwrap_or_else(|_| value.clone());
-                }
+impl Default for AppConfig {
+    fn default() -> Self {
+        AppConfig {
+            server: ServerConfig {
+                host: "127.0.0.1".to_string(),
+                port: 8080,
+                timeout_seconds: 30,
+            },
+            database: DatabaseConfig {
+                url: "postgresql://localhost:5432/mydb".to_string(),
+                max_connections: 20,
+                min_connections: 5,
+            },
+            logging: LoggingConfig {
+                level: "info".to_string(),
+                file_path: "./logs/app.log".to_string(),
+                max_file_size_mb: 100,
+            },
+        }
+    }
+}
 
-                values.insert(key, value);
+impl AppConfig {
+    pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
+        let content = fs::read_to_string(path)?;
+        let config: AppConfig = toml::from_str(&content)?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    pub fn load_or_default<P: AsRef<Path>>(path: P) -> Self {
+        match Self::load_from_file(path) {
+            Ok(config) => config,
+            Err(e) => {
+                eprintln!("Failed to load config: {}. Using defaults.", e);
+                Self::default()
             }
         }
-
-        Ok(Config { values })
     }
 
-    pub fn get(&self, key: &str) -> Option<&String> {
-        self.values.get(key)
+    pub fn validate(&self) -> Result<(), String> {
+        if self.server.port == 0 {
+            return Err("Server port cannot be 0".to_string());
+        }
+        if self.database.max_connections < self.database.min_connections {
+            return Err("Max connections must be >= min connections".to_string());
+        }
+        if self.logging.max_file_size_mb == 0 {
+            return Err("Max file size must be > 0".to_string());
+        }
+        Ok(())
     }
 
-    pub fn get_or_default(&self, key: &str, default: &str) -> String {
-        self.get(key).map(|s| s.as_str()).unwrap_or(default).to_string()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
-
-    #[test]
-    fn test_basic_parsing() {
-        let mut file = NamedTempFile::new().unwrap();
-        writeln!(file, "HOST=localhost").unwrap();
-        writeln!(file, "PORT=8080").unwrap();
-        writeln!(file, "# This is a comment").unwrap();
-        writeln!(file, "").unwrap();
-        writeln!(file, "TIMEOUT=30").unwrap();
-
-        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
-        assert_eq!(config.get("HOST"), Some(&"localhost".to_string()));
-        assert_eq!(config.get("PORT"), Some(&"8080".to_string()));
-        assert_eq!(config.get("TIMEOUT"), Some(&"30".to_string()));
-        assert_eq!(config.get("MISSING"), None);
-    }
-
-    #[test]
-    fn test_env_variable_substitution() {
-        env::set_var("DB_PASSWORD", "secret123");
-        
-        let mut file = NamedTempFile::new().unwrap();
-        writeln!(file, "DB_HOST=localhost").unwrap();
-        writeln!(file, "DB_PASS=${DB_PASSWORD}").unwrap();
-        writeln!(file, "MISSING_ENV=${NONEXISTENT}").unwrap();
-
-        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
-        assert_eq!(config.get("DB_HOST"), Some(&"localhost".to_string()));
-        assert_eq!(config.get("DB_PASS"), Some(&"secret123".to_string()));
-        assert_eq!(config.get("MISSING_ENV"), Some(&"${NONEXISTENT}".to_string()));
-    }
-
-    #[test]
-    fn test_get_or_default() {
-        let mut file = NamedTempFile::new().unwrap();
-        writeln!(file, "EXISTING=value").unwrap();
-
-        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
-        assert_eq!(config.get_or_default("EXISTING", "default"), "value");
-        assert_eq!(config.get_or_default("MISSING", "default"), "default");
+    pub fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn std::error::Error>> {
+        let toml_string = toml::to_string_pretty(self)?;
+        fs::write(path, toml_string)?;
+        Ok(())
     }
 }

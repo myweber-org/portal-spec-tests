@@ -461,4 +461,52 @@ impl AppConfig {
     pub fn to_toml(&self) -> Result<String, toml::ser::Error> {
         toml::to_string_pretty(self)
     }
+}use std::fs;
+use toml::Value;
+
+pub struct Config {
+    pub database_url: String,
+    pub port: u16,
+    pub debug_mode: bool,
+}
+
+impl Config {
+    pub fn from_file(path: &str) -> Result<Self, String> {
+        let content = fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read config file: {}", e))?;
+        
+        let parsed: Value = content.parse()
+            .map_err(|e| format!("Failed to parse TOML: {}", e))?;
+        
+        let database_url = parsed["database"]["url"]
+            .as_str()
+            .ok_or("Missing or invalid database.url")?
+            .to_string();
+        
+        let port = parsed["server"]["port"]
+            .as_integer()
+            .ok_or("Missing or invalid server.port")? as u16;
+        
+        let debug_mode = parsed["debug"]
+            .as_bool()
+            .unwrap_or(false);
+        
+        Ok(Config {
+            database_url,
+            port,
+            debug_mode,
+        })
+    }
+    
+    pub fn validate(&self) -> Result<(), String> {
+        if self.port == 0 {
+            return Err("Port cannot be 0".to_string());
+        }
+        
+        if self.database_url.is_empty() {
+            return Err("Database URL cannot be empty".to_string());
+        }
+        
+        Ok(())
+    }
 }

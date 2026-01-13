@@ -574,4 +574,99 @@ mod tests {
         assert!(!config.is_feature_enabled("experimental"));
         assert!(!config.is_feature_enabled("nonexistent"));
     }
+}use std::env;
+use std::fs;
+
+#[derive(Debug)]
+pub struct Config {
+    pub database_url: String,
+    pub api_key: String,
+    pub debug_mode: bool,
+    pub port: u16,
+}
+
+impl Config {
+    pub fn from_file(path: &str) -> Result<Self, String> {
+        let contents = fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read config file: {}", e))?;
+
+        let mut config = Config {
+            database_url: String::new(),
+            api_key: String::new(),
+            debug_mode: false,
+            port: 8080,
+        };
+
+        for line in contents.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+
+            if let Some((key, value)) = trimmed.split_once('=') {
+                let key = key.trim();
+                let value = value.trim();
+
+                match key {
+                    "DATABASE_URL" => config.database_url = Self::get_value(key, value),
+                    "API_KEY" => config.api_key = Self::get_value(key, value),
+                    "DEBUG_MODE" => config.debug_mode = Self::parse_bool(value),
+                    "PORT" => config.port = Self::parse_port(value),
+                    _ => eprintln!("Warning: Unknown config key '{}'", key),
+                }
+            }
+        }
+
+        Ok(config)
+    }
+
+    fn get_value(key: &str, value: &str) -> String {
+        if value.starts_with("env:") {
+            let env_var = &value[4..];
+            env::var(env_var).unwrap_or_else(|_| {
+                eprintln!("Warning: Environment variable '{}' not found, using default", env_var);
+                String::new()
+            })
+        } else {
+            value.to_string()
+        }
+    }
+
+    fn parse_bool(value: &str) -> bool {
+        match value.to_lowercase().as_str() {
+            "true" | "1" | "yes" | "on" => true,
+            _ => false,
+        }
+    }
+
+    fn parse_port(value: &str) -> u16 {
+        value.parse().unwrap_or_else(|_| {
+            eprintln!("Warning: Invalid port '{}', using default 8080", value);
+            8080
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_config_parsing() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "DATABASE_URL=postgres://localhost/db").unwrap();
+        writeln!(file, "API_KEY=env:SECRET_API_KEY").unwrap();
+        writeln!(file, "DEBUG_MODE=true").unwrap();
+        writeln!(file, "PORT=3000").unwrap();
+
+        env::set_var("SECRET_API_KEY", "test_key_123");
+
+        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.database_url, "postgres://localhost/db");
+        assert_eq!(config.api_key, "test_key_123");
+        assert_eq!(config.debug_mode, true);
+        assert_eq!(config.port, 3000);
+    }
 }

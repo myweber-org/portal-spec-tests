@@ -181,4 +181,126 @@ mod tests {
         let password = generate_password(10, true, false, false);
         assert!(password.chars().any(|c| c.is_uppercase()));
     }
+}use rand::Rng;
+use std::io;
+
+const DEFAULT_LENGTH: usize = 16;
+const UPPERCASE: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+const LOWERCASE: &str = "abcdefghijklmnopqrstuvwxyz";
+const NUMBERS: &str = "0123456789";
+const SYMBOLS: &str = "!@#$%^&*()_+-=[]{}|;:,.<>?";
+
+struct PasswordConfig {
+    length: usize,
+    use_uppercase: bool,
+    use_lowercase: bool,
+    use_numbers: bool,
+    use_symbols: bool,
+}
+
+impl Default for PasswordConfig {
+    fn default() -> Self {
+        PasswordConfig {
+            length: DEFAULT_LENGTH,
+            use_uppercase: true,
+            use_lowercase: true,
+            use_numbers: true,
+            use_symbols: true,
+        }
+    }
+}
+
+fn generate_password(config: &PasswordConfig) -> String {
+    let mut character_pool = String::new();
+    
+    if config.use_uppercase {
+        character_pool.push_str(UPPERCASE);
+    }
+    if config.use_lowercase {
+        character_pool.push_str(LOWERCASE);
+    }
+    if config.use_numbers {
+        character_pool.push_str(NUMBERS);
+    }
+    if config.use_symbols {
+        character_pool.push_str(SYMBOLS);
+    }
+    
+    if character_pool.is_empty() {
+        return String::from("Error: No character sets selected");
+    }
+    
+    let mut rng = rand::thread_rng();
+    let password: String = (0..config.length)
+        .map(|_| {
+            let idx = rng.gen_range(0..character_pool.len());
+            character_pool.chars().nth(idx).unwrap()
+        })
+        .collect();
+    
+    password
+}
+
+fn get_user_input(prompt: &str) -> String {
+    println!("{}", prompt);
+    let mut input = String::new();
+    io::stdin().read_line(&mut input).expect("Failed to read line");
+    input.trim().to_string()
+}
+
+fn parse_bool_input(input: &str) -> bool {
+    match input.to_lowercase().as_str() {
+        "y" | "yes" | "true" | "1" => true,
+        _ => false,
+    }
+}
+
+fn main() {
+    println!("Secure Password Generator");
+    println!("=========================");
+    
+    let mut config = PasswordConfig::default();
+    
+    let length_input = get_user_input(&format!("Password length (default: {}): ", DEFAULT_LENGTH));
+    if !length_input.is_empty() {
+        if let Ok(length) = length_input.parse::<usize>() {
+            if length >= 4 && length <= 128 {
+                config.length = length;
+            } else {
+                println!("Length must be between 4 and 128. Using default.");
+            }
+        }
+    }
+    
+    let uppercase_input = get_user_input("Include uppercase letters? (Y/n): ");
+    if !uppercase_input.is_empty() {
+        config.use_uppercase = parse_bool_input(&uppercase_input);
+    }
+    
+    let lowercase_input = get_user_input("Include lowercase letters? (Y/n): ");
+    if !lowercase_input.is_empty() {
+        config.use_lowercase = parse_bool_input(&lowercase_input);
+    }
+    
+    let numbers_input = get_user_input("Include numbers? (Y/n): ");
+    if !numbers_input.is_empty() {
+        config.use_numbers = parse_bool_input(&numbers_input);
+    }
+    
+    let symbols_input = get_user_input("Include symbols? (Y/n): ");
+    if !symbols_input.is_empty() {
+        config.use_symbols = parse_bool_input(&symbols_input);
+    }
+    
+    let password = generate_password(&config);
+    println!("\nGenerated Password: {}", password);
+    println!("Password Length: {}", password.len());
+    
+    let mut char_types = Vec::new();
+    if config.use_uppercase { char_types.push("Uppercase"); }
+    if config.use_lowercase { char_types.push("Lowercase"); }
+    if config.use_numbers { char_types.push("Numbers"); }
+    if config.use_symbols { char_types.push("Symbols"); }
+    
+    println!("Character sets used: {}", char_types.join(", "));
 }

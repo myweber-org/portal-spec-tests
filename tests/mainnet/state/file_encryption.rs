@@ -1,97 +1,55 @@
-use aes_gcm::{
-    aead::{Aead, KeyInit, OsRng},
-    Aes256Gcm, Key, Nonce,
-};
-use std::error::Error;
 
-pub fn encrypt_data(data: &[u8], key: &[u8; 32]) -> Result<Vec<u8>, Box<dyn Error>> {
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
-    let nonce = Nonce::from_slice(b"unique_nonce_12");
-    let ciphertext = cipher.encrypt(nonce, data)?;
-    Ok(ciphertext)
-}
-
-pub fn decrypt_data(ciphertext: &[u8], key: &[u8; 32]) -> Result<Vec<u8>, Box<dyn Error>> {
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
-    let nonce = Nonce::from_slice(b"unique_nonce_12");
-    let plaintext = cipher.decrypt(nonce, ciphertext)?;
-    Ok(plaintext)
-}
-
-pub fn generate_key() -> [u8; 32] {
-    let mut key = [0u8; 32];
-    OsRng.fill_bytes(&mut key);
-    key
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_encryption_roundtrip() {
-        let key = generate_key();
-        let original_data = b"secret message";
-        
-        let encrypted = encrypt_data(original_data, &key).unwrap();
-        let decrypted = decrypt_data(&encrypted, &key).unwrap();
-        
-        assert_eq!(original_data.to_vec(), decrypted);
-    }
-}
-use aes_gcm::{
-    aead::{Aead, KeyInit, OsRng},
-    Aes256Gcm, Nonce,
-};
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
+use std::path::Path;
 
-const NONCE_SIZE: usize = 12;
-
-pub fn encrypt_file(input_path: &str, output_path: &str) -> io::Result<()> {
-    let key = Aes256Gcm::generate_key(&mut OsRng);
-    let cipher = Aes256Gcm::new(&key);
-    
-    let data = fs::read(input_path)?;
-    let nonce = Nonce::from_slice(&[0u8; NONCE_SIZE]);
-    
-    let ciphertext = cipher
-        .encrypt(nonce, data.as_ref())
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-    
-    let mut output = fs::File::create(output_path)?;
-    output.write_all(&key)?;
-    output.write_all(nonce)?;
-    output.write_all(&ciphertext)?;
-    
-    Ok(())
+pub struct XORCipher {
+    key: Vec<u8>,
 }
 
-pub fn decrypt_file(input_path: &str, output_path: &str) -> io::Result<()> {
-    let encrypted_data = fs::read(input_path)?;
-    
-    if encrypted_data.len() < 32 + NONCE_SIZE {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "File too short to contain valid encrypted data",
-        ));
+impl XORCipher {
+    pub fn new(key: &str) -> Self {
+        XORCipher {
+            key: key.as_bytes().to_vec(),
+        }
     }
-    
-    let (key_bytes, rest) = encrypted_data.split_at(32);
-    let (nonce_bytes, ciphertext) = rest.split_at(NONCE_SIZE);
-    
-    let key = key_bytes.try_into()
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid key length"))?;
-    
-    let cipher = Aes256Gcm::new(&key);
-    let nonce = Nonce::from_slice(nonce_bytes);
-    
-    let plaintext = cipher
-        .decrypt(nonce, ciphertext)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-    
-    fs::write(output_path, plaintext)?;
-    Ok(())
+
+    pub fn encrypt_file(&self, input_path: &Path, output_path: &Path) -> io::Result<()> {
+        self.process_file(input_path, output_path)
+    }
+
+    pub fn decrypt_file(&self, input_path: &Path, output_path: &Path) -> io::Result<()> {
+        self.process_file(input_path, output_path)
+    }
+
+    fn process_file(&self, input_path: &Path, output_path: &Path) -> io::Result<()> {
+        let mut input_file = fs::File::open(input_path)?;
+        let mut output_file = fs::File::create(output_path)?;
+
+        let mut buffer = [0; 4096];
+        let key_len = self.key.len();
+        let mut key_index = 0;
+
+        loop {
+            let bytes_read = input_file.read(&mut buffer)?;
+            if bytes_read == 0 {
+                break;
+            }
+
+            for i in 0..bytes_read {
+                buffer[i] ^= self.key[key_index];
+                key_index = (key_index + 1) % key_len;
+            }
+
+            output_file.write_all(&buffer[..bytes_read])?;
+        }
+
+        Ok(())
+    }
+}
+
+pub fn validate_key(key: &str) -> bool {
+    !key.is_empty() && key.len() <= 256
 }
 
 #[cfg(test)]
@@ -100,25 +58,28 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_encryption_roundtrip() {
-        let original_content = b"Secret data that needs protection";
+    fn test_encryption_decryption() {
+        let cipher = XORCipher::new("secret_key");
+        let test_data = b"Hello, XOR encryption!";
+        
         let input_file = NamedTempFile::new().unwrap();
         let encrypted_file = NamedTempFile::new().unwrap();
         let decrypted_file = NamedTempFile::new().unwrap();
+
+        fs::write(input_file.path(), test_data).unwrap();
         
-        fs::write(input_file.path(), original_content).unwrap();
+        cipher.encrypt_file(input_file.path(), encrypted_file.path()).unwrap();
+        cipher.decrypt_file(encrypted_file.path(), decrypted_file.path()).unwrap();
         
-        encrypt_file(
-            input_file.path().to_str().unwrap(),
-            encrypted_file.path().to_str().unwrap(),
-        ).unwrap();
-        
-        decrypt_file(
-            encrypted_file.path().to_str().unwrap(),
-            decrypted_file.path().to_str().unwrap(),
-        ).unwrap();
-        
-        let decrypted_content = fs::read(decrypted_file.path()).unwrap();
-        assert_eq!(original_content.to_vec(), decrypted_content);
+        let decrypted_data = fs::read(decrypted_file.path()).unwrap();
+        assert_eq!(test_data.to_vec(), decrypted_data);
+    }
+
+    #[test]
+    fn test_key_validation() {
+        assert!(validate_key("valid_key"));
+        assert!(!validate_key(""));
+        assert!(validate_key(&"a".repeat(256)));
+        assert!(!validate_key(&"a".repeat(257)));
     }
 }

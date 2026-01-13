@@ -705,4 +705,126 @@ mod tests {
         assert_eq!(updated.value, 200.0);
         assert_eq!(processor.get_category_average("A"), Some(200.0));
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+pub struct DataSet {
+    values: Vec<f64>,
+}
+
+impl DataSet {
+    pub fn new() -> Self {
+        DataSet { values: Vec::new() }
+    }
+
+    pub fn from_csv<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut values = Vec::new();
+
+        for line in reader.lines() {
+            let line = line?;
+            if let Ok(value) = line.trim().parse::<f64>() {
+                values.push(value);
+            }
+        }
+
+        Ok(DataSet { values })
+    }
+
+    pub fn add_value(&mut self, value: f64) {
+        self.values.push(value);
+    }
+
+    pub fn mean(&self) -> Option<f64> {
+        if self.values.is_empty() {
+            return None;
+        }
+        let sum: f64 = self.values.iter().sum();
+        Some(sum / self.values.len() as f64)
+    }
+
+    pub fn variance(&self) -> Option<f64> {
+        if self.values.len() < 2 {
+            return None;
+        }
+        let mean = self.mean().unwrap();
+        let sum_sq_diff: f64 = self.values.iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum();
+        Some(sum_sq_diff / (self.values.len() - 1) as f64)
+    }
+
+    pub fn standard_deviation(&self) -> Option<f64> {
+        self.variance().map(|v| v.sqrt())
+    }
+
+    pub fn min(&self) -> Option<f64> {
+        self.values.iter().copied().reduce(f64::min)
+    }
+
+    pub fn max(&self) -> Option<f64> {
+        self.values.iter().copied().reduce(f64::max)
+    }
+
+    pub fn count(&self) -> usize {
+        self.values.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_basic_statistics() {
+        let mut dataset = DataSet::new();
+        dataset.add_value(10.0);
+        dataset.add_value(20.0);
+        dataset.add_value(30.0);
+        dataset.add_value(40.0);
+        dataset.add_value(50.0);
+
+        assert_eq!(dataset.mean(), Some(30.0));
+        assert_eq!(dataset.variance(), Some(250.0));
+        assert_eq!(dataset.standard_deviation(), Some(250.0_f64.sqrt()));
+        assert_eq!(dataset.min(), Some(10.0));
+        assert_eq!(dataset.max(), Some(50.0));
+        assert_eq!(dataset.count(), 5);
+    }
+
+    #[test]
+    fn test_empty_dataset() {
+        let dataset = DataSet::new();
+        assert_eq!(dataset.mean(), None);
+        assert_eq!(dataset.variance(), None);
+        assert_eq!(dataset.standard_deviation(), None);
+        assert_eq!(dataset.min(), None);
+        assert_eq!(dataset.max(), None);
+        assert_eq!(dataset.count(), 0);
+    }
+
+    #[test]
+    fn test_csv_import() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "10.5\n20.3\n30.7\n40.1\n50.9").unwrap();
+        
+        let dataset = DataSet::from_csv(temp_file.path()).unwrap();
+        assert_eq!(dataset.count(), 5);
+        assert_eq!(dataset.mean(), Some(30.5));
+    }
+
+    #[test]
+    fn test_csv_with_invalid_data() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "10.5\ninvalid\n30.7\n40.1\n50.9").unwrap();
+        
+        let dataset = DataSet::from_csv(temp_file.path()).unwrap();
+        assert_eq!(dataset.count(), 4);
+        assert_eq!(dataset.mean(), Some(32.8));
+    }
 }

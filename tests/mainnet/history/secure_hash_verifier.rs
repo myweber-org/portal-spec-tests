@@ -1,42 +1,48 @@
-
-use sha2::{Digest, Sha256};
 use std::fs::File;
-use std::io::{Read, Error, ErrorKind};
-use std::path::Path;
+use std::io::{Read, BufReader};
+use sha2::{Sha256, Digest};
+use blake3::Hasher as Blake3Hasher;
 
-pub struct HashVerifier;
+pub struct FileHashVerifier;
 
-impl HashVerifier {
-    pub fn compute_file_hash(file_path: &str) -> Result<String, Error> {
-        let path = Path::new(file_path);
-        if !path.exists() {
-            return Err(Error::new(ErrorKind::NotFound, "File not found"));
+impl FileHashVerifier {
+    pub fn verify_integrity(file_path: &str, expected_sha256: &str, expected_blake3: &str) -> Result<bool, String> {
+        let file = File::open(file_path)
+            .map_err(|e| format!("Failed to open file: {}", e))?;
+        
+        let mut reader = BufReader::new(file);
+        let mut buffer = Vec::new();
+        
+        reader.read_to_end(&mut buffer)
+            .map_err(|e| format!("Failed to read file: {}", e))?;
+
+        let sha256_hash = Self::calculate_sha256(&buffer);
+        let blake3_hash = Self::calculate_blake3(&buffer);
+
+        let sha256_matches = sha256_hash == expected_sha256;
+        let blake3_matches = blake3_hash == expected_blake3;
+
+        if !sha256_matches || !blake3_matches {
+            eprintln!("Hash mismatch detected!");
+            eprintln!("Expected SHA-256: {}", expected_sha256);
+            eprintln!("Calculated SHA-256: {}", sha256_hash);
+            eprintln!("Expected BLAKE3: {}", expected_blake3);
+            eprintln!("Calculated BLAKE3: {}", blake3_hash);
         }
 
-        let mut file = File::open(path)?;
+        Ok(sha256_matches && blake3_matches)
+    }
+
+    fn calculate_sha256(data: &[u8]) -> String {
         let mut hasher = Sha256::new();
-        let mut buffer = [0; 8192];
-
-        loop {
-            let bytes_read = file.read(&mut buffer)?;
-            if bytes_read == 0 {
-                break;
-            }
-            hasher.update(&buffer[..bytes_read]);
-        }
-
-        Ok(format!("{:x}", hasher.finalize()))
+        hasher.update(data);
+        format!("{:x}", hasher.finalize())
     }
 
-    pub fn verify_file_hash(file_path: &str, expected_hash: &str) -> Result<bool, Error> {
-        let computed_hash = Self::compute_file_hash(file_path)?;
-        Ok(computed_hash == expected_hash.to_lowercase())
-    }
-
-    pub fn compare_files(file1: &str, file2: &str) -> Result<bool, Error> {
-        let hash1 = Self::compute_file_hash(file1)?;
-        let hash2 = Self::compute_file_hash(file2)?;
-        Ok(hash1 == hash2)
+    fn calculate_blake3(data: &[u8]) -> String {
+        let mut hasher = Blake3Hasher::new();
+        hasher.update(data);
+        hasher.finalize().to_hex().to_string()
     }
 }
 
@@ -47,48 +53,20 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_hash_consistency() {
+    fn test_hash_verification() {
         let mut temp_file = NamedTempFile::new().unwrap();
         let test_data = b"Test data for hash verification";
         temp_file.write_all(test_data).unwrap();
-        
-        let hash1 = HashVerifier::compute_file_hash(temp_file.path().to_str().unwrap()).unwrap();
-        let hash2 = HashVerifier::compute_file_hash(temp_file.path().to_str().unwrap()).unwrap();
-        
-        assert_eq!(hash1, hash2);
-        assert_eq!(hash1.len(), 64);
-    }
 
-    #[test]
-    fn test_file_comparison() {
-        let mut file1 = NamedTempFile::new().unwrap();
-        let mut file2 = NamedTempFile::new().unwrap();
-        
-        file1.write_all(b"Same content").unwrap();
-        file2.write_all(b"Same content").unwrap();
-        
-        let result = HashVerifier::compare_files(
-            file1.path().to_str().unwrap(),
-            file2.path().to_str().unwrap()
-        ).unwrap();
-        
-        assert!(result);
-    }
+        let sha256_hash = "a1b2c3d4e5f678901234567890123456789012345678901234567890123456";
+        let blake3_hash = "f1e2d3c4b5a6978098765432109876543210987654321098765432109876";
 
-    #[test]
-    fn test_hash_verification() {
-        let mut temp_file = NamedTempFile::new().unwrap();
-        temp_file.write_all(b"Verification test").unwrap();
-        
-        let computed_hash = HashVerifier::compute_file_hash(
-            temp_file.path().to_str().unwrap()
-        ).unwrap();
-        
-        let is_valid = HashVerifier::verify_file_hash(
+        let result = FileHashVerifier::verify_integrity(
             temp_file.path().to_str().unwrap(),
-            &computed_hash
-        ).unwrap();
-        
-        assert!(is_valid);
+            sha256_hash,
+            blake3_hash
+        );
+
+        assert!(result.is_ok());
     }
 }

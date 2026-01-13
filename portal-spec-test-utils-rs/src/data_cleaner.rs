@@ -141,4 +141,58 @@ mod tests {
         let filtered = filter_by_predicate(&data, |&x| x % 2 == 0);
         assert_eq!(filtered, vec![2, 4, 6, 8, 10]);
     }
+}use csv::{ReaderBuilder, WriterBuilder};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+use std::path::Path;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    id: u32,
+    name: String,
+    age: u32,
+    email: String,
+}
+
+fn clean_csv_data(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
+    let input_file = File::open(Path::new(input_path))?;
+    let mut rdr = ReaderBuilder::new()
+        .has_headers(true)
+        .from_reader(input_file);
+
+    let output_file = File::create(Path::new(output_path))?;
+    let mut wtr = WriterBuilder::new()
+        .has_headers(true)
+        .from_writer(output_file);
+
+    for result in rdr.deserialize() {
+        let mut record: Record = result?;
+        
+        record.name = record.name.trim().to_string();
+        record.email = record.email.trim().to_lowercase();
+        
+        if record.age > 120 {
+            eprintln!("Warning: Invalid age {} for record {}", record.age, record.id);
+            record.age = 0;
+        }
+        
+        wtr.serialize(&record)?;
+    }
+
+    wtr.flush()?;
+    println!("Data cleaning completed successfully");
+    Ok(())
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let input_file = "input_data.csv";
+    let output_file = "cleaned_data.csv";
+    
+    match clean_csv_data(input_file, output_file) {
+        Ok(_) => println!("Processing finished"),
+        Err(e) => eprintln!("Error occurred: {}", e),
+    }
+    
+    Ok(())
 }

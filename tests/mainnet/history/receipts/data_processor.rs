@@ -1,98 +1,103 @@
-
 use std::error::Error;
 use std::fs::File;
-use std::io::{BufRead, BufReader};
-use std::path::Path;
+use std::io::{BufReader, BufRead};
+use std::collections::HashMap;
 
 pub struct DataProcessor {
-    delimiter: char,
-    has_header: bool,
+    records: Vec<HashMap<String, String>>,
 }
 
 impl DataProcessor {
-    pub fn new(delimiter: char, has_header: bool) -> Self {
+    pub fn new() -> Self {
         DataProcessor {
-            delimiter,
-            has_header,
+            records: Vec::new(),
         }
     }
 
-    pub fn process_file<P: AsRef<Path>>(&self, file_path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+    pub fn load_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
         let file = File::open(file_path)?;
         let reader = BufReader::new(file);
-        let mut records = Vec::new();
-
-        for (line_number, line) in reader.lines().enumerate() {
-            let line = line?;
-            
-            if line_number == 0 && self.has_header {
-                continue;
-            }
-
-            let fields: Vec<String> = line
-                .split(self.delimiter)
+        let mut lines = reader.lines();
+        
+        if let Some(header_line) = lines.next() {
+            let headers: Vec<String> = header_line?
+                .split(',')
                 .map(|s| s.trim().to_string())
                 .collect();
-
-            if !fields.is_empty() && !fields.iter().all(|f| f.is_empty()) {
-                records.push(fields);
+            
+            for line in lines {
+                let line = line?;
+                let values: Vec<String> = line
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .collect();
+                
+                let mut record = HashMap::new();
+                for (i, header) in headers.iter().enumerate() {
+                    if i < values.len() {
+                        record.insert(header.clone(), values[i].clone());
+                    }
+                }
+                self.records.push(record);
             }
         }
-
-        Ok(records)
-    }
-
-    pub fn validate_records(&self, records: &[Vec<String>]) -> Result<(), String> {
-        if records.is_empty() {
-            return Err("No valid records found".to_string());
-        }
-
-        let expected_len = records[0].len();
-        for (idx, record) in records.iter().enumerate() {
-            if record.len() != expected_len {
-                return Err(format!(
-                    "Record {} has {} fields, expected {}",
-                    idx + 1,
-                    record.len(),
-                    expected_len
-                ));
-            }
-        }
-
+        
         Ok(())
     }
 
-    pub fn calculate_statistics(&self, records: &[Vec<String>], column_index: usize) -> Result<(f64, f64, f64), String> {
-        if records.is_empty() {
-            return Err("No records to process".to_string());
-        }
-
-        if column_index >= records[0].len() {
-            return Err(format!("Column index {} out of bounds", column_index));
-        }
-
-        let mut values = Vec::new();
-        for record in records {
-            if let Ok(value) = record[column_index].parse::<f64>() {
-                values.push(value);
+    pub fn calculate_average(&self, field: &str) -> Option<f64> {
+        let mut sum = 0.0;
+        let mut count = 0;
+        
+        for record in &self.records {
+            if let Some(value_str) = record.get(field) {
+                if let Ok(value) = value_str.parse::<f64>() {
+                    sum += value;
+                    count += 1;
+                }
             }
         }
-
-        if values.is_empty() {
-            return Err("No numeric values found in specified column".to_string());
+        
+        if count > 0 {
+            Some(sum / count as f64)
+        } else {
+            None
         }
+    }
 
-        let sum: f64 = values.iter().sum();
-        let count = values.len() as f64;
-        let mean = sum / count;
+    pub fn count_by_field(&self, field: &str) -> HashMap<String, usize> {
+        let mut counts = HashMap::new();
+        
+        for record in &self.records {
+            if let Some(value) = record.get(field) {
+                *counts.entry(value.clone()).or_insert(0) += 1;
+            }
+        }
+        
+        counts
+    }
 
-        let variance: f64 = values.iter()
-            .map(|v| (v - mean).powi(2))
-            .sum::<f64>() / count;
+    pub fn filter_records<F>(&self, predicate: F) -> Vec<HashMap<String, String>>
+    where
+        F: Fn(&HashMap<String, String>) -> bool,
+    {
+        self.records
+            .iter()
+            .filter(|record| predicate(record))
+            .cloned()
+            .collect()
+    }
 
-        let std_dev = variance.sqrt();
+    pub fn get_record_count(&self) -> usize {
+        self.records.len()
+    }
 
-        Ok((mean, variance, std_dev))
+    pub fn get_field_names(&self) -> Vec<String> {
+        if let Some(first_record) = self.records.first() {
+            first_record.keys().cloned().collect()
+        } else {
+            Vec::new()
+        }
     }
 }
 
@@ -103,43 +108,33 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_process_file_with_header() {
+    fn test_data_processor() {
         let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "name,age,salary").unwrap();
-        writeln!(temp_file, "Alice,30,50000.0").unwrap();
-        writeln!(temp_file, "Bob,25,45000.0").unwrap();
-
-        let processor = DataProcessor::new(',', true);
-        let result = processor.process_file(temp_file.path()).unwrap();
+        writeln!(temp_file, "name,age,score").unwrap();
+        writeln!(temp_file, "Alice,25,85.5").unwrap();
+        writeln!(temp_file, "Bob,30,92.0").unwrap();
+        writeln!(temp_file, "Charlie,25,78.5").unwrap();
         
-        assert_eq!(result.len(), 2);
-        assert_eq!(result[0], vec!["Alice", "30", "50000.0"]);
-    }
-
-    #[test]
-    fn test_validate_records() {
-        let records = vec![
-            vec!["a".to_string(), "b".to_string()],
-            vec!["c".to_string(), "d".to_string()],
-        ];
+        let file_path = temp_file.path().to_str().unwrap();
         
-        let processor = DataProcessor::new(',', false);
-        assert!(processor.validate_records(&records).is_ok());
-    }
-
-    #[test]
-    fn test_calculate_statistics() {
-        let records = vec![
-            vec!["10.0".to_string(), "20.0".to_string()],
-            vec!["20.0".to_string(), "30.0".to_string()],
-            vec!["30.0".to_string(), "40.0".to_string()],
-        ];
+        let mut processor = DataProcessor::new();
+        let result = processor.load_csv(file_path);
+        assert!(result.is_ok());
+        assert_eq!(processor.get_record_count(), 3);
         
-        let processor = DataProcessor::new(',', false);
-        let (mean, variance, std_dev) = processor.calculate_statistics(&records, 0).unwrap();
+        let avg_age = processor.calculate_average("age");
+        assert_eq!(avg_age, Some(26.666666666666668));
         
-        assert_eq!(mean, 20.0);
-        assert_eq!(variance, 66.66666666666667);
-        assert_eq!(std_dev, 8.16496580927726);
+        let age_counts = processor.count_by_field("age");
+        assert_eq!(age_counts.get("25"), Some(&2));
+        assert_eq!(age_counts.get("30"), Some(&1));
+        
+        let filtered = processor.filter_records(|record| {
+            record.get("age") == Some(&"25".to_string())
+        });
+        assert_eq!(filtered.len(), 2);
+        
+        let field_names = processor.get_field_names();
+        assert_eq!(field_names, vec!["name", "age", "score"]);
     }
 }

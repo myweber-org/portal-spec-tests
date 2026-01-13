@@ -255,3 +255,122 @@ mod tests {
         assert_eq!(found.unwrap().id, 1);
     }
 }
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DataRecord {
+    pub id: u32,
+    pub value: f64,
+    pub timestamp: i64,
+}
+
+#[derive(Debug)]
+pub enum ProcessingError {
+    InvalidValue,
+    InvalidTimestamp,
+    ValidationFailed(String),
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProcessingError::InvalidValue => write!(f, "Value is invalid"),
+            ProcessingError::InvalidTimestamp => write!(f, "Timestamp is invalid"),
+            ProcessingError::ValidationFailed(msg) => write!(f, "Validation failed: {}", msg),
+        }
+    }
+}
+
+impl Error for ProcessingError {}
+
+pub fn validate_record(record: &DataRecord) -> Result<(), ProcessingError> {
+    if record.value.is_nan() || record.value.is_infinite() {
+        return Err(ProcessingError::InvalidValue);
+    }
+    
+    if record.timestamp < 0 {
+        return Err(ProcessingError::InvalidTimestamp);
+    }
+    
+    if record.id == 0 {
+        return Err(ProcessingError::ValidationFailed("ID cannot be zero".to_string()));
+    }
+    
+    Ok(())
+}
+
+pub fn transform_record(record: DataRecord, multiplier: f64) -> Result<DataRecord, ProcessingError> {
+    validate_record(&record)?;
+    
+    let transformed_value = record.value * multiplier;
+    if transformed_value.is_nan() || transformed_value.is_infinite() {
+        return Err(ProcessingError::InvalidValue);
+    }
+    
+    Ok(DataRecord {
+        id: record.id,
+        value: transformed_value,
+        timestamp: record.timestamp,
+    })
+}
+
+pub fn process_records(records: Vec<DataRecord>, multiplier: f64) -> Vec<Result<DataRecord, ProcessingError>> {
+    records
+        .into_iter()
+        .map(|record| transform_record(record, multiplier))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_valid_record() {
+        let record = DataRecord {
+            id: 1,
+            value: 42.5,
+            timestamp: 1625097600,
+        };
+        assert!(validate_record(&record).is_ok());
+    }
+
+    #[test]
+    fn test_validate_invalid_value() {
+        let record = DataRecord {
+            id: 1,
+            value: f64::NAN,
+            timestamp: 1625097600,
+        };
+        assert!(matches!(validate_record(&record), Err(ProcessingError::InvalidValue)));
+    }
+
+    #[test]
+    fn test_transform_record() {
+        let record = DataRecord {
+            id: 1,
+            value: 10.0,
+            timestamp: 1625097600,
+        };
+        let result = transform_record(record, 2.5);
+        assert!(result.is_ok());
+        let transformed = result.unwrap();
+        assert_eq!(transformed.value, 25.0);
+    }
+
+    #[test]
+    fn test_process_multiple_records() {
+        let records = vec![
+            DataRecord { id: 1, value: 10.0, timestamp: 1000 },
+            DataRecord { id: 2, value: 20.0, timestamp: 2000 },
+            DataRecord { id: 3, value: f64::INFINITY, timestamp: 3000 },
+        ];
+        
+        let results = process_records(records, 2.0);
+        assert_eq!(results.len(), 3);
+        assert!(results[0].is_ok());
+        assert!(results[1].is_ok());
+        assert!(results[2].is_err());
+    }
+}

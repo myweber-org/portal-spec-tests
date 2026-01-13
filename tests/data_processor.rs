@@ -650,3 +650,119 @@ mod tests {
         assert_eq!(std_dev, 8.16496580927726);
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+pub struct DataProcessor {
+    file_path: String,
+    delimiter: char,
+}
+
+impl DataProcessor {
+    pub fn new(file_path: &str, delimiter: char) -> Self {
+        DataProcessor {
+            file_path: file_path.to_string(),
+            delimiter,
+        }
+    }
+
+    pub fn process(&self) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let path = Path::new(&self.file_path);
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        
+        let mut records = Vec::new();
+        
+        for line in reader.lines() {
+            let line = line?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            
+            let fields: Vec<String> = line
+                .split(self.delimiter)
+                .map(|s| s.trim().to_string())
+                .collect();
+                
+            if self.validate_record(&fields) {
+                records.push(fields);
+            }
+        }
+        
+        Ok(records)
+    }
+    
+    fn validate_record(&self, fields: &[String]) -> bool {
+        !fields.is_empty() && fields.iter().all(|f| !f.is_empty())
+    }
+    
+    pub fn count_records(&self) -> Result<usize, Box<dyn Error>> {
+        let records = self.process()?;
+        Ok(records.len())
+    }
+    
+    pub fn get_column(&self, column_index: usize) -> Result<Vec<String>, Box<dyn Error>> {
+        let records = self.process()?;
+        let mut column_data = Vec::new();
+        
+        for record in records {
+            if column_index < record.len() {
+                column_data.push(record[column_index].clone());
+            }
+        }
+        
+        Ok(column_data)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+    
+    #[test]
+    fn test_data_processor() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,city").unwrap();
+        writeln!(temp_file, "Alice,30,New York").unwrap();
+        writeln!(temp_file, "Bob,25,London").unwrap();
+        writeln!(temp_file, "Charlie,35,Paris").unwrap();
+        
+        let processor = DataProcessor::new(temp_file.path().to_str().unwrap(), ',');
+        let records = processor.process().unwrap();
+        
+        assert_eq!(records.len(), 3);
+        assert_eq!(records[0][0], "Alice");
+        assert_eq!(records[1][1], "25");
+        assert_eq!(records[2][2], "Paris");
+    }
+    
+    #[test]
+    fn test_count_records() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "a,b,c").unwrap();
+        writeln!(temp_file, "1,2,3").unwrap();
+        writeln!(temp_file, "4,5,6").unwrap();
+        
+        let processor = DataProcessor::new(temp_file.path().to_str().unwrap(), ',');
+        let count = processor.count_records().unwrap();
+        
+        assert_eq!(count, 2);
+    }
+    
+    #[test]
+    fn test_get_column() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "x;y;z").unwrap();
+        writeln!(temp_file, "10;20;30").unwrap();
+        writeln!(temp_file, "40;50;60").unwrap();
+        
+        let processor = DataProcessor::new(temp_file.path().to_str().unwrap(), ';');
+        let column = processor.get_column(1).unwrap();
+        
+        assert_eq!(column, vec!["20", "50"]);
+    }
+}

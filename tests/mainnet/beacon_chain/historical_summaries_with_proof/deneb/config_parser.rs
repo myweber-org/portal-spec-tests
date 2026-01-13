@@ -1,88 +1,88 @@
+use serde::{Deserialize, Serialize};
 use std::fs;
-use std::collections::HashMap;
+use std::path::Path;
 
-#[derive(Debug, Clone)]
-pub struct Config {
-    pub settings: HashMap<String, String>,
-    pub numeric_values: HashMap<String, f64>,
-    pub enabled_features: Vec<String>,
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AppConfig {
+    pub server: ServerConfig,
+    pub database: DatabaseConfig,
+    pub logging: LoggingConfig,
 }
 
-impl Config {
-    pub fn new() -> Self {
-        Config {
-            settings: HashMap::new(),
-            numeric_values: HashMap::new(),
-            enabled_features: Vec::new(),
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ServerConfig {
+    pub host: String,
+    pub port: u16,
+    pub timeout_seconds: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DatabaseConfig {
+    pub url: String,
+    pub max_connections: u32,
+    pub min_connections: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LoggingConfig {
+    pub level: String,
+    pub file_path: Option<String>,
+    pub enable_console: bool,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        AppConfig {
+            server: ServerConfig {
+                host: "127.0.0.1".to_string(),
+                port: 8080,
+                timeout_seconds: 30,
+            },
+            database: DatabaseConfig {
+                url: "postgresql://localhost:5432/mydb".to_string(),
+                max_connections: 10,
+                min_connections: 2,
+            },
+            logging: LoggingConfig {
+                level: "info".to_string(),
+                file_path: Some("app.log".to_string()),
+                enable_console: true,
+            },
         }
-    }
-
-    pub fn from_file(path: &str) -> Result<Self, String> {
-        let content = fs::read_to_string(path)
-            .map_err(|e| format!("Failed to read config file: {}", e))?;
-
-        let mut config = Config::new();
-        
-        for line in content.lines() {
-            let trimmed = line.trim();
-            if trimmed.is_empty() || trimmed.starts_with('#') {
-                continue;
-            }
-
-            if let Some((key, value)) = trimmed.split_once('=') {
-                let key = key.trim().to_string();
-                let value = value.trim().to_string();
-
-                if key.ends_with("_enabled") && value == "true" {
-                    let feature_name = key.trim_end_matches("_enabled").to_string();
-                    config.enabled_features.push(feature_name);
-                } else if let Ok(num) = value.parse::<f64>() {
-                    config.numeric_values.insert(key, num);
-                } else {
-                    config.settings.insert(key, value);
-                }
-            }
-        }
-
-        Ok(config)
-    }
-
-    pub fn get_setting(&self, key: &str) -> Option<&String> {
-        self.settings.get(key)
-    }
-
-    pub fn get_numeric(&self, key: &str) -> Option<f64> {
-        self.numeric_values.get(key).copied()
-    }
-
-    pub fn is_feature_enabled(&self, feature: &str) -> bool {
-        self.enabled_features.iter().any(|f| f == feature)
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
+pub fn load_config<P: AsRef<Path>>(path: P) -> Result<AppConfig, Box<dyn std::error::Error>> {
+    let config_str = fs::read_to_string(path)?;
+    let config: AppConfig = toml::from_str(&config_str)?;
+    validate_config(&config)?;
+    Ok(config)
+}
 
-    #[test]
-    fn test_config_parsing() {
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "# Sample configuration").unwrap();
-        writeln!(temp_file, "server_host = localhost").unwrap();
-        writeln!(temp_file, "server_port = 8080").unwrap();
-        writeln!(temp_file, "timeout = 30.5").unwrap();
-        writeln!(temp_file, "logging_enabled = true").unwrap();
-        writeln!(temp_file, "cache_enabled = true").unwrap();
+pub fn save_config<P: AsRef<Path>>(config: &AppConfig, path: P) -> Result<(), Box<dyn std::error::Error>> {
+    let config_str = toml::to_string_pretty(config)?;
+    fs::write(path, config_str)?;
+    Ok(())
+}
 
-        let config = Config::from_file(temp_file.path().to_str().unwrap()).unwrap();
-        
-        assert_eq!(config.get_setting("server_host"), Some(&"localhost".to_string()));
-        assert_eq!(config.get_numeric("server_port"), Some(8080.0));
-        assert_eq!(config.get_numeric("timeout"), Some(30.5));
-        assert!(config.is_feature_enabled("logging"));
-        assert!(config.is_feature_enabled("cache"));
-        assert!(!config.is_feature_enabled("monitoring"));
+fn validate_config(config: &AppConfig) -> Result<(), String> {
+    if config.server.port == 0 {
+        return Err("Server port cannot be 0".to_string());
     }
+    
+    if config.database.max_connections < config.database.min_connections {
+        return Err("Max connections must be greater than or equal to min connections".to_string());
+    }
+    
+    let valid_log_levels = ["error", "warn", "info", "debug", "trace"];
+    if !valid_log_levels.contains(&config.logging.level.as_str()) {
+        return Err(format!("Invalid log level: {}", config.logging.level));
+    }
+    
+    Ok(())
+}
+
+pub fn create_default_config<P: AsRef<Path>>(path: P) -> Result<(), Box<dyn std::error::Error>> {
+    let default_config = AppConfig::default();
+    save_config(&default_config, path)
 }

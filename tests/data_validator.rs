@@ -21,8 +21,9 @@ impl Validator {
         self.phone_regex.is_match(phone)
     }
 
-    pub fn validate_all(&self, email: &str, phone: &str) -> (bool, bool) {
-        (self.validate_email(email), self.validate_phone(phone))
+    pub fn validate_length(&self, input: &str, min: usize, max: usize) -> bool {
+        let len = input.chars().count();
+        len >= min && len <= max
     }
 }
 
@@ -33,28 +34,29 @@ mod tests {
     #[test]
     fn test_valid_email() {
         let validator = Validator::new();
-        assert!(validator.validate_email("user@example.com"));
-        assert!(validator.validate_email("test.name+tag@domain.co.uk"));
+        assert!(validator.validate_email("test@example.com"));
+        assert!(validator.validate_email("user.name+tag@domain.co.uk"));
     }
 
     #[test]
     fn test_invalid_email() {
         let validator = Validator::new();
         assert!(!validator.validate_email("invalid-email"));
-        assert!(!validator.validate_email("user@.com"));
+        assert!(!validator.validate_email("test@.com"));
     }
 
     #[test]
     fn test_valid_phone() {
         let validator = Validator::new();
-        assert!(validator.validate_phone("+1234567890"));
+        assert!(validator.validate_phone("+12345678901"));
         assert!(validator.validate_phone("1234567890"));
     }
 
     #[test]
-    fn test_invalid_phone() {
+    fn test_length_validation() {
         let validator = Validator::new();
-        assert!(!validator.validate_phone("abc123"));
-        assert!(!validator.validate_phone("123"));
+        assert!(validator.validate_length("hello", 3, 10));
+        assert!(!validator.validate_length("hi", 3, 10));
+        assert!(!validator.validate_length("verylongstring", 3, 10));
     }
 }

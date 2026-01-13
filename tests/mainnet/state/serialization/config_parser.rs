@@ -3,64 +3,77 @@ use std::env;
 use std::fs;
 
 pub struct Config {
-    pub settings: HashMap<String, String>,
+    values: HashMap<String, String>,
 }
 
 impl Config {
-    pub fn from_file(path: &str) -> Result<Self, String> {
-        let content = fs::read_to_string(path)
-            .map_err(|e| format!("Failed to read config file: {}", e))?;
+    pub fn from_file(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let content = fs::read_to_string(path)?;
+        let mut values = HashMap::new();
 
-        let mut settings = HashMap::new();
         for line in content.lines() {
             let trimmed = line.trim();
             if trimmed.is_empty() || trimmed.starts_with('#') {
                 continue;
             }
 
-            let parts: Vec<&str> = trimmed.splitn(2, '=').collect();
-            if parts.len() != 2 {
-                return Err(format!("Invalid config line: {}", trimmed));
+            if let Some((key, value)) = trimmed.split_once('=') {
+                let key = key.trim().to_string();
+                let processed_value = Self::process_value(value.trim());
+                values.insert(key, processed_value);
             }
-
-            let key = parts[0].trim().to_string();
-            let raw_value = parts[1].trim().to_string();
-            let value = Self::substitute_env_vars(&raw_value);
-
-            settings.insert(key, value);
         }
 
-        Ok(Config { settings })
+        Ok(Config { values })
     }
 
-    fn substitute_env_vars(value: &str) -> String {
-        let mut result = String::new();
-        let mut chars = value.chars().peekable();
-        
-        while let Some(ch) = chars.next() {
-            if ch == '$' && chars.peek() == Some(&'{') {
-                chars.next(); // Skip '{'
-                let mut var_name = String::new();
-                while let Some(ch) = chars.next() {
-                    if ch == '}' {
-                        break;
-                    }
-                    var_name.push(ch);
-                }
-                
-                match env::var(&var_name) {
-                    Ok(env_value) => result.push_str(&env_value),
-                    Err(_) => result.push_str(&format!("${{{}}}", var_name)),
-                }
-            } else {
-                result.push(ch);
-            }
+    fn process_value(value: &str) -> String {
+        if value.starts_with('$') {
+            let var_name = &value[1..];
+            env::var(var_name).unwrap_or_else(|_| value.to_string())
+        } else {
+            value.to_string()
         }
-        
-        result
     }
 
     pub fn get(&self, key: &str) -> Option<&String> {
-        self.settings.get(key)
+        self.values.get(key)
+    }
+
+    pub fn get_or_default(&self, key: &str, default: &str) -> String {
+        self.values.get(key).map(|s| s.as_str()).unwrap_or(default).to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_basic_parsing() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "DATABASE_URL=postgres://localhost/db").unwrap();
+        writeln!(file, "# This is a comment").unwrap();
+        writeln!(file, "PORT=8080").unwrap();
+
+        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.get("DATABASE_URL").unwrap(), "postgres://localhost/db");
+        assert_eq!(config.get("PORT").unwrap(), "8080");
+        assert_eq!(config.get("MISSING"), None);
+    }
+
+    #[test]
+    fn test_env_substitution() {
+        env::set_var("APP_SECRET", "super-secret-key");
+        
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "SECRET_KEY=$APP_SECRET").unwrap();
+        writeln!(file, "NON_EXISTENT=$UNKNOWN_VAR").unwrap();
+
+        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.get("SECRET_KEY").unwrap(), "super-secret-key");
+        assert_eq!(config.get("NON_EXISTENT").unwrap(), "$UNKNOWN_VAR");
     }
 }

@@ -289,4 +289,118 @@ mod tests {
         let decrypted_data = fs::read(decrypted_file.path()).unwrap();
         assert_eq!(test_data.to_vec(), decrypted_data);
     }
+}use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce,
+};
+use pbkdf2::{
+    password_hash::{PasswordHasher, SaltString},
+    Pbkdf2,
+};
+use std::fs::{self, File};
+use std::io::{Read, Write};
+
+const SALT_LENGTH: usize = 16;
+const NONCE_LENGTH: usize = 12;
+
+pub struct EncryptionResult {
+    pub ciphertext: Vec<u8>,
+    pub salt: [u8; SALT_LENGTH],
+    pub nonce: [u8; NONCE_LENGTH],
+}
+
+pub fn derive_key(password: &str, salt: &[u8]) -> Result<Key<Aes256Gcm>, String> {
+    let salt_string = SaltString::encode_b64(salt).map_err(|e| e.to_string())?;
+    let password_hash = Pbkdf2
+        .hash_password(password.as_bytes(), &salt_string)
+        .map_err(|e| e.to_string())?;
+    
+    let hash_bytes = password_hash.hash.ok_or("Hash generation failed")?.as_bytes();
+    if hash_bytes.len() < 32 {
+        return Err("Derived key too short".to_string());
+    }
+    
+    let key_slice = &hash_bytes[..32];
+    Ok(*Key::<Aes256Gcm>::from_slice(key_slice))
+}
+
+pub fn encrypt_file(
+    input_path: &str,
+    output_path: &str,
+    password: &str,
+) -> Result<EncryptionResult, String> {
+    let mut file = File::open(input_path).map_err(|e| e.to_string())?;
+    let mut plaintext = Vec::new();
+    file.read_to_end(&mut plaintext).map_err(|e| e.to_string())?;
+
+    let mut salt = [0u8; SALT_LENGTH];
+    OsRng.fill_bytes(&mut salt);
+    
+    let mut nonce_bytes = [0u8; NONCE_LENGTH];
+    OsRng.fill_bytes(&mut nonce_bytes);
+    let nonce = Nonce::from_slice(&nonce_bytes);
+
+    let key = derive_key(password, &salt)?;
+    let cipher = Aes256Gcm::new(&key);
+    
+    let ciphertext = cipher
+        .encrypt(nonce, plaintext.as_ref())
+        .map_err(|e| e.to_string())?;
+
+    let mut output_file = File::create(output_path).map_err(|e| e.to_string())?;
+    output_file.write_all(&ciphertext).map_err(|e| e.to_string())?;
+
+    Ok(EncryptionResult {
+        ciphertext,
+        salt,
+        nonce: nonce_bytes,
+    })
+}
+
+pub fn decrypt_file(
+    input_path: &str,
+    output_path: &str,
+    password: &str,
+    salt: &[u8],
+    nonce: &[u8],
+) -> Result<Vec<u8>, String> {
+    if nonce.len() != NONCE_LENGTH {
+        return Err(format!("Nonce must be {} bytes", NONCE_LENGTH));
+    }
+
+    let mut file = File::open(input_path).map_err(|e| e.to_string())?;
+    let mut ciphertext = Vec::new();
+    file.read_to_end(&mut ciphertext).map_err(|e| e.to_string())?;
+
+    let key = derive_key(password, salt)?;
+    let cipher = Aes256Gcm::new(&key);
+    let nonce = Nonce::from_slice(nonce);
+
+    let plaintext = cipher
+        .decrypt(nonce, ciphertext.as_ref())
+        .map_err(|e| e.to_string())?;
+
+    let mut output_file = File::create(output_path).map_err(|e| e.to_string())?;
+    output_file.write_all(&plaintext).map_err(|e| e.to_string())?;
+
+    Ok(plaintext)
+}
+
+pub fn generate_key_file(key_path: &str, password: &str) -> Result<(), String> {
+    let mut salt = [0u8; SALT_LENGTH];
+    OsRng.fill_bytes(&mut salt);
+    
+    let key = derive_key(password, &salt)?;
+    
+    let mut key_data = Vec::new();
+    key_data.extend_from_slice(&salt);
+    key_data.extend_from_slice(key.as_slice());
+    
+    fs::write(key_path, key_data).map_err(|e| e.to_string())?;
+    
+    println!("Key file generated at: {}", key_path);
+    println!("Salt (hex): {}", hex::encode(salt));
+    println!("Store salt securely for decryption");
+    
+    Ok(())
 }

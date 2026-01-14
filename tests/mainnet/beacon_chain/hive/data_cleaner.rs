@@ -118,4 +118,39 @@ mod tests {
         assert!(lines.contains(&"2,Bob,200"));
         assert!(lines.contains(&"3,Charlie,300"));
     }
+}use std::collections::HashSet;
+
+pub fn normalize_and_deduplicate_strings(strings: Vec<String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut result = Vec::new();
+
+    for s in strings {
+        let normalized = s.trim().to_lowercase();
+        if !normalized.is_empty() && seen.insert(normalized.clone()) {
+            result.push(normalized);
+        }
+    }
+
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_normalize_and_deduplicate() {
+        let input = vec![
+            "  Apple  ".to_string(),
+            "apple".to_string(),
+            "BANANA".to_string(),
+            "banana ".to_string(),
+            "".to_string(),
+            "  ".to_string(),
+            "Cherry".to_string(),
+        ];
+
+        let result = normalize_and_deduplicate_strings(input);
+        assert_eq!(result, vec!["apple", "banana", "cherry"]);
+    }
 }

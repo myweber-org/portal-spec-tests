@@ -963,4 +963,106 @@ mod tests {
         let invalid_record = vec!["".to_string(), "value".to_string()];
         assert!(!processor.validate_record(&invalid_record));
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+
+pub struct DataProcessor {
+    file_path: String,
+    delimiter: char,
+}
+
+impl DataProcessor {
+    pub fn new(file_path: &str, delimiter: char) -> Self {
+        DataProcessor {
+            file_path: file_path.to_string(),
+            delimiter,
+        }
+    }
+
+    pub fn filter_by_column_value(&self, column_index: usize, target_value: &str) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let file = File::open(&self.file_path)?;
+        let reader = BufReader::new(file);
+        let mut results = Vec::new();
+
+        for line in reader.lines() {
+            let line = line?;
+            let columns: Vec<String> = line.split(self.delimiter)
+                .map(|s| s.trim().to_string())
+                .collect();
+
+            if column_index < columns.len() && columns[column_index] == target_value {
+                results.push(columns);
+            }
+        }
+
+        Ok(results)
+    }
+
+    pub fn count_rows(&self) -> Result<usize, Box<dyn Error>> {
+        let file = File::open(&self.file_path)?;
+        let reader = BufReader::new(file);
+        Ok(reader.lines().count())
+    }
+
+    pub fn get_column_unique_values(&self, column_index: usize) -> Result<Vec<String>, Box<dyn Error>> {
+        let file = File::open(&self.file_path)?;
+        let reader = BufReader::new(file);
+        let mut unique_values = std::collections::HashSet::new();
+
+        for line in reader.lines() {
+            let line = line?;
+            let columns: Vec<String> = line.split(self.delimiter)
+                .map(|s| s.trim().to_string())
+                .collect();
+
+            if column_index < columns.len() {
+                unique_values.insert(columns[column_index].clone());
+            }
+        }
+
+        Ok(unique_values.into_iter().collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_filter_by_column_value() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,name,age\n1,alice,25\n2,bob,30\n3,alice,28").unwrap();
+        
+        let processor = DataProcessor::new(temp_file.path().to_str().unwrap(), ',');
+        let results = processor.filter_by_column_value(1, "alice").unwrap();
+        
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0][0], "1");
+        assert_eq!(results[1][0], "3");
+    }
+
+    #[test]
+    fn test_count_rows() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "header1,header2\nvalue1,value2\nvalue3,value4").unwrap();
+        
+        let processor = DataProcessor::new(temp_file.path().to_str().unwrap(), ',');
+        assert_eq!(processor.count_rows().unwrap(), 2);
+    }
+
+    #[test]
+    fn test_get_column_unique_values() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "color,size\nred,large\nblue,small\nred,medium").unwrap();
+        
+        let processor = DataProcessor::new(temp_file.path().to_str().unwrap(), ',');
+        let unique_colors = processor.get_column_unique_values(0).unwrap();
+        
+        assert_eq!(unique_colors.len(), 2);
+        assert!(unique_colors.contains(&"red".to_string()));
+        assert!(unique_colors.contains(&"blue".to_string()));
+    }
 }

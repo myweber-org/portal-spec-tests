@@ -1,101 +1,73 @@
 
 use serde_json::{Value, Map};
-use std::collections::HashSet;
+use std::fs;
+use std::path::Path;
 
-pub fn merge_json(base: &mut Value, overlay: &Value, strategy: MergeStrategy) -> Result<(), String> {
-    match (base, overlay) {
-        (Value::Object(base_map), Value::Object(overlay_map)) => {
-            for (key, overlay_val) in overlay_map {
-                if base_map.contains_key(key) {
-                    let base_val = base_map.get_mut(key).unwrap();
-                    match strategy {
-                        MergeStrategy::Overwrite => *base_val = overlay_val.clone(),
-                        MergeStrategy::Recursive => merge_json(base_val, overlay_val, strategy)?,
-                        MergeStrategy::CombineArrays => {
-                            if let (Value::Array(base_arr), Value::Array(overlay_arr)) = (base_val, overlay_val) {
-                                let mut combined = base_arr.clone();
-                                combined.extend(overlay_arr.clone());
-                                *base_val = Value::Array(combined);
-                            } else {
-                                merge_json(base_val, overlay_val, MergeStrategy::Recursive)?;
-                            }
-                        }
-                        MergeStrategy::UniqueArrays => {
-                            if let (Value::Array(base_arr), Value::Array(overlay_arr)) = (base_val, overlay_val) {
-                                let mut set: HashSet<Value> = base_arr.iter().cloned().collect();
-                                set.extend(overlay_arr.iter().cloned());
-                                *base_val = Value::Array(set.into_iter().collect());
-                            } else {
-                                merge_json(base_val, overlay_val, MergeStrategy::Recursive)?;
-                            }
-                        }
-                    }
-                } else {
-                    base_map.insert(key.clone(), overlay_val.clone());
-                }
-            }
-            Ok(())
+pub fn merge_json_files<P: AsRef<Path>>(paths: &[P], output_path: P) -> Result<(), Box<dyn std::error::Error>> {
+    let mut merged = Map::new();
+    
+    for path in paths {
+        let content = fs::read_to_string(path)?;
+        let json: Value = serde_json::from_str(&content)?;
+        
+        if let Value::Object(obj) = json {
+            merge_objects(&mut merged, obj);
         }
-        _ => Err("Both values must be JSON objects".to_string()),
     }
+    
+    let output_value = Value::Object(merged);
+    let output_json = serde_json::to_string_pretty(&output_value)?;
+    fs::write(output_path, output_json)?;
+    
+    Ok(())
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum MergeStrategy {
-    Overwrite,
-    Recursive,
-    CombineArrays,
-    UniqueArrays,
+fn merge_objects(base: &mut Map<String, Value>, new: Map<String, Value>) {
+    for (key, new_value) in new {
+        match base.get_mut(&key) {
+            Some(existing_value) => {
+                if let (Value::Object(mut existing_obj), Value::Object(new_obj)) = (existing_value.clone(), new_value) {
+                    let mut existing_map = match existing_obj {
+                        Value::Object(map) => map,
+                        _ => Map::new(),
+                    };
+                    merge_objects(&mut existing_map, new_obj);
+                    base.insert(key, Value::Object(existing_map));
+                } else if existing_value != &new_value {
+                    base.insert(key.clone() + "_conflict", existing_value.clone());
+                    base.insert(key, new_value);
+                }
+            }
+            None => {
+                base.insert(key, new_value);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::NamedTempFile;
     use serde_json::json;
 
     #[test]
-    fn test_recursive_merge() {
-        let mut base = json!({
-            "a": 1,
-            "b": {
-                "c": 2,
-                "d": 3
-            }
-        });
+    fn test_basic_merge() {
+        let file1 = NamedTempFile::new().unwrap();
+        let file2 = NamedTempFile::new().unwrap();
+        let output = NamedTempFile::new().unwrap();
         
-        let overlay = json!({
-            "b": {
-                "d": 99,
-                "e": 100
-            },
-            "f": 4
-        });
+        fs::write(&file1, r#"{"common": "value1", "unique1": "data1"}"#).unwrap();
+        fs::write(&file2, r#"{"common": "value2", "unique2": "data2"}"#).unwrap();
         
-        merge_json(&mut base, &overlay, MergeStrategy::Recursive).unwrap();
+        merge_json_files(&[file1.path(), file2.path()], output.path()).unwrap();
         
-        assert_eq!(base["a"], 1);
-        assert_eq!(base["b"]["c"], 2);
-        assert_eq!(base["b"]["d"], 99);
-        assert_eq!(base["b"]["e"], 100);
-        assert_eq!(base["f"], 4);
-    }
-    
-    #[test]
-    fn test_array_combination() {
-        let mut base = json!({
-            "items": [1, 2, 3]
-        });
+        let result_content = fs::read_to_string(output.path()).unwrap();
+        let result: Value = serde_json::from_str(&result_content).unwrap();
         
-        let overlay = json!({
-            "items": [3, 4, 5]
-        });
-        
-        merge_json(&mut base, &overlay, MergeStrategy::CombineArrays).unwrap();
-        assert_eq!(base["items"], json!([1, 2, 3, 3, 4, 5]));
-        
-        merge_json(&mut base, &overlay, MergeStrategy::UniqueArrays).unwrap();
-        let mut result = base["items"].as_array().unwrap().clone();
-        result.sort();
-        assert_eq!(result, vec![1, 2, 3, 4, 5]);
+        assert_eq!(result["common"], json!("value2"));
+        assert_eq!(result["unique1"], json!("data1"));
+        assert_eq!(result["unique2"], json!("data2"));
+        assert!(result.get("common_conflict").is_some());
     }
 }

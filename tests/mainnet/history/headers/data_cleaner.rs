@@ -1,149 +1,60 @@
-use std::collections::HashSet;
-use std::hash::Hash;
-
-pub fn deduplicate<T: Eq + Hash + Clone>(items: Vec<T>) -> Vec<T> {
-    let mut seen = HashSet::new();
-    let mut result = Vec::new();
-    
-    for item in items {
-        if seen.insert(item.clone()) {
-            result.push(item);
-        }
-    }
-    
-    result
-}
-
-pub fn normalize_strings(strings: Vec<String>) -> Vec<String> {
-    strings
-        .into_iter()
-        .map(|s| s.trim().to_lowercase())
-        .collect()
-}
-
-pub fn filter_by_length(strings: Vec<String>, min_length: usize) -> Vec<String> {
-    strings
-        .into_iter()
-        .filter(|s| s.len() >= min_length)
-        .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_deduplicate() {
-        let input = vec![1, 2, 2, 3, 1, 4];
-        let result = deduplicate(input);
-        assert_eq!(result, vec![1, 2, 3, 4]);
-    }
-
-    #[test]
-    fn test_normalize_strings() {
-        let input = vec!["  HELLO  ".to_string(), "World".to_string()];
-        let result = normalize_strings(input);
-        assert_eq!(result, vec!["hello".to_string(), "world".to_string()]);
-    }
-
-    #[test]
-    fn test_filter_by_length() {
-        let input = vec!["a".to_string(), "ab".to_string(), "abc".to_string()];
-        let result = filter_by_length(input, 2);
-        assert_eq!(result, vec!["ab".to_string(), "abc".to_string()]);
-    }
-}use csv::{ReaderBuilder, WriterBuilder};
-use serde::{Deserialize, Serialize};
-use std::error::Error;
-use std::fs::File;
-
-#[derive(Debug, Deserialize, Serialize)]
-struct CleanRecord {
-    id: u32,
-    name: String,
-    age: u8,
-    active: bool,
-}
-
-fn clean_csv_data(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
-    let file = File::open(input_path)?;
-    let mut rdr = ReaderBuilder::new()
-        .has_headers(true)
-        .from_reader(file);
-
-    let output_file = File::create(output_path)?;
-    let mut wtr = WriterBuilder::new()
-        .has_headers(true)
-        .from_writer(output_file);
-
-    for result in rdr.deserialize() {
-        let raw_record: CleanRecord = result?;
-        
-        let cleaned_record = CleanRecord {
-            id: raw_record.id,
-            name: raw_record.name.trim().to_string(),
-            age: raw_record.age.clamp(0, 120),
-            active: raw_record.active,
-        };
-
-        wtr.serialize(cleaned_record)?;
-    }
-
-    wtr.flush()?;
-    Ok(())
-}
-
-fn main() -> Result<(), Box<dyn Error>> {
-    let input = "raw_data.csv";
-    let output = "cleaned_data.csv";
-    
-    match clean_csv_data(input, output) {
-        Ok(_) => println!("Data cleaning completed successfully"),
-        Err(e) => eprintln!("Error during data cleaning: {}", e),
-    }
-    
-    Ok(())
-}use std::collections::HashMap;
+use std::collections::HashMap;
 
 pub struct DataCleaner {
-    filters: Vec<Box<dyn Fn(&HashMap<String, String>) -> bool>>,
+    threshold: f64,
 }
 
 impl DataCleaner {
-    pub fn new() -> Self {
-        DataCleaner {
-            filters: Vec::new(),
+    pub fn new(threshold: f64) -> Self {
+        DataCleaner { threshold }
+    }
+
+    pub fn remove_outliers_iqr(&self, data: &[f64]) -> Vec<f64> {
+        if data.len() < 4 {
+            return data.to_vec();
         }
-    }
 
-    pub fn add_filter<F>(&mut self, filter: F)
-    where
-        F: Fn(&HashMap<String, String>) -> bool + 'static,
-    {
-        self.filters.push(Box::new(filter));
-    }
+        let mut sorted_data = data.to_vec();
+        sorted_data.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
-    pub fn clean_data(&self, data: Vec<HashMap<String, String>>) -> Vec<HashMap<String, String>> {
-        data.into_iter()
-            .filter(|entry| self.filters.iter().all(|filter| filter(entry)))
+        let q1_index = (sorted_data.len() as f64 * 0.25).floor() as usize;
+        let q3_index = (sorted_data.len() as f64 * 0.75).floor() as usize;
+
+        let q1 = sorted_data[q1_index];
+        let q3 = sorted_data[q3_index];
+        let iqr = q3 - q1;
+
+        let lower_bound = q1 - self.threshold * iqr;
+        let upper_bound = q3 + self.threshold * iqr;
+
+        data.iter()
+            .filter(|&&x| x >= lower_bound && x <= upper_bound)
+            .copied()
             .collect()
     }
-}
 
-pub fn create_default_cleaner() -> DataCleaner {
-    let mut cleaner = DataCleaner::new();
-    
-    cleaner.add_filter(|entry| {
-        entry.contains_key("id") && !entry.get("id").unwrap().is_empty()
-    });
+    pub fn analyze_dataset(&self, data: &[f64]) -> HashMap<String, f64> {
+        let mut stats = HashMap::new();
+        
+        if data.is_empty() {
+            return stats;
+        }
 
-    cleaner.add_filter(|entry| {
-        entry.get("timestamp")
-            .and_then(|ts| ts.parse::<u64>().ok())
-            .map_or(false, |timestamp| timestamp > 0)
-    });
+        let sum: f64 = data.iter().sum();
+        let mean = sum / data.len() as f64;
+        
+        let variance: f64 = data.iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>() / data.len() as f64;
+        
+        let std_dev = variance.sqrt();
 
-    cleaner
+        stats.insert("mean".to_string(), mean);
+        stats.insert("std_dev".to_string(), std_dev);
+        stats.insert("count".to_string(), data.len() as f64);
+        
+        stats
+    }
 }
 
 #[cfg(test)]
@@ -151,118 +62,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_cleaner_filters_invalid_data() {
-        let cleaner = create_default_cleaner();
+    fn test_outlier_removal() {
+        let cleaner = DataCleaner::new(1.5);
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 100.0];
+        let cleaned = cleaner.remove_outliers_iqr(&data);
         
-        let mut valid_entry = HashMap::new();
-        valid_entry.insert("id".to_string(), "123".to_string());
-        valid_entry.insert("timestamp".to_string(), "1672531200".to_string());
-        
-        let mut invalid_entry = HashMap::new();
-        invalid_entry.insert("id".to_string(), "".to_string());
-        invalid_entry.insert("timestamp".to_string(), "0".to_string());
-        
-        let data = vec![valid_entry.clone(), invalid_entry];
-        let cleaned = cleaner.clean_data(data);
-        
-        assert_eq!(cleaned.len(), 1);
-        assert_eq!(cleaned[0].get("id").unwrap(), "123");
-    }
-}use std::collections::HashMap;
-
-pub struct DataCleaner {
-    filters: Vec<Box<dyn Fn(&str) -> bool>>,
-    transformations: HashMap<String, Box<dyn Fn(String) -> String>>,
-}
-
-impl DataCleaner {
-    pub fn new() -> Self {
-        DataCleaner {
-            filters: Vec::new(),
-            transformations: HashMap::new(),
-        }
-    }
-
-    pub fn add_filter<F>(&mut self, filter: F)
-    where
-        F: Fn(&str) -> bool + 'static,
-    {
-        self.filters.push(Box::new(filter));
-    }
-
-    pub fn add_transformation<N, F>(&mut self, name: N, transform: F)
-    where
-        N: Into<String>,
-        F: Fn(String) -> String + 'static,
-    {
-        self.transformations.insert(name.into(), Box::new(transform));
-    }
-
-    pub fn clean_data(&self, data: &str) -> Option<String> {
-        if !self.filters.iter().all(|f| f(data)) {
-            return None;
-        }
-
-        let mut result = data.to_string();
-        for transform in self.transformations.values() {
-            result = transform(result);
-        }
-
-        Some(result)
-    }
-
-    pub fn batch_clean(&self, dataset: Vec<&str>) -> Vec<String> {
-        dataset
-            .iter()
-            .filter_map(|&item| self.clean_data(item))
-            .collect()
-    }
-}
-
-pub fn create_default_cleaner() -> DataCleaner {
-    let mut cleaner = DataCleaner::new();
-    
-    cleaner.add_filter(|s| !s.trim().is_empty());
-    cleaner.add_filter(|s| s.len() <= 1000);
-    
-    cleaner.add_transformation("trim", |s| s.trim().to_string());
-    cleaner.add_transformation("lowercase", |s| s.to_lowercase());
-    cleaner.add_transformation("remove_extra_spaces", |s| {
-        s.split_whitespace().collect::<Vec<_>>().join(" ")
-    });
-
-    cleaner
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_data_cleaning() {
-        let cleaner = create_default_cleaner();
-        
-        let test_data = "  Hello   WORLD  ";
-        let cleaned = cleaner.clean_data(test_data).unwrap();
-        
-        assert_eq!(cleaned, "hello world");
+        assert_eq!(cleaned.len(), 5);
+        assert!(!cleaned.contains(&100.0));
     }
 
     #[test]
-    fn test_filter_rejection() {
-        let mut cleaner = DataCleaner::new();
-        cleaner.add_filter(|s| s.contains("valid"));
+    fn test_statistics() {
+        let cleaner = DataCleaner::new(1.5);
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let stats = cleaner.analyze_dataset(&data);
         
-        assert!(cleaner.clean_data("valid data").is_some());
-        assert!(cleaner.clean_data("invalid data").is_none());
-    }
-
-    #[test]
-    fn test_batch_processing() {
-        let cleaner = create_default_cleaner();
-        let dataset = vec!["  First  ", "", "  Second  "];
-        
-        let results = cleaner.batch_clean(dataset);
-        assert_eq!(results, vec!["first", "second"]);
+        assert_eq!(stats.get("mean").unwrap(), &3.0);
+        assert_eq!(stats.get("count").unwrap(), &5.0);
     }
 }

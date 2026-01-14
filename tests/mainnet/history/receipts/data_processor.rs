@@ -1,103 +1,103 @@
+
 use std::error::Error;
 use std::fs::File;
-use std::io::{BufReader, BufRead};
-use std::collections::HashMap;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    id: u32,
+    value: f64,
+    category: String,
+    valid: bool,
+}
+
+impl DataRecord {
+    pub fn new(id: u32, value: f64, category: String) -> Self {
+        let valid = value >= 0.0 && !category.is_empty();
+        DataRecord {
+            id,
+            value,
+            category,
+            valid,
+        }
+    }
+
+    pub fn is_valid(&self) -> bool {
+        self.valid
+    }
+
+    pub fn get_value(&self) -> f64 {
+        self.value
+    }
+}
 
 pub struct DataProcessor {
-    records: Vec<HashMap<String, String>>,
+    records: Vec<DataRecord>,
+    total_value: f64,
 }
 
 impl DataProcessor {
     pub fn new() -> Self {
         DataProcessor {
             records: Vec::new(),
+            total_value: 0.0,
         }
     }
 
-    pub fn load_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
-        let file = File::open(file_path)?;
+    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<usize, Box<dyn Error>> {
+        let file = File::open(path)?;
         let reader = BufReader::new(file);
-        let mut lines = reader.lines();
-        
-        if let Some(header_line) = lines.next() {
-            let headers: Vec<String> = header_line?
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .collect();
-            
-            for line in lines {
-                let line = line?;
-                let values: Vec<String> = line
-                    .split(',')
-                    .map(|s| s.trim().to_string())
-                    .collect();
-                
-                let mut record = HashMap::new();
-                for (i, header) in headers.iter().enumerate() {
-                    if i < values.len() {
-                        record.insert(header.clone(), values[i].clone());
-                    }
-                }
-                self.records.push(record);
-            }
-        }
-        
-        Ok(())
-    }
-
-    pub fn calculate_average(&self, field: &str) -> Option<f64> {
-        let mut sum = 0.0;
         let mut count = 0;
-        
-        for record in &self.records {
-            if let Some(value_str) = record.get(field) {
-                if let Ok(value) = value_str.parse::<f64>() {
-                    sum += value;
-                    count += 1;
-                }
+
+        for (line_num, line) in reader.lines().enumerate() {
+            if line_num == 0 {
+                continue;
+            }
+
+            let line = line?;
+            let parts: Vec<&str> = line.split(',').collect();
+            
+            if parts.len() >= 3 {
+                let id = parts[0].parse::<u32>().unwrap_or(0);
+                let value = parts[1].parse::<f64>().unwrap_or(0.0);
+                let category = parts[2].to_string();
+                
+                let record = DataRecord::new(id, value, category);
+                self.add_record(record);
+                count += 1;
             }
         }
-        
-        if count > 0 {
-            Some(sum / count as f64)
-        } else {
-            None
+
+        Ok(count)
+    }
+
+    pub fn add_record(&mut self, record: DataRecord) {
+        if record.is_valid() {
+            self.total_value += record.get_value();
         }
+        self.records.push(record);
     }
 
-    pub fn count_by_field(&self, field: &str) -> HashMap<String, usize> {
-        let mut counts = HashMap::new();
-        
-        for record in &self.records {
-            if let Some(value) = record.get(field) {
-                *counts.entry(value.clone()).or_insert(0) += 1;
-            }
+    pub fn get_valid_records(&self) -> Vec<&DataRecord> {
+        self.records.iter().filter(|r| r.is_valid()).collect()
+    }
+
+    pub fn calculate_average(&self) -> Option<f64> {
+        let valid_records = self.get_valid_records();
+        if valid_records.is_empty() {
+            return None;
         }
         
-        counts
+        let sum: f64 = valid_records.iter().map(|r| r.get_value()).sum();
+        Some(sum / valid_records.len() as f64)
     }
 
-    pub fn filter_records<F>(&self, predicate: F) -> Vec<HashMap<String, String>>
-    where
-        F: Fn(&HashMap<String, String>) -> bool,
-    {
-        self.records
-            .iter()
-            .filter(|record| predicate(record))
-            .cloned()
-            .collect()
-    }
-
-    pub fn get_record_count(&self) -> usize {
-        self.records.len()
-    }
-
-    pub fn get_field_names(&self) -> Vec<String> {
-        if let Some(first_record) = self.records.first() {
-            first_record.keys().cloned().collect()
-        } else {
-            Vec::new()
-        }
+    pub fn get_statistics(&self) -> (usize, usize, Option<f64>) {
+        let total = self.records.len();
+        let valid_count = self.get_valid_records().len();
+        let average = self.calculate_average();
+        (total, valid_count, average)
     }
 }
 
@@ -108,33 +108,42 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
+    fn test_data_record_validation() {
+        let valid_record = DataRecord::new(1, 10.5, "A".to_string());
+        assert!(valid_record.is_valid());
+
+        let invalid_record = DataRecord::new(2, -5.0, "B".to_string());
+        assert!(!invalid_record.is_valid());
+    }
+
+    #[test]
     fn test_data_processor() {
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "name,age,score").unwrap();
-        writeln!(temp_file, "Alice,25,85.5").unwrap();
-        writeln!(temp_file, "Bob,30,92.0").unwrap();
-        writeln!(temp_file, "Charlie,25,78.5").unwrap();
-        
-        let file_path = temp_file.path().to_str().unwrap();
-        
         let mut processor = DataProcessor::new();
-        let result = processor.load_csv(file_path);
-        assert!(result.is_ok());
-        assert_eq!(processor.get_record_count(), 3);
         
-        let avg_age = processor.calculate_average("age");
-        assert_eq!(avg_age, Some(26.666666666666668));
+        processor.add_record(DataRecord::new(1, 10.0, "Category1".to_string()));
+        processor.add_record(DataRecord::new(2, 20.0, "Category2".to_string()));
+        processor.add_record(DataRecord::new(3, -5.0, "Category3".to_string()));
+
+        let stats = processor.get_statistics();
+        assert_eq!(stats.0, 3);
+        assert_eq!(stats.1, 2);
+        assert_eq!(stats.2, Some(15.0));
+    }
+
+    #[test]
+    fn test_csv_loading() -> Result<(), Box<dyn Error>> {
+        let mut temp_file = NamedTempFile::new()?;
+        writeln!(temp_file, "id,value,category")?;
+        writeln!(temp_file, "1,10.5,TypeA")?;
+        writeln!(temp_file, "2,15.3,TypeB")?;
+        writeln!(temp_file, "3,-2.0,TypeC")?;
+
+        let mut processor = DataProcessor::new();
+        let count = processor.load_from_csv(temp_file.path())?;
         
-        let age_counts = processor.count_by_field("age");
-        assert_eq!(age_counts.get("25"), Some(&2));
-        assert_eq!(age_counts.get("30"), Some(&1));
+        assert_eq!(count, 3);
+        assert_eq!(processor.get_valid_records().len(), 2);
         
-        let filtered = processor.filter_records(|record| {
-            record.get("age") == Some(&"25".to_string())
-        });
-        assert_eq!(filtered.len(), 2);
-        
-        let field_names = processor.get_field_names();
-        assert_eq!(field_names, vec!["name", "age", "score"]);
+        Ok(())
     }
 }

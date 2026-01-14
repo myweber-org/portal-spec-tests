@@ -232,3 +232,159 @@ mod tests {
         assert_eq!(original_content.to_vec(), decrypted_content);
     }
 }
+use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce
+};
+use pbkdf2::{pbkdf2_hmac, Params};
+use sha2::Sha256;
+use std::fs;
+use std::io::{self, Write};
+use std::path::Path;
+
+const SALT_LENGTH: usize = 16;
+const NONCE_LENGTH: usize = 12;
+const PBKDF2_ITERATIONS: u32 = 100_000;
+
+pub struct EncryptionResult {
+    pub ciphertext: Vec<u8>,
+    pub salt: [u8; SALT_LENGTH],
+    pub nonce: [u8; NONCE_LENGTH],
+}
+
+pub fn derive_key(password: &str, salt: &[u8]) -> Key<Aes256Gcm> {
+    let mut key = [0u8; 32];
+    let params = Params {
+        rounds: PBKDF2_ITERATIONS,
+        output_length: key.len(),
+    };
+    
+    pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, params.rounds, &mut key);
+    *Key::<Aes256Gcm>::from_slice(&key)
+}
+
+pub fn encrypt_file(password: &str, plaintext: &[u8]) -> io::Result<EncryptionResult> {
+    let mut salt = [0u8; SALT_LENGTH];
+    OsRng.fill_bytes(&mut salt);
+    
+    let mut nonce = [0u8; NONCE_LENGTH];
+    OsRng.fill_bytes(&mut nonce);
+    
+    let key = derive_key(password, &salt);
+    let cipher = Aes256Gcm::new(&key);
+    
+    let ciphertext = cipher
+        .encrypt(Nonce::from_slice(&nonce), plaintext)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    
+    Ok(EncryptionResult {
+        ciphertext,
+        salt,
+        nonce,
+    })
+}
+
+pub fn decrypt_file(password: &str, result: &EncryptionResult) -> io::Result<Vec<u8>> {
+    let key = derive_key(password, &result.salt);
+    let cipher = Aes256Gcm::new(&key);
+    
+    cipher
+        .decrypt(Nonce::from_slice(&result.nonce), result.ciphertext.as_ref())
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+}
+
+pub fn encrypt_file_to_disk(
+    password: &str,
+    input_path: &Path,
+    output_path: &Path,
+) -> io::Result<()> {
+    let plaintext = fs::read(input_path)?;
+    let result = encrypt_file(password, &plaintext)?;
+    
+    let mut output = fs::File::create(output_path)?;
+    output.write_all(&result.salt)?;
+    output.write_all(&result.nonce)?;
+    output.write_all(&result.ciphertext)?;
+    
+    Ok(())
+}
+
+pub fn decrypt_file_from_disk(
+    password: &str,
+    input_path: &Path,
+    output_path: &Path,
+) -> io::Result<()> {
+    let data = fs::read(input_path)?;
+    
+    if data.len() < SALT_LENGTH + NONCE_LENGTH {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "File too short to contain encryption metadata",
+        ));
+    }
+    
+    let salt = &data[0..SALT_LENGTH];
+    let nonce = &data[SALT_LENGTH..SALT_LENGTH + NONCE_LENGTH];
+    let ciphertext = &data[SALT_LENGTH + NONCE_LENGTH..];
+    
+    let result = EncryptionResult {
+        ciphertext: ciphertext.to_vec(),
+        salt: salt.try_into().unwrap(),
+        nonce: nonce.try_into().unwrap(),
+    };
+    
+    let plaintext = decrypt_file(password, &result)?;
+    fs::write(output_path, plaintext)?;
+    
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_encryption_roundtrip() {
+        let password = "secure_password_123";
+        let plaintext = b"Secret data that needs protection";
+        
+        let encrypted = encrypt_file(password, plaintext).unwrap();
+        let decrypted = decrypt_file(password, &encrypted).unwrap();
+        
+        assert_eq!(plaintext.to_vec(), decrypted);
+    }
+
+    #[test]
+    fn test_wrong_password_fails() {
+        let password = "correct_password";
+        let wrong_password = "wrong_password";
+        let plaintext = b"Test data";
+        
+        let encrypted = encrypt_file(password, plaintext).unwrap();
+        let result = decrypt_file(wrong_password, &encrypted);
+        
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_disk_operations() {
+        let password = "test_password";
+        let plaintext = b"File content for disk encryption test";
+        
+        let input_file = NamedTempFile::new().unwrap();
+        let encrypted_file = NamedTempFile::new().unwrap();
+        let decrypted_file = NamedTempFile::new().unwrap();
+        
+        fs::write(input_file.path(), plaintext).unwrap();
+        
+        encrypt_file_to_disk(password, input_file.path(), encrypted_file.path())
+            .unwrap();
+        
+        decrypt_file_from_disk(password, encrypted_file.path(), decrypted_file.path())
+            .unwrap();
+        
+        let decrypted_content = fs::read(decrypted_file.path()).unwrap();
+        assert_eq!(plaintext.to_vec(), decrypted_content);
+    }
+}

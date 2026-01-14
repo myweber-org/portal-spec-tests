@@ -409,3 +409,101 @@ mod tests {
         assert_eq!(config.server.port, parsed_config.server.port);
     }
 }
+use std::collections::HashMap;
+use std::env;
+use regex::Regex;
+
+pub struct ConfigParser {
+    values: HashMap<String, String>,
+}
+
+impl ConfigParser {
+    pub fn new() -> Self {
+        ConfigParser {
+            values: HashMap::new(),
+        }
+    }
+
+    pub fn load_from_str(&mut self, content: &str) -> Result<(), String> {
+        let var_pattern = Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}").unwrap();
+        
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+            
+            if let Some((key, value)) = trimmed.split_once('=') {
+                let processed_value = self.substitute_variables(value.trim(), &var_pattern);
+                self.values.insert(key.trim().to_string(), processed_value);
+            }
+        }
+        
+        Ok(())
+    }
+
+    fn substitute_variables(&self, value: &str, pattern: &Regex) -> String {
+        let mut result = value.to_string();
+        
+        while let Some(captures) = pattern.captures(&result) {
+            if let Some(var_name) = captures.get(1) {
+                let env_value = env::var(var_name.as_str())
+                    .unwrap_or_else(|_| "".to_string());
+                
+                result = result.replacen(&captures[0], &env_value, 1);
+            } else {
+                break;
+            }
+        }
+        
+        result
+    }
+
+    pub fn get(&self, key: &str) -> Option<&String> {
+        self.values.get(key)
+    }
+
+    pub fn get_or_default(&self, key: &str, default: &str) -> String {
+        self.values.get(key)
+            .map(|s| s.as_str())
+            .unwrap_or(default)
+            .to_string()
+    }
+
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.values.contains_key(key)
+    }
+
+    pub fn keys(&self) -> impl Iterator<Item = &String> {
+        self.values.keys()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_basic_parsing() {
+        let mut parser = ConfigParser::new();
+        let config = "server_host=localhost\nserver_port=8080\n";
+        
+        parser.load_from_str(config).unwrap();
+        
+        assert_eq!(parser.get("server_host"), Some(&"localhost".to_string()));
+        assert_eq!(parser.get("server_port"), Some(&"8080".to_string()));
+    }
+
+    #[test]
+    fn test_environment_substitution() {
+        env::set_var("APP_PORT", "3000");
+        
+        let mut parser = ConfigParser::new();
+        let config = "port=${APP_PORT}\nhost=${UNDEFINED_VAR}\n";
+        
+        parser.load_from_str(config).unwrap();
+        
+        assert_eq!(parser.get("port"), Some(&"3000".to_string()));
+        assert_eq!(parser.get("host"), Some(&"".to_string()));
+    }
+}

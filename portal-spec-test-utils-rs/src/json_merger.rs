@@ -186,3 +186,90 @@ pub fn merge_json_files(file_paths: &[&str], output_path: &str) -> Result<(), Bo
     fs::write(output_path, serde_json::to_string_pretty(&output_json)?)?;
     Ok(())
 }
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::{BufReader, Read};
+use std::path::Path;
+
+use serde_json::{Map, Value};
+
+pub fn merge_json_files(file_paths: &[&str]) -> Result<Value, String> {
+    let mut merged_map = Map::new();
+
+    for path_str in file_paths {
+        let path = Path::new(path_str);
+        let file = File::open(path).map_err(|e| format!("Failed to open {}: {}", path_str, e))?;
+        let mut reader = BufReader::new(file);
+        let mut content = String::new();
+        reader.read_to_string(&mut content).map_err(|e| format!("Failed to read {}: {}", path_str, e))?;
+
+        let json_value: Value = serde_json::from_str(&content)
+            .map_err(|e| format!("Failed to parse JSON from {}: {}", path_str, e))?;
+
+        if let Value::Object(map) = json_value {
+            for (key, value) in map {
+                merged_map.insert(key, value);
+            }
+        } else {
+            return Err(format!("JSON root in {} is not an object", path_str));
+        }
+    }
+
+    Ok(Value::Object(merged_map))
+}
+
+pub fn merge_json_with_strategy(
+    file_paths: &[&str],
+    conflict_strategy: fn(&str, &Value, &Value) -> Value,
+) -> Result<Value, String> {
+    let mut accumulator: HashMap<String, Value> = HashMap::new();
+
+    for path_str in file_paths {
+        let path = Path::new(path_str);
+        let file = File::open(path).map_err(|e| format!("Failed to open {}: {}", path_str, e))?;
+        let mut reader = BufReader::new(file);
+        let mut content = String::new();
+        reader.read_to_string(&mut content).map_err(|e| format!("Failed to read {}: {}", path_str, e))?;
+
+        let json_value: Value = serde_json::from_str(&content)
+            .map_err(|e| format!("Failed to parse JSON from {}: {}", path_str, e))?;
+
+        if let Value::Object(map) = json_value {
+            for (key, value) in map {
+                match accumulator.get(&key) {
+                    Some(existing) => {
+                        let resolved = conflict_strategy(&key, existing, &value);
+                        accumulator.insert(key, resolved);
+                    }
+                    None => {
+                        accumulator.insert(key, value);
+                    }
+                }
+            }
+        } else {
+            return Err(format!("JSON root in {} is not an object", path_str));
+        }
+    }
+
+    let final_map: Map<String, Value> = accumulator.into_iter().collect();
+    Ok(Value::Object(final_map))
+}
+
+pub fn default_conflict_strategy(_key: &str, existing: &Value, new: &Value) -> Value {
+    if existing.is_object() && new.is_object() {
+        let mut merged_obj = Map::new();
+        if let Value::Object(existing_map) = existing {
+            for (k, v) in existing_map {
+                merged_obj.insert(k.clone(), v.clone());
+            }
+        }
+        if let Value::Object(new_map) = new {
+            for (k, v) in new_map {
+                merged_obj.insert(k.clone(), v.clone());
+            }
+        }
+        Value::Object(merged_obj)
+    } else {
+        new.clone()
+    }
+}

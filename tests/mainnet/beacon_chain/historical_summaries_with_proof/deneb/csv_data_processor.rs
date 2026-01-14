@@ -386,4 +386,156 @@ mod tests {
         let sum = processor.get_column_sum("salary").unwrap();
         assert!((sum - 155000.0).abs() < 0.001);
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{self, BufRead, BufReader, Write};
+use std::path::Path;
+
+#[derive(Debug, Clone)]
+struct DataRecord {
+    id: u32,
+    name: String,
+    category: String,
+    value: f64,
+    timestamp: String,
+}
+
+impl DataRecord {
+    fn from_csv_line(line: &str) -> Result<Self, Box<dyn Error>> {
+        let parts: Vec<&str> = line.split(',').collect();
+        if parts.len() != 5 {
+            return Err("Invalid CSV format".into());
+        }
+
+        Ok(DataRecord {
+            id: parts[0].parse()?,
+            name: parts[1].to_string(),
+            category: parts[2].to_string(),
+            value: parts[3].parse()?,
+            timestamp: parts[4].to_string(),
+        })
+    }
+
+    fn to_csv_line(&self) -> String {
+        format!("{},{},{},{},{}", self.id, self.name, self.category, self.value, self.timestamp)
+    }
+}
+
+struct DataProcessor {
+    records: Vec<DataRecord>,
+}
+
+impl DataProcessor {
+    fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    fn load_from_file(&mut self, file_path: &Path) -> Result<(), Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+
+        for (index, line) in reader.lines().enumerate() {
+            let line = line?;
+            if index == 0 {
+                continue;
+            }
+
+            let record = DataRecord::from_csv_line(&line)?;
+            self.records.push(record);
+        }
+
+        Ok(())
+    }
+
+    fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
+        self.records
+            .iter()
+            .filter(|record| record.category == category)
+            .collect()
+    }
+
+    fn aggregate_by_category(&self) -> Vec<(String, f64, usize)> {
+        use std::collections::HashMap;
+
+        let mut aggregates: HashMap<String, (f64, usize)> = HashMap::new();
+
+        for record in &self.records {
+            let entry = aggregates.entry(record.category.clone()).or_insert((0.0, 0));
+            entry.0 += record.value;
+            entry.1 += 1;
+        }
+
+        aggregates
+            .into_iter()
+            .map(|(category, (total, count))| (category, total, count))
+            .collect()
+    }
+
+    fn find_max_value(&self) -> Option<&DataRecord> {
+        self.records.iter().max_by(|a, b| a.value.partial_cmp(&b.value).unwrap())
+    }
+
+    fn save_filtered_results(&self, category: &str, output_path: &Path) -> io::Result<()> {
+        let mut file = File::create(output_path)?;
+        writeln!(file, "id,name,category,value,timestamp")?;
+
+        for record in self.filter_by_category(category) {
+            writeln!(file, "{}", record.to_csv_line())?;
+        }
+
+        Ok(())
+    }
+
+    fn generate_summary_report(&self) -> String {
+        let total_records = self.records.len();
+        let aggregates = self.aggregate_by_category();
+        let max_record = self.find_max_value();
+
+        let mut report = String::new();
+        report.push_str(&format!("Total Records: {}\n", total_records));
+        report.push_str("Category Aggregates:\n");
+
+        for (category, total, count) in aggregates {
+            report.push_str(&format!("  {}: {} items, total value: {:.2}\n", category, count, total));
+        }
+
+        if let Some(record) = max_record {
+            report.push_str(&format!("Maximum Value Record: ID {} - {} ({}): {:.2}\n", 
+                record.id, record.name, record.category, record.value));
+        }
+
+        report
+    }
+}
+
+fn process_data_file(input_path: &str, output_category: &str) -> Result<(), Box<dyn Error>> {
+    let path = Path::new(input_path);
+    let mut processor = DataProcessor::new();
+
+    println!("Loading data from: {}", input_path);
+    processor.load_from_file(path)?;
+
+    println!("Generating summary report...");
+    let report = processor.generate_summary_report();
+    println!("{}", report);
+
+    let output_path = format!("filtered_{}.csv", output_category);
+    println!("Saving filtered results for '{}' to: {}", output_category, output_path);
+    
+    processor.save_filtered_results(output_category, Path::new(&output_path))?;
+
+    Ok(())
+}
+
+fn main() {
+    let input_file = "data.csv";
+    
+    if let Err(e) = process_data_file(input_file, "electronics") {
+        eprintln!("Error processing data: {}", e);
+        std::process::exit(1);
+    }
+    
+    println!("Data processing completed successfully!");
 }

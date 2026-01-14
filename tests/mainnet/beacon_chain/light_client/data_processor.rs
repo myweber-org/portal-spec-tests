@@ -304,3 +304,128 @@ mod tests {
         assert!((stats.1 - 20.3).abs() < 0.1);
     }
 }
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct ProcessingError {
+    message: String,
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Processing error: {}", self.message)
+    }
+}
+
+impl Error for ProcessingError {}
+
+impl ProcessingError {
+    pub fn new(msg: &str) -> Self {
+        ProcessingError {
+            message: msg.to_string(),
+        }
+    }
+}
+
+pub struct DataProcessor {
+    threshold: f64,
+}
+
+impl DataProcessor {
+    pub fn new(threshold: f64) -> Result<Self, ProcessingError> {
+        if threshold <= 0.0 {
+            return Err(ProcessingError::new("Threshold must be positive"));
+        }
+        Ok(DataProcessor { threshold })
+    }
+
+    pub fn process_values(&self, values: &[f64]) -> Result<Vec<f64>, ProcessingError> {
+        if values.is_empty() {
+            return Err(ProcessingError::new("Input values cannot be empty"));
+        }
+
+        let filtered: Vec<f64> = values
+            .iter()
+            .filter(|&&v| v >= self.threshold)
+            .cloned()
+            .collect();
+
+        if filtered.is_empty() {
+            return Err(ProcessingError::new("No values above threshold"));
+        }
+
+        let normalized = self.normalize_data(&filtered)?;
+        Ok(normalized)
+    }
+
+    fn normalize_data(&self, values: &[f64]) -> Result<Vec<f64>, ProcessingError> {
+        let max_value = values
+            .iter()
+            .fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+
+        if max_value <= 0.0 {
+            return Err(ProcessingError::new("Cannot normalize with non-positive maximum"));
+        }
+
+        let normalized: Vec<f64> = values
+            .iter()
+            .map(|&v| v / max_value)
+            .collect();
+
+        Ok(normalized)
+    }
+
+    pub fn calculate_statistics(&self, values: &[f64]) -> Result<(f64, f64), ProcessingError> {
+        if values.len() < 2 {
+            return Err(ProcessingError::new("Insufficient data for statistics"));
+        }
+
+        let mean = values.iter().sum::<f64>() / values.len() as f64;
+        let variance = values.iter()
+            .map(|&v| (v - mean).powi(2))
+            .sum::<f64>() / (values.len() - 1) as f64;
+
+        Ok((mean, variance.sqrt()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_processor_creation() {
+        let processor = DataProcessor::new(5.0);
+        assert!(processor.is_ok());
+
+        let invalid_processor = DataProcessor::new(0.0);
+        assert!(invalid_processor.is_err());
+    }
+
+    #[test]
+    fn test_process_values() {
+        let processor = DataProcessor::new(2.0).unwrap();
+        let values = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        
+        let result = processor.process_values(&values);
+        assert!(result.is_ok());
+        
+        let processed = result.unwrap();
+        assert_eq!(processed.len(), 4);
+        assert!(processed.iter().all(|&v| v <= 1.0));
+    }
+
+    #[test]
+    fn test_calculate_statistics() {
+        let processor = DataProcessor::new(1.0).unwrap();
+        let values = vec![2.0, 4.0, 6.0, 8.0];
+        
+        let stats = processor.calculate_statistics(&values);
+        assert!(stats.is_ok());
+        
+        let (mean, std_dev) = stats.unwrap();
+        assert!((mean - 5.0).abs() < 0.001);
+        assert!((std_dev - 2.581).abs() < 0.001);
+    }
+}

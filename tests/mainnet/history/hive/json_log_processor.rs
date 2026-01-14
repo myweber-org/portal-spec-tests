@@ -208,3 +208,193 @@ pub fn print_log_summary(logs: &[Value]) {
         println!("  {}: {}", level, count);
     }
 }
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
+pub struct LogEntry {
+    timestamp: String,
+    level: String,
+    service: String,
+    message: String,
+    metadata: Option<serde_json::Value>,
+}
+
+#[derive(Debug)]
+pub enum LogError {
+    IoError(std::io::Error),
+    ParseError(serde_json::Error),
+    ValidationError(String),
+}
+
+impl From<std::io::Error> for LogError {
+    fn from(err: std::io::Error) -> Self {
+        LogError::IoError(err)
+    }
+}
+
+impl From<serde_json::Error> for LogError {
+    fn from(err: serde_json::Error) -> Self {
+        LogError::ParseError(err)
+    }
+}
+
+impl std::fmt::Display for LogError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LogError::IoError(e) => write!(f, "IO error: {}", e),
+            LogError::ParseError(e) => write!(f, "Parse error: {}", e),
+            LogError::ValidationError(e) => write!(f, "Validation error: {}", e),
+        }
+    }
+}
+
+impl Error for LogError {}
+
+impl LogEntry {
+    pub fn validate(&self) -> Result<(), LogError> {
+        if self.timestamp.is_empty() {
+            return Err(LogError::ValidationError("Timestamp cannot be empty".to_string()));
+        }
+        
+        let valid_levels = ["INFO", "WARN", "ERROR", "DEBUG"];
+        if !valid_levels.contains(&self.level.as_str()) {
+            return Err(LogError::ValidationError(
+                format!("Invalid log level: {}", self.level)
+            ));
+        }
+        
+        if self.service.is_empty() {
+            return Err(LogError::ValidationError("Service name cannot be empty".to_string()));
+        }
+        
+        Ok(())
+    }
+    
+    pub fn is_error(&self) -> bool {
+        self.level == "ERROR"
+    }
+    
+    pub fn service_name(&self) -> &str {
+        &self.service
+    }
+}
+
+pub struct LogProcessor {
+    entries: Vec<LogEntry>,
+    error_count: usize,
+}
+
+impl LogProcessor {
+    pub fn new() -> Self {
+        LogProcessor {
+            entries: Vec::new(),
+            error_count: 0,
+        }
+    }
+    
+    pub fn process_file<P: AsRef<Path>>(&mut self, path: P) -> Result<(), LogError> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        
+        for (line_num, line) in reader.lines().enumerate() {
+            let line = line?;
+            
+            match serde_json::from_str::<LogEntry>(&line) {
+                Ok(mut entry) => {
+                    if let Err(e) = entry.validate() {
+                        eprintln!("Line {} validation failed: {}", line_num + 1, e);
+                        self.error_count += 1;
+                        continue;
+                    }
+                    self.entries.push(entry);
+                }
+                Err(e) => {
+                    eprintln!("Line {} parse failed: {}", line_num + 1, e);
+                    self.error_count += 1;
+                }
+            }
+        }
+        
+        Ok(())
+    }
+    
+    pub fn error_entries(&self) -> Vec<&LogEntry> {
+        self.entries.iter().filter(|e| e.is_error()).collect()
+    }
+    
+    pub fn entries_by_service(&self, service: &str) -> Vec<&LogEntry> {
+        self.entries.iter()
+            .filter(|e| e.service_name() == service)
+            .collect()
+    }
+    
+    pub fn total_processed(&self) -> usize {
+        self.entries.len()
+    }
+    
+    pub fn error_count(&self) -> usize {
+        self.error_count
+    }
+    
+    pub fn export_json<P: AsRef<Path>>(&self, path: P) -> Result<(), LogError> {
+        let file = File::create(path)?;
+        serde_json::to_writer_pretty(file, &self.entries)?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+    
+    #[test]
+    fn test_valid_log_entry() {
+        let json = r#"{
+            "timestamp": "2024-01-15T10:30:00Z",
+            "level": "INFO",
+            "service": "api-gateway",
+            "message": "Request processed successfully",
+            "metadata": {"request_id": "abc123"}
+        }"#;
+        
+        let entry: LogEntry = serde_json::from_str(json).unwrap();
+        assert!(entry.validate().is_ok());
+        assert!(!entry.is_error());
+        assert_eq!(entry.service_name(), "api-gateway");
+    }
+    
+    #[test]
+    fn test_invalid_level() {
+        let json = r#"{
+            "timestamp": "2024-01-15T10:30:00Z",
+            "level": "INVALID",
+            "service": "api-gateway",
+            "message": "Test message"
+        }"#;
+        
+        let entry: LogEntry = serde_json::from_str(json).unwrap();
+        assert!(entry.validate().is_err());
+    }
+    
+    #[test]
+    fn test_process_logs() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        let logs = r#"{"timestamp":"2024-01-15T10:30:00Z","level":"INFO","service":"service-a","message":"Test 1"}
+{"timestamp":"2024-01-15T10:31:00Z","level":"ERROR","service":"service-b","message":"Test 2"}
+{"timestamp":"2024-01-15T10:32:00Z","level":"WARN","service":"service-a","message":"Test 3"}"#;
+        
+        std::fs::write(temp_file.path(), logs).unwrap();
+        
+        let mut processor = LogProcessor::new();
+        processor.process_file(temp_file.path()).unwrap();
+        
+        assert_eq!(processor.total_processed(), 3);
+        assert_eq!(processor.error_entries().len(), 1);
+        assert_eq!(processor.entries_by_service("service-a").len(), 2);
+    }
+}

@@ -384,4 +384,114 @@ mod tests {
         let decrypted_content = fs::read(decrypted_file.path()).unwrap();
         assert_eq!(original_content.to_vec(), decrypted_content);
     }
+}use std::fs;
+use std::io::{self, Read, Write};
+use std::path::Path;
+
+const DEFAULT_KEY: &[u8] = b"secret-encryption-key-2024";
+
+pub struct FileCipher {
+    key: Vec<u8>,
+}
+
+impl FileCipher {
+    pub fn new(key: Option<&[u8]>) -> Self {
+        let key = key.unwrap_or(DEFAULT_KEY).to_vec();
+        FileCipher { key }
+    }
+
+    pub fn encrypt_file(&self, source_path: &Path, dest_path: &Path) -> io::Result<()> {
+        self.process_file(source_path, dest_path, true)
+    }
+
+    pub fn decrypt_file(&self, source_path: &Path, dest_path: &Path) -> io::Result<()> {
+        self.process_file(source_path, dest_path, false)
+    }
+
+    fn process_file(&self, source_path: &Path, dest_path: &Path, is_encrypt: bool) -> io::Result<()> {
+        let mut source_file = fs::File::open(source_path)?;
+        let mut dest_file = fs::File::create(dest_path)?;
+
+        let mut buffer = [0u8; 4096];
+        let mut key_index = 0;
+
+        loop {
+            let bytes_read = source_file.read(&mut buffer)?;
+            if bytes_read == 0 {
+                break;
+            }
+
+            let processed_chunk: Vec<u8> = buffer[..bytes_read]
+                .iter()
+                .map(|&byte| {
+                    let result = byte ^ self.key[key_index];
+                    key_index = (key_index + 1) % self.key.len();
+                    result
+                })
+                .collect();
+
+            dest_file.write_all(&processed_chunk)?;
+        }
+
+        dest_file.flush()?;
+        Ok(())
+    }
+
+    pub fn encrypt_string(&self, text: &str) -> Vec<u8> {
+        let mut result = Vec::with_capacity(text.len());
+        let mut key_index = 0;
+
+        for byte in text.bytes() {
+            result.push(byte ^ self.key[key_index]);
+            key_index = (key_index + 1) % self.key.len();
+        }
+        result
+    }
+
+    pub fn decrypt_bytes(&self, data: &[u8]) -> String {
+        let mut result = String::with_capacity(data.len());
+        let mut key_index = 0;
+
+        for &byte in data {
+            result.push((byte ^ self.key[key_index]) as char);
+            key_index = (key_index + 1) % self.key.len();
+        }
+        result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_string_encryption_decryption() {
+        let cipher = FileCipher::new(Some(b"test-key"));
+        let original = "Hello, World!";
+        let encrypted = cipher.encrypt_string(original);
+        let decrypted = cipher.decrypt_bytes(&encrypted);
+        assert_eq!(original, decrypted);
+    }
+
+    #[test]
+    fn test_file_encryption() -> io::Result<()> {
+        let cipher = FileCipher::new(Some(b"file-test-key"));
+        
+        let mut source_file = NamedTempFile::new()?;
+        let content = b"Test file content for encryption";
+        source_file.write_all(content)?;
+        
+        let encrypted_file = NamedTempFile::new()?;
+        cipher.encrypt_file(source_file.path(), encrypted_file.path())?;
+        
+        let decrypted_file = NamedTempFile::new()?;
+        cipher.decrypt_file(encrypted_file.path(), decrypted_file.path())?;
+        
+        let mut decrypted_content = Vec::new();
+        fs::File::open(decrypted_file.path())?.read_to_end(&mut decrypted_content)?;
+        
+        assert_eq!(content, decrypted_content.as_slice());
+        Ok(())
+    }
 }

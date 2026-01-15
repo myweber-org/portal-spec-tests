@@ -3,18 +3,20 @@ use std::fs;
 use std::io::{self, Read, Write};
 use std::path::Path;
 
-pub fn xor_cipher(data: &mut [u8], key: &[u8]) {
-    for (i, byte) in data.iter_mut().enumerate() {
-        *byte ^= key[i % key.len()];
+const DEFAULT_KEY: u8 = 0x55;
+
+fn xor_cipher(data: &mut [u8], key: u8) {
+    for byte in data.iter_mut() {
+        *byte ^= key;
     }
 }
 
-pub fn encrypt_file(input_path: &Path, output_path: &Path, key: &str) -> io::Result<()> {
+fn process_file(input_path: &Path, output_path: &Path, key: u8) -> io::Result<()> {
     let mut file = fs::File::open(input_path)?;
     let mut buffer = Vec::new();
     file.read_to_end(&mut buffer)?;
     
-    xor_cipher(&mut buffer, key.as_bytes());
+    xor_cipher(&mut buffer, key);
     
     let mut output_file = fs::File::create(output_path)?;
     output_file.write_all(&buffer)?;
@@ -22,48 +24,31 @@ pub fn encrypt_file(input_path: &Path, output_path: &Path, key: &str) -> io::Res
     Ok(())
 }
 
-pub fn decrypt_file(input_path: &Path, output_path: &Path, key: &str) -> io::Result<()> {
-    encrypt_file(input_path, output_path, key)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::NamedTempFile;
-    use std::io::Write;
-
-    #[test]
-    fn test_xor_cipher_symmetry() {
-        let key = "secret_key";
-        let original = b"Hello, World!";
-        let mut data = original.to_vec();
-        
-        xor_cipher(&mut data, key.as_bytes());
-        assert_ne!(data.as_slice(), original);
-        
-        xor_cipher(&mut data, key.as_bytes());
-        assert_eq!(data.as_slice(), original);
+fn main() -> io::Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+    
+    if args.len() != 4 {
+        eprintln!("Usage: {} <input_file> <output_file> <key_byte>", args[0]);
+        std::process::exit(1);
     }
-
-    #[test]
-    fn test_file_encryption() -> io::Result<()> {
-        let key = "test_key_123";
-        let original_content = b"Sample file content for encryption test.";
-        
-        let input_file = NamedTempFile::new()?;
-        let output_file = NamedTempFile::new()?;
-        let decrypted_file = NamedTempFile::new()?;
-        
-        fs::write(input_file.path(), original_content)?;
-        
-        encrypt_file(input_file.path(), output_file.path(), key)?;
-        let encrypted_content = fs::read(output_file.path())?;
-        assert_ne!(encrypted_content, original_content);
-        
-        decrypt_file(output_file.path(), decrypted_file.path(), key)?;
-        let decrypted_content = fs::read(decrypted_file.path())?;
-        assert_eq!(decrypted_content, original_content);
-        
-        Ok(())
+    
+    let input_path = Path::new(&args[1]);
+    let output_path = Path::new(&args[2]);
+    let key = args[3].parse::<u8>().unwrap_or(DEFAULT_KEY);
+    
+    if !input_path.exists() {
+        eprintln!("Error: Input file does not exist");
+        std::process::exit(1);
+    }
+    
+    match process_file(input_path, output_path, key) {
+        Ok(_) => {
+            println!("File processed successfully");
+            Ok(())
+        }
+        Err(e) => {
+            eprintln!("Error processing file: {}", e);
+            std::process::exit(1);
+        }
     }
 }

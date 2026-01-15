@@ -109,3 +109,91 @@ mod tests {
         assert_eq!(result, Err(ParseError::InvalidEncoding));
     }
 }
+use std::collections::HashMap;
+
+pub struct UrlParser;
+
+impl UrlParser {
+    pub fn parse_domain(url: &str) -> Option<String> {
+        let url_lower = url.to_lowercase();
+        let prefixes = ["http://", "https://", "www."];
+        
+        let mut processed_url = url_lower.as_str();
+        for prefix in &prefixes {
+            if processed_url.starts_with(prefix) {
+                processed_url = &processed_url[prefix.len()..];
+            }
+        }
+        
+        let domain_end = processed_url.find('/').unwrap_or(processed_url.len());
+        let domain = &processed_url[..domain_end];
+        
+        if domain.is_empty() {
+            None
+        } else {
+            Some(domain.to_string())
+        }
+    }
+    
+    pub fn parse_query_params(url: &str) -> HashMap<String, String> {
+        let mut params = HashMap::new();
+        
+        if let Some(query_start) = url.find('?') {
+            let query_string = &url[query_start + 1..];
+            
+            for pair in query_string.split('&') {
+                let parts: Vec<&str> = pair.split('=').collect();
+                if parts.len() == 2 {
+                    params.insert(
+                        parts[0].to_string(),
+                        parts[1].to_string()
+                    );
+                }
+            }
+        }
+        
+        params
+    }
+    
+    pub fn is_valid_url(url: &str) -> bool {
+        url.contains("://") && 
+        (url.starts_with("http://") || url.starts_with("https://"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_parse_domain() {
+        assert_eq!(
+            UrlParser::parse_domain("https://www.example.com/path"),
+            Some("example.com".to_string())
+        );
+        assert_eq!(
+            UrlParser::parse_domain("http://subdomain.example.co.uk/"),
+            Some("subdomain.example.co.uk".to_string())
+        );
+        assert_eq!(UrlParser::parse_domain("invalid-url"), None);
+    }
+    
+    #[test]
+    fn test_parse_query_params() {
+        let url = "https://example.com/search?q=rust&page=2&sort=desc";
+        let params = UrlParser::parse_query_params(url);
+        
+        assert_eq!(params.get("q"), Some(&"rust".to_string()));
+        assert_eq!(params.get("page"), Some(&"2".to_string()));
+        assert_eq!(params.get("sort"), Some(&"desc".to_string()));
+        assert_eq!(params.len(), 3);
+    }
+    
+    #[test]
+    fn test_is_valid_url() {
+        assert!(UrlParser::is_valid_url("https://example.com"));
+        assert!(UrlParser::is_valid_url("http://localhost:8080"));
+        assert!(!UrlParser::is_valid_url("example.com"));
+        assert!(!UrlParser::is_valid_url("ftp://example.com"));
+    }
+}

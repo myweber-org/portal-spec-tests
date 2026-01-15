@@ -123,3 +123,121 @@ mod tests {
         assert!((stats.2 - 20.3).abs() < 0.1);
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufReader, BufWriter};
+use serde::{Deserialize, Serialize};
+use csv::{ReaderBuilder, WriterBuilder};
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    category: String,
+    timestamp: String,
+}
+
+#[derive(Debug)]
+struct DataProcessor {
+    records: Vec<Record>,
+    filtered_records: Vec<Record>,
+}
+
+impl DataProcessor {
+    fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+            filtered_records: Vec::new(),
+        }
+    }
+
+    fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        let mut csv_reader = ReaderBuilder::new()
+            .has_headers(true)
+            .from_reader(reader);
+
+        for result in csv_reader.deserialize() {
+            let record: Record = result?;
+            self.records.push(record);
+        }
+
+        println!("Loaded {} records from {}", self.records.len(), file_path);
+        Ok(())
+    }
+
+    fn filter_by_category(&mut self, category: &str) {
+        self.filtered_records = self.records
+            .iter()
+            .filter(|record| record.category == category)
+            .cloned()
+            .collect();
+
+        println!("Filtered {} records in category '{}'", 
+                 self.filtered_records.len(), category);
+    }
+
+    fn calculate_average_value(&self) -> Option<f64> {
+        if self.filtered_records.is_empty() {
+            return None;
+        }
+
+        let sum: f64 = self.filtered_records
+            .iter()
+            .map(|record| record.value)
+            .sum();
+        
+        Some(sum / self.filtered_records.len() as f64)
+    }
+
+    fn save_filtered_to_csv(&self, output_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::create(output_path)?;
+        let writer = BufWriter::new(file);
+        let mut csv_writer = WriterBuilder::new()
+            .has_headers(true)
+            .from_writer(writer);
+
+        for record in &self.filtered_records {
+            csv_writer.serialize(record)?;
+        }
+
+        csv_writer.flush()?;
+        println!("Saved {} filtered records to {}", 
+                 self.filtered_records.len(), output_path);
+        Ok(())
+    }
+
+    fn find_max_value_record(&self) -> Option<&Record> {
+        self.filtered_records
+            .iter()
+            .max_by(|a, b| a.value.partial_cmp(&b.value).unwrap())
+    }
+}
+
+fn process_data_sample() -> Result<(), Box<dyn Error>> {
+    let mut processor = DataProcessor::new();
+    
+    processor.load_from_csv("input_data.csv")?;
+    processor.filter_by_category("premium");
+    
+    if let Some(average) = processor.calculate_average_value() {
+        println!("Average value: {:.2}", average);
+    }
+    
+    if let Some(max_record) = processor.find_max_value_record() {
+        println!("Maximum value record: {:?}", max_record);
+    }
+    
+    processor.save_filtered_to_csv("filtered_output.csv")?;
+    
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = process_data_sample() {
+        eprintln!("Error processing data: {}", e);
+        std::process::exit(1);
+    }
+}

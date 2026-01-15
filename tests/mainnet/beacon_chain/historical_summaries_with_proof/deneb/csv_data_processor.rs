@@ -539,3 +539,124 @@ fn main() {
     
     println!("Data processing completed successfully!");
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::collections::HashMap;
+
+#[derive(Debug, Clone)]
+pub struct Record {
+    pub id: u32,
+    pub category: String,
+    pub value: f64,
+    pub active: bool,
+}
+
+pub fn load_csv(file_path: &str) -> Result<Vec<Record>, Box<dyn Error>> {
+    let file = File::open(file_path)?;
+    let reader = BufReader::new(file);
+    let mut records = Vec::new();
+    
+    for (index, line) in reader.lines().enumerate() {
+        if index == 0 {
+            continue;
+        }
+        
+        let line = line?;
+        let parts: Vec<&str> = line.split(',').collect();
+        
+        if parts.len() >= 4 {
+            let id = parts[0].parse::<u32>()?;
+            let category = parts[1].to_string();
+            let value = parts[2].parse::<f64>()?;
+            let active = parts[3].parse::<bool>().unwrap_or(false);
+            
+            records.push(Record {
+                id,
+                category,
+                value,
+                active,
+            });
+        }
+    }
+    
+    Ok(records)
+}
+
+pub fn filter_active_records(records: &[Record]) -> Vec<Record> {
+    records.iter()
+        .filter(|r| r.active)
+        .cloned()
+        .collect()
+}
+
+pub fn calculate_category_totals(records: &[Record]) -> HashMap<String, f64> {
+    let mut totals = HashMap::new();
+    
+    for record in records {
+        let entry = totals.entry(record.category.clone()).or_insert(0.0);
+        *entry += record.value;
+    }
+    
+    totals
+}
+
+pub fn find_max_value_record(records: &[Record]) -> Option<&Record> {
+    records.iter()
+        .max_by(|a, b| a.value.partial_cmp(&b.value).unwrap())
+}
+
+pub fn calculate_average_value(records: &[Record]) -> f64 {
+    if records.is_empty() {
+        return 0.0;
+    }
+    
+    let sum: f64 = records.iter().map(|r| r.value).sum();
+    sum / records.len() as f64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+    
+    #[test]
+    fn test_load_csv() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,category,value,active").unwrap();
+        writeln!(temp_file, "1,electronics,250.5,true").unwrap();
+        writeln!(temp_file, "2,books,45.75,false").unwrap();
+        
+        let records = load_csv(temp_file.path().to_str().unwrap()).unwrap();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].category, "electronics");
+        assert_eq!(records[1].value, 45.75);
+    }
+    
+    #[test]
+    fn test_filter_active_records() {
+        let records = vec![
+            Record { id: 1, category: "A".to_string(), value: 10.0, active: true },
+            Record { id: 2, category: "B".to_string(), value: 20.0, active: false },
+            Record { id: 3, category: "C".to_string(), value: 30.0, active: true },
+        ];
+        
+        let active = filter_active_records(&records);
+        assert_eq!(active.len(), 2);
+        assert!(active.iter().all(|r| r.active));
+    }
+    
+    #[test]
+    fn test_calculate_category_totals() {
+        let records = vec![
+            Record { id: 1, category: "A".to_string(), value: 10.0, active: true },
+            Record { id: 2, category: "A".to_string(), value: 20.0, active: true },
+            Record { id: 3, category: "B".to_string(), value: 30.0, active: true },
+        ];
+        
+        let totals = calculate_category_totals(&records);
+        assert_eq!(totals.get("A"), Some(&30.0));
+        assert_eq!(totals.get("B"), Some(&30.0));
+    }
+}

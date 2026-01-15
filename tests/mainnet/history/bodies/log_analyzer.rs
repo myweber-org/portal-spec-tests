@@ -1,98 +1,87 @@
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
-use std::path::Path;
+use regex::Regex;
 
-#[derive(Debug)]
-pub struct LogSummary {
-    pub total_entries: usize,
-    pub error_count: usize,
-    pub warning_count: usize,
-    pub info_count: usize,
-    pub unique_errors: HashMap<String, usize>,
-    pub time_range: (String, String),
+pub struct LogAnalyzer {
+    error_pattern: Regex,
+    warn_pattern: Regex,
+    info_pattern: Regex,
 }
 
-impl LogSummary {
+impl LogAnalyzer {
     pub fn new() -> Self {
-        LogSummary {
-            total_entries: 0,
-            error_count: 0,
-            warning_count: 0,
-            info_count: 0,
-            unique_errors: HashMap::new(),
-            time_range: (String::new(), String::new()),
-        }
-    }
-}
-
-pub fn analyze_log_file<P: AsRef<Path>>(path: P) -> Result<LogSummary, Box<dyn std::error::Error>> {
-    let file = File::open(path)?;
-    let reader = BufReader::new(file);
-    let mut summary = LogSummary::new();
-    let mut first_timestamp = String::new();
-    let mut last_timestamp = String::new();
-
-    for (index, line) in reader.lines().enumerate() {
-        let line = line?;
-        summary.total_entries += 1;
-
-        if index == 0 {
-            first_timestamp = extract_timestamp(&line).unwrap_or_default();
-        }
-        last_timestamp = extract_timestamp(&line).unwrap_or_default();
-
-        if line.contains("ERROR") {
-            summary.error_count += 1;
-            let error_key = extract_error_type(&line);
-            *summary.unique_errors.entry(error_key).or_insert(0) += 1;
-        } else if line.contains("WARNING") {
-            summary.warning_count += 1;
-        } else if line.contains("INFO") {
-            summary.info_count += 1;
+        LogAnalyzer {
+            error_pattern: Regex::new(r"ERROR").unwrap(),
+            warn_pattern: Regex::new(r"WARN").unwrap(),
+            info_pattern: Regex::new(r"INFO").unwrap(),
         }
     }
 
-    summary.time_range = (first_timestamp, last_timestamp);
-    Ok(summary)
-}
+    pub fn analyze_file(&self, path: &str) -> Result<HashMap<String, usize>, String> {
+        let file = File::open(path).map_err(|e| e.to_string())?;
+        let reader = BufReader::new(file);
+        
+        let mut stats = HashMap::new();
+        stats.insert("total_lines".to_string(), 0);
+        stats.insert("errors".to_string(), 0);
+        stats.insert("warnings".to_string(), 0);
+        stats.insert("info".to_string(), 0);
 
-fn extract_timestamp(line: &str) -> Option<String> {
-    let parts: Vec<&str> = line.split_whitespace().collect();
-    if parts.len() > 1 {
-        Some(parts[0].to_string())
-    } else {
-        None
-    }
-}
-
-fn extract_error_type(line: &str) -> String {
-    let error_start = line.find("ERROR").unwrap_or(0);
-    let error_slice = &line[error_start..];
-    let end = error_slice.find(':').unwrap_or(error_slice.len());
-    error_slice[..end].to_string()
-}
-
-pub fn print_summary(summary: &LogSummary) {
-    println!("Log Analysis Summary");
-    println!("====================");
-    println!("Total entries: {}", summary.total_entries);
-    println!("Time range: {} to {}", summary.time_range.0, summary.time_range.1);
-    println!("Info entries: {}", summary.info_count);
-    println!("Warning entries: {}", summary.warning_count);
-    println!("Error entries: {}", summary.error_count);
-    
-    if !summary.unique_errors.is_empty() {
-        println!("\nUnique error types:");
-        for (error, count) in &summary.unique_errors {
-            println!("  {}: {}", error, count);
+        for line_result in reader.lines() {
+            let line = line_result.map_err(|e| e.to_string())?;
+            
+            *stats.get_mut("total_lines").unwrap() += 1;
+            
+            if self.error_pattern.is_match(&line) {
+                *stats.get_mut("errors").unwrap() += 1;
+            } else if self.warn_pattern.is_match(&line) {
+                *stats.get_mut("warnings").unwrap() += 1;
+            } else if self.info_pattern.is_match(&line) {
+                *stats.get_mut("info").unwrap() += 1;
+            }
         }
+
+        Ok(stats)
     }
-    
-    let error_percentage = if summary.total_entries > 0 {
-        (summary.error_count as f64 / summary.total_entries as f64) * 100.0
-    } else {
-        0.0
-    };
-    println!("\nError percentage: {:.2}%", error_percentage);
+
+    pub fn generate_report(&self, stats: &HashMap<String, usize>) -> String {
+        let total = stats.get("total_lines").unwrap_or(&0);
+        let errors = stats.get("errors").unwrap_or(&0);
+        let warnings = stats.get("warnings").unwrap_or(&0);
+        let info = stats.get("info").unwrap_or(&0);
+        
+        format!(
+            "Log Analysis Report:\n\
+            Total lines: {}\n\
+            Errors: {}\n\
+            Warnings: {}\n\
+            Info messages: {}",
+            total, errors, warnings, info
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_log_analysis() {
+        let analyzer = LogAnalyzer::new();
+        
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "INFO: Application started").unwrap();
+        writeln!(temp_file, "WARN: Disk space low").unwrap();
+        writeln!(temp_file, "ERROR: Database connection failed").unwrap();
+        writeln!(temp_file, "INFO: Processing complete").unwrap();
+        
+        let stats = analyzer.analyze_file(temp_file.path().to_str().unwrap()).unwrap();
+        assert_eq!(*stats.get("total_lines").unwrap(), 4);
+        assert_eq!(*stats.get("errors").unwrap(), 1);
+        assert_eq!(*stats.get("warnings").unwrap(), 1);
+        assert_eq!(*stats.get("info").unwrap(), 2);
+    }
 }

@@ -2,163 +2,146 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct AppConfig {
-    pub server: ServerConfig,
-    pub database: DatabaseConfig,
-    pub logging: LoggingConfig,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ServerConfig {
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DatabaseConfig {
     pub host: String,
     pub port: u16,
-    pub timeout_seconds: u64,
+    pub username: String,
+    pub password: String,
+    pub database_name: String,
+    pub pool_size: u32,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct DatabaseConfig {
-    pub url: String,
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ServerConfig {
+    pub address: String,
+    pub port: u16,
+    pub enable_ssl: bool,
     pub max_connections: u32,
-    pub min_connections: u32,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct LoggingConfig {
-    pub level: String,
-    pub file_path: Option<String>,
-    pub enable_console: bool,
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AppConfig {
+    pub database: DatabaseConfig,
+    pub server: ServerConfig,
+    pub log_level: String,
+    pub cache_ttl: u64,
 }
 
 impl Default for AppConfig {
     fn default() -> Self {
         AppConfig {
-            server: ServerConfig {
-                host: "127.0.0.1".to_string(),
-                port: 8080,
-                timeout_seconds: 30,
-            },
             database: DatabaseConfig {
-                url: "postgresql://localhost:5432/mydb".to_string(),
-                max_connections: 10,
-                min_connections: 2,
+                host: "localhost".to_string(),
+                port: 5432,
+                username: "postgres".to_string(),
+                password: "".to_string(),
+                database_name: "app_db".to_string(),
+                pool_size: 10,
             },
-            logging: LoggingConfig {
-                level: "info".to_string(),
-                file_path: Some("app.log".to_string()),
-                enable_console: true,
+            server: ServerConfig {
+                address: "0.0.0.0".to_string(),
+                port: 8080,
+                enable_ssl: false,
+                max_connections: 100,
             },
+            log_level: "info".to_string(),
+            cache_ttl: 300,
         }
     }
 }
 
-pub fn load_config<P: AsRef<Path>>(path: P) -> Result<AppConfig, Box<dyn std::error::Error>> {
-    let config_str = fs::read_to_string(path)?;
-    let config: AppConfig = toml::from_str(&config_str)?;
-    validate_config(&config)?;
-    Ok(config)
-}
-
-pub fn save_config<P: AsRef<Path>>(config: &AppConfig, path: P) -> Result<(), Box<dyn std::error::Error>> {
-    let config_str = toml::to_string_pretty(config)?;
-    fs::write(path, config_str)?;
-    Ok(())
-}
-
-fn validate_config(config: &AppConfig) -> Result<(), String> {
-    if config.server.port == 0 {
-        return Err("Server port cannot be 0".to_string());
+impl AppConfig {
+    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
+        let content = fs::read_to_string(path)?;
+        let config: AppConfig = serde_yaml::from_str(&content)?;
+        config.validate()?;
+        Ok(config)
     }
-    
-    if config.database.max_connections < config.database.min_connections {
-        return Err("Max connections must be greater than or equal to min connections".to_string());
-    }
-    
-    let valid_log_levels = ["error", "warn", "info", "debug", "trace"];
-    if !valid_log_levels.contains(&config.logging.level.as_str()) {
-        return Err(format!("Invalid log level: {}", config.logging.level));
-    }
-    
-    Ok(())
-}
 
-pub fn create_default_config<P: AsRef<Path>>(path: P) -> Result<(), Box<dyn std::error::Error>> {
-    let default_config = AppConfig::default();
-    save_config(&default_config, path)
-}use std::collections::HashMap;
-use std::env;
-use regex::Regex;
-
-pub struct ConfigParser {
-    values: HashMap<String, String>,
-}
-
-impl ConfigParser {
-    pub fn new() -> Self {
-        ConfigParser {
-            values: HashMap::new(),
+    pub fn validate(&self) -> Result<(), String> {
+        if self.database.port == 0 {
+            return Err("Database port cannot be zero".to_string());
         }
-    }
-
-    pub fn load_from_str(&mut self, content: &str) -> Result<(), String> {
-        let var_pattern = Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}").unwrap();
         
-        for line in content.lines() {
-            let trimmed = line.trim();
-            if trimmed.is_empty() || trimmed.starts_with('#') {
-                continue;
-            }
-            
-            if let Some(equal_pos) = trimmed.find('=') {
-                let key = trimmed[..equal_pos].trim().to_string();
-                let mut value = trimmed[equal_pos + 1..].trim().to_string();
-                
-                value = var_pattern.replace_all(&value, |caps: &regex::Captures| {
-                    let var_name = &caps[1];
-                    env::var(var_name).unwrap_or_else(|_| String::new())
-                }).to_string();
-                
-                self.values.insert(key, value);
-            }
+        if self.server.port == 0 {
+            return Err("Server port cannot be zero".to_string());
+        }
+        
+        if self.database.pool_size == 0 {
+            return Err("Database pool size cannot be zero".to_string());
+        }
+        
+        if self.server.max_connections == 0 {
+            return Err("Max connections cannot be zero".to_string());
+        }
+        
+        if !["error", "warn", "info", "debug", "trace"].contains(&self.log_level.as_str()) {
+            return Err(format!("Invalid log level: {}", self.log_level));
         }
         
         Ok(())
     }
-
-    pub fn get(&self, key: &str) -> Option<&String> {
-        self.values.get(key)
-    }
-
-    pub fn get_with_default(&self, key: &str, default: &str) -> String {
-        self.values.get(key).map(|s| s.as_str()).unwrap_or(default).to_string()
+    
+    pub fn to_yaml(&self) -> Result<String, Box<dyn std::error::Error>> {
+        let yaml = serde_yaml::to_string(self)?;
+        Ok(yaml)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::NamedTempFile;
     
     #[test]
-    fn test_basic_parsing() {
-        let mut parser = ConfigParser::new();
-        let config = "server_host=localhost\nserver_port=8080\n# This is a comment";
-        
-        parser.load_from_str(config).unwrap();
-        
-        assert_eq!(parser.get("server_host"), Some(&"localhost".to_string()));
-        assert_eq!(parser.get("server_port"), Some(&"8080".to_string()));
-        assert_eq!(parser.get("nonexistent"), None);
+    fn test_default_config() {
+        let config = AppConfig::default();
+        assert_eq!(config.database.port, 5432);
+        assert_eq!(config.server.port, 8080);
+        assert_eq!(config.log_level, "info");
     }
     
     #[test]
-    fn test_env_substitution() {
-        env::set_var("APP_ENV", "production");
+    fn test_config_validation() {
+        let mut config = AppConfig::default();
+        config.database.port = 0;
+        assert!(config.validate().is_err());
+    }
+    
+    #[test]
+    fn test_config_serialization() {
+        let config = AppConfig::default();
+        let yaml = config.to_yaml().unwrap();
+        assert!(yaml.contains("database:"));
+        assert!(yaml.contains("server:"));
+    }
+    
+    #[test]
+    fn test_config_from_file() {
+        let yaml_content = r#"
+database:
+  host: "db.example.com"
+  port: 5432
+  username: "user"
+  password: "pass"
+  database_name: "test_db"
+  pool_size: 5
+server:
+  address: "127.0.0.1"
+  port: 3000
+  enable_ssl: true
+  max_connections: 50
+log_level: "debug"
+cache_ttl: 600
+"#;
         
-        let mut parser = ConfigParser::new();
-        let config = "environment=${APP_ENV}\ndebug_mode=false";
+        let temp_file = NamedTempFile::new().unwrap();
+        fs::write(temp_file.path(), yaml_content).unwrap();
         
-        parser.load_from_str(config).unwrap();
-        
-        assert_eq!(parser.get("environment"), Some(&"production".to_string()));
+        let config = AppConfig::from_file(temp_file.path()).unwrap();
+        assert_eq!(config.database.host, "db.example.com");
+        assert_eq!(config.server.port, 3000);
+        assert_eq!(config.log_level, "debug");
     }
 }

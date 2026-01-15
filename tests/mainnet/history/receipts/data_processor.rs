@@ -111,3 +111,95 @@ mod tests {
         assert!((std_dev - 8.164965).abs() < 0.0001);
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::path::Path;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub value: f64,
+    pub category: String,
+}
+
+impl DataRecord {
+    pub fn new(id: u32, value: f64, category: String) -> Result<Self, String> {
+        if value < 0.0 {
+            return Err("Value cannot be negative".to_string());
+        }
+        if category.is_empty() {
+            return Err("Category cannot be empty".to_string());
+        }
+        Ok(Self { id, value, category })
+    }
+}
+
+pub struct DataProcessor {
+    records: Vec<DataRecord>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        Self { records: Vec::new() }
+    }
+
+    pub fn add_record(&mut self, record: DataRecord) {
+        self.records.push(record);
+    }
+
+    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn Error>> {
+        let file = File::open(path)?;
+        let mut rdr = csv::Reader::from_reader(file);
+
+        for result in rdr.deserialize() {
+            let record: DataRecord = result?;
+            self.records.push(record);
+        }
+
+        Ok(())
+    }
+
+    pub fn calculate_average(&self) -> Option<f64> {
+        if self.records.is_empty() {
+            return None;
+        }
+
+        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        Some(sum / self.records.len() as f64)
+    }
+
+    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
+        self.records
+            .iter()
+            .filter(|record| record.category == category)
+            .collect()
+    }
+
+    pub fn total_records(&self) -> usize {
+        self.records.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_record_creation() {
+        let record = DataRecord::new(1, 42.5, "test".to_string());
+        assert!(record.is_ok());
+
+        let invalid_record = DataRecord::new(2, -10.0, "test".to_string());
+        assert!(invalid_record.is_err());
+    }
+
+    #[test]
+    fn test_data_processor() {
+        let mut processor = DataProcessor::new();
+        let record = DataRecord::new(1, 100.0, "A".to_string()).unwrap();
+        processor.add_record(record);
+
+        assert_eq!(processor.total_records(), 1);
+        assert_eq!(processor.calculate_average(), Some(100.0));
+    }
+}

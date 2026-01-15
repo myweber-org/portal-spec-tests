@@ -262,4 +262,140 @@ mod tests {
         
         assert_eq!(output_content, "value,description\n100,valid\n200,another\n");
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader, Write};
+
+pub struct CsvProcessor {
+    delimiter: char,
+    has_headers: bool,
+}
+
+impl CsvProcessor {
+    pub fn new(delimiter: char, has_headers: bool) -> Self {
+        CsvProcessor {
+            delimiter,
+            has_headers,
+        }
+    }
+
+    pub fn read_and_validate(&self, file_path: &str) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        let mut records = Vec::new();
+        let mut line_number = 0;
+
+        for line in reader.lines() {
+            line_number += 1;
+            let line_content = line?;
+            let fields: Vec<String> = line_content
+                .split(self.delimiter)
+                .map(|s| s.trim().to_string())
+                .collect();
+
+            if fields.is_empty() {
+                return Err(format!("Empty line found at line {}", line_number).into());
+            }
+
+            if self.has_headers && line_number == 1 {
+                continue;
+            }
+
+            records.push(fields);
+        }
+
+        if records.is_empty() {
+            return Err("No valid data records found".into());
+        }
+
+        Ok(records)
+    }
+
+    pub fn transform_numeric_fields(
+        &self,
+        records: Vec<Vec<String>>,
+        column_index: usize,
+        multiplier: f64,
+    ) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let mut transformed = Vec::new();
+
+        for record in records {
+            if column_index >= record.len() {
+                return Err(format!("Column index {} out of bounds", column_index).into());
+            }
+
+            let mut new_record = record.clone();
+            if let Ok(value) = new_record[column_index].parse::<f64>() {
+                let transformed_value = value * multiplier;
+                new_record[column_index] = format!("{:.2}", transformed_value);
+            }
+
+            transformed.push(new_record);
+        }
+
+        Ok(transformed)
+    }
+
+    pub fn write_to_file(&self, records: Vec<Vec<String>>, output_path: &str) -> Result<(), Box<dyn Error>> {
+        let mut file = File::create(output_path)?;
+
+        for record in records {
+            let line = record.join(&self.delimiter.to_string());
+            writeln!(file, "{}", line)?;
+        }
+
+        Ok(())
+    }
+
+    pub fn calculate_column_average(&self, records: &[Vec<String>], column_index: usize) -> Result<f64, Box<dyn Error>> {
+        if records.is_empty() {
+            return Err("No records to process".into());
+        }
+
+        let mut sum = 0.0;
+        let mut count = 0;
+
+        for record in records {
+            if column_index < record.len() {
+                if let Ok(value) = record[column_index].parse::<f64>() {
+                    sum += value;
+                    count += 1;
+                }
+            }
+        }
+
+        if count == 0 {
+            return Err("No valid numeric values found in specified column".into());
+        }
+
+        Ok(sum / count as f64)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_csv_processing() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,salary").unwrap();
+        writeln!(temp_file, "Alice,30,50000").unwrap();
+        writeln!(temp_file, "Bob,25,45000").unwrap();
+        writeln!(temp_file, "Charlie,35,60000").unwrap();
+
+        let processor = CsvProcessor::new(',', true);
+        let records = processor.read_and_validate(temp_file.path().to_str().unwrap()).unwrap();
+        
+        assert_eq!(records.len(), 3);
+        assert_eq!(records[0], vec!["Alice", "30", "50000"]);
+        
+        let transformed = processor.transform_numeric_fields(records, 2, 1.1).unwrap();
+        assert_eq!(transformed[0][2], "55000.00");
+        
+        let average = processor.calculate_column_average(&transformed, 1).unwrap();
+        assert!((average - 30.0).abs() < 0.01);
+    }
 }

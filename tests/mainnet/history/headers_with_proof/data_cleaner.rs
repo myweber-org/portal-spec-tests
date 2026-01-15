@@ -37,3 +37,73 @@ fn main() {
     
     println!("Results saved to cleaned_output.txt");
 }
+use std::collections::HashSet;
+
+pub struct DataCleaner<T> {
+    data: Vec<Vec<T>>,
+}
+
+impl<T> DataCleaner<T>
+where
+    T: Clone + PartialEq + Eq + std::hash::Hash,
+{
+    pub fn new(data: Vec<Vec<T>>) -> Self {
+        DataCleaner { data }
+    }
+
+    pub fn remove_null_rows(&mut self, null_value: &T) -> &mut Self {
+        self.data.retain(|row| !row.contains(null_value));
+        self
+    }
+
+    pub fn deduplicate_rows(&mut self) -> &mut Self {
+        let mut seen = HashSet::new();
+        self.data.retain(|row| seen.insert(row.clone()));
+        self
+    }
+
+    pub fn get_data(&self) -> &Vec<Vec<T>> {
+        &self.data
+    }
+
+    pub fn into_data(self) -> Vec<Vec<T>> {
+        self.data
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_remove_null_rows() {
+        let data = vec![
+            vec![Some(1), Some(2)],
+            vec![None, Some(3)],
+            vec![Some(4), Some(5)],
+        ];
+        let mut cleaner = DataCleaner::new(data);
+        cleaner.remove_null_rows(&None);
+        let result = cleaner.get_data();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], vec![Some(1), Some(2)]);
+        assert_eq!(result[1], vec![Some(4), Some(5)]);
+    }
+
+    #[test]
+    fn test_deduplicate_rows() {
+        let data = vec![
+            vec![1, 2, 3],
+            vec![4, 5, 6],
+            vec![1, 2, 3],
+            vec![7, 8, 9],
+        ];
+        let mut cleaner = DataCleaner::new(data);
+        cleaner.deduplicate_rows();
+        let result = cleaner.get_data();
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0], vec![1, 2, 3]);
+        assert_eq!(result[1], vec![4, 5, 6]);
+        assert_eq!(result[2], vec![7, 8, 9]);
+    }
+}

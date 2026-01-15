@@ -322,3 +322,132 @@ mod tests {
         assert_eq!(stats.maximum, 30.0);
     }
 }
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug)]
+pub enum ProcessingError {
+    InvalidInput,
+    TransformationFailed,
+    ValidationError(String),
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProcessingError::InvalidInput => write!(f, "Invalid input data"),
+            ProcessingError::TransformationFailed => write!(f, "Data transformation failed"),
+            ProcessingError::ValidationError(msg) => write!(f, "Validation error: {}", msg),
+        }
+    }
+}
+
+impl Error for ProcessingError {}
+
+pub struct DataProcessor {
+    threshold: f64,
+    enabled: bool,
+}
+
+impl DataProcessor {
+    pub fn new(threshold: f64) -> Self {
+        DataProcessor {
+            threshold,
+            enabled: true,
+        }
+    }
+
+    pub fn process_data(&self, input: &[f64]) -> Result<Vec<f64>, ProcessingError> {
+        if !self.enabled {
+            return Err(ProcessingError::ValidationError("Processor disabled".to_string()));
+        }
+
+        if input.is_empty() {
+            return Err(ProcessingError::InvalidInput);
+        }
+
+        let validated = self.validate_data(input)?;
+        let transformed = self.transform_data(&validated)?;
+        
+        Ok(transformed)
+    }
+
+    fn validate_data(&self, data: &[f64]) -> Result<Vec<f64>, ProcessingError> {
+        let mut result = Vec::with_capacity(data.len());
+        
+        for &value in data {
+            if value.is_nan() || value.is_infinite() {
+                return Err(ProcessingError::ValidationError(
+                    format!("Invalid numeric value: {}", value)
+                ));
+            }
+            
+            if value.abs() > self.threshold {
+                return Err(ProcessingError::ValidationError(
+                    format!("Value {} exceeds threshold {}", value, self.threshold)
+                ));
+            }
+            
+            result.push(value);
+        }
+        
+        Ok(result)
+    }
+
+    fn transform_data(&self, data: &[f64]) -> Result<Vec<f64>, ProcessingError> {
+        let mut transformed = Vec::with_capacity(data.len());
+        
+        for &value in data {
+            let transformed_value = (value * 2.0).sin();
+            
+            if transformed_value.is_nan() {
+                return Err(ProcessingError::TransformationFailed);
+            }
+            
+            transformed.push(transformed_value);
+        }
+        
+        Ok(transformed)
+    }
+
+    pub fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
+    }
+
+    pub fn update_threshold(&mut self, threshold: f64) {
+        self.threshold = threshold;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_processing() {
+        let processor = DataProcessor::new(100.0);
+        let input = vec![1.0, 2.0, 3.0];
+        
+        let result = processor.process_data(&input);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().len(), 3);
+    }
+
+    #[test]
+    fn test_invalid_input() {
+        let processor = DataProcessor::new(100.0);
+        let input = vec![];
+        
+        let result = processor.process_data(&input);
+        assert!(matches!(result, Err(ProcessingError::InvalidInput)));
+    }
+
+    #[test]
+    fn test_threshold_exceeded() {
+        let processor = DataProcessor::new(10.0);
+        let input = vec![5.0, 15.0, 3.0];
+        
+        let result = processor.process_data(&input);
+        assert!(matches!(result, Err(ProcessingError::ValidationError(_))));
+    }
+}

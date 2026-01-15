@@ -101,3 +101,189 @@ mod tests {
         assert!((stats.1 - 20.3).abs() < 0.1);
     }
 }
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
+}
+
+#[derive(Debug)]
+pub enum DataError {
+    ValidationFailed(String),
+    TransformationError(String),
+    InvalidFormat(String),
+}
+
+impl fmt::Display for DataError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DataError::ValidationFailed(msg) => write!(f, "Validation failed: {}", msg),
+            DataError::TransformationError(msg) => write!(f, "Transformation error: {}", msg),
+            DataError::InvalidFormat(msg) => write!(f, "Invalid format: {}", msg),
+        }
+    }
+}
+
+impl Error for DataError {}
+
+pub struct DataProcessor {
+    validation_threshold: f64,
+    normalization_factor: f64,
+}
+
+impl DataProcessor {
+    pub fn new(validation_threshold: f64, normalization_factor: f64) -> Self {
+        DataProcessor {
+            validation_threshold,
+            normalization_factor,
+        }
+    }
+
+    pub fn validate_record(&self, record: &DataRecord) -> Result<(), DataError> {
+        if record.values.is_empty() {
+            return Err(DataError::ValidationFailed("Empty values vector".to_string()));
+        }
+
+        for (i, &value) in record.values.iter().enumerate() {
+            if value.is_nan() || value.is_infinite() {
+                return Err(DataError::ValidationFailed(
+                    format!("Invalid value at index {}: {}", i, value)
+                ));
+            }
+
+            if value.abs() > self.validation_threshold {
+                return Err(DataError::ValidationFailed(
+                    format!("Value {} exceeds threshold at index {}", value, i)
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn transform_values(&self, record: &mut DataRecord) -> Result<(), DataError> {
+        self.validate_record(record)?;
+
+        for value in record.values.iter_mut() {
+            *value = (*value * self.normalization_factor).tanh();
+            
+            if value.is_nan() || value.is_infinite() {
+                return Err(DataError::TransformationError(
+                    "Numerical overflow during transformation".to_string()
+                ));
+            }
+        }
+
+        record.metadata.insert(
+            "processed".to_string(),
+            "true".to_string()
+        );
+        record.metadata.insert(
+            "normalization_factor".to_string(),
+            self.normalization_factor.to_string()
+        );
+
+        Ok(())
+    }
+
+    pub fn batch_process(&self, records: &mut [DataRecord]) -> Vec<Result<(), DataError>> {
+        records.iter_mut()
+            .map(|record| self.transform_values(record))
+            .collect()
+    }
+
+    pub fn calculate_statistics(&self, records: &[DataRecord]) -> Result<HashMap<String, f64>, DataError> {
+        if records.is_empty() {
+            return Err(DataError::InvalidFormat("No records provided".to_string()));
+        }
+
+        let mut stats = HashMap::new();
+        let total_values: usize = records.iter().map(|r| r.values.len()).sum();
+        
+        if total_values == 0 {
+            return Err(DataError::InvalidFormat("All records have empty values".to_string()));
+        }
+
+        let sum: f64 = records.iter()
+            .flat_map(|r| r.values.iter())
+            .sum();
+        
+        let mean = sum / total_values as f64;
+        
+        let variance: f64 = records.iter()
+            .flat_map(|r| r.values.iter())
+            .map(|&v| (v - mean).powi(2))
+            .sum::<f64>() / total_values as f64;
+
+        stats.insert("mean".to_string(), mean);
+        stats.insert("variance".to_string(), variance);
+        stats.insert("total_records".to_string(), records.len() as f64);
+        stats.insert("total_values".to_string(), total_values as f64);
+
+        Ok(stats)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_test_record() -> DataRecord {
+        DataRecord {
+            id: 1,
+            values: vec![0.5, 1.0, -0.5],
+            metadata: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn test_validation_success() {
+        let processor = DataProcessor::new(10.0, 1.0);
+        let record = create_test_record();
+        assert!(processor.validate_record(&record).is_ok());
+    }
+
+    #[test]
+    fn test_validation_failure() {
+        let processor = DataProcessor::new(0.1, 1.0);
+        let record = create_test_record();
+        assert!(processor.validate_record(&record).is_err());
+    }
+
+    #[test]
+    fn test_transformation() {
+        let processor = DataProcessor::new(10.0, 2.0);
+        let mut record = create_test_record();
+        
+        assert!(processor.transform_values(&mut record).is_ok());
+        assert_eq!(record.metadata.get("processed"), Some(&"true".to_string()));
+    }
+
+    #[test]
+    fn test_batch_processing() {
+        let processor = DataProcessor::new(10.0, 1.0);
+        let mut records = vec![create_test_record(), create_test_record()];
+        
+        let results = processor.batch_process(&mut records);
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().all(|r| r.is_ok()));
+    }
+
+    #[test]
+    fn test_statistics_calculation() {
+        let processor = DataProcessor::new(10.0, 1.0);
+        let records = vec![create_test_record(), create_test_record()];
+        
+        let stats = processor.calculate_statistics(&records);
+        assert!(stats.is_ok());
+        
+        let stats_map = stats.unwrap();
+        assert!(stats_map.contains_key("mean"));
+        assert!(stats_map.contains_key("variance"));
+    }
+}

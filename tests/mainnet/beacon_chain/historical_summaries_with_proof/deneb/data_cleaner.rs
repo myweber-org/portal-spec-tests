@@ -157,4 +157,93 @@ mod tests {
         assert_eq!(chars, 14);
         assert!((avg - 4.666).abs() < 0.001);
     }
+}use std::collections::HashSet;
+
+pub struct DataCleaner {
+    records: Vec<String>,
+    seen: HashSet<String>,
+}
+
+impl DataCleaner {
+    pub fn new() -> Self {
+        DataCleaner {
+            records: Vec::new(),
+            seen: HashSet::new(),
+        }
+    }
+
+    pub fn add_record(&mut self, record: &str) -> bool {
+        let trimmed = record.trim().to_string();
+        
+        if trimmed.is_empty() {
+            return false;
+        }
+        
+        if self.seen.contains(&trimmed) {
+            return false;
+        }
+        
+        self.seen.insert(trimmed.clone());
+        self.records.push(trimmed);
+        true
+    }
+
+    pub fn validate_records(&self) -> Vec<&String> {
+        self.records
+            .iter()
+            .filter(|record| record.len() > 3 && record.len() < 100)
+            .collect()
+    }
+
+    pub fn deduplicate(&mut self) -> usize {
+        let original_len = self.records.len();
+        let mut unique = Vec::new();
+        let mut new_seen = HashSet::new();
+        
+        for record in &self.records {
+            if new_seen.insert(record.clone()) {
+                unique.push(record.clone());
+            }
+        }
+        
+        self.records = unique;
+        self.seen = new_seen;
+        original_len - self.records.len()
+    }
+
+    pub fn get_records(&self) -> &Vec<String> {
+        &self.records
+    }
+
+    pub fn clear(&mut self) {
+        self.records.clear();
+        self.seen.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_deduplication() {
+        let mut cleaner = DataCleaner::new();
+        cleaner.add_record("test");
+        cleaner.add_record("test");
+        cleaner.add_record("other");
+        
+        assert_eq!(cleaner.get_records().len(), 2);
+        assert_eq!(cleaner.deduplicate(), 0);
+    }
+
+    #[test]
+    fn test_validation() {
+        let mut cleaner = DataCleaner::new();
+        cleaner.add_record("abc");
+        cleaner.add_record("valid_record");
+        cleaner.add_record("x");
+        
+        let valid = cleaner.validate_records();
+        assert_eq!(valid.len(), 1);
+    }
 }

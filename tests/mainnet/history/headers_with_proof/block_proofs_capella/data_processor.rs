@@ -1011,3 +1011,231 @@ mod tests {
         assert_eq!(groups.get("type_b").unwrap().len(), 1);
     }
 }
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u64,
+    pub timestamp: i64,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
+}
+
+#[derive(Debug)]
+pub enum ValidationError {
+    InvalidId,
+    InvalidTimestamp,
+    EmptyValues,
+    ValueOutOfRange(f64),
+    MissingMetadata(String),
+}
+
+impl fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ValidationError::InvalidId => write!(f, "Invalid record ID"),
+            ValidationError::InvalidTimestamp => write!(f, "Invalid timestamp"),
+            ValidationError::EmptyValues => write!(f, "Record contains no values"),
+            ValidationError::ValueOutOfRange(val) => write!(f, "Value {} out of acceptable range", val),
+            ValidationError::MissingMetadata(key) => write!(f, "Missing required metadata: {}", key),
+        }
+    }
+}
+
+impl Error for ValidationError {}
+
+pub struct DataProcessor {
+    min_value: f64,
+    max_value: f64,
+    required_metadata: Vec<String>,
+}
+
+impl DataProcessor {
+    pub fn new(min_value: f64, max_value: f64, required_metadata: Vec<String>) -> Self {
+        DataProcessor {
+            min_value,
+            max_value,
+            required_metadata,
+        }
+    }
+
+    pub fn validate_record(&self, record: &DataRecord) -> Result<(), ValidationError> {
+        if record.id == 0 {
+            return Err(ValidationError::InvalidId);
+        }
+
+        if record.timestamp < 0 {
+            return Err(ValidationError::InvalidTimestamp);
+        }
+
+        if record.values.is_empty() {
+            return Err(ValidationError::EmptyValues);
+        }
+
+        for &value in &record.values {
+            if value < self.min_value || value > self.max_value {
+                return Err(ValidationError::ValueOutOfRange(value));
+            }
+        }
+
+        for key in &self.required_metadata {
+            if !record.metadata.contains_key(key) {
+                return Err(ValidationError::MissingMetadata(key.clone()));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn normalize_values(&self, record: &mut DataRecord) {
+        let min_val = self.min_value;
+        let range = self.max_value - min_val;
+        
+        if range > 0.0 {
+            for value in &mut record.values {
+                *value = (*value - min_val) / range;
+            }
+        }
+    }
+
+    pub fn process_records(&self, records: &mut [DataRecord]) -> Vec<Result<(), ValidationError>> {
+        let mut results = Vec::new();
+        
+        for record in records {
+            match self.validate_record(record) {
+                Ok(()) => {
+                    self.normalize_values(record);
+                    results.push(Ok(()));
+                }
+                Err(e) => {
+                    results.push(Err(e));
+                }
+            }
+        }
+        
+        results
+    }
+
+    pub fn calculate_statistics(&self, records: &[DataRecord]) -> Option<HashMap<String, f64>> {
+        if records.is_empty() {
+            return None;
+        }
+
+        let mut stats = HashMap::new();
+        let mut all_values = Vec::new();
+
+        for record in records {
+            all_values.extend_from_slice(&record.values);
+        }
+
+        if all_values.is_empty() {
+            return None;
+        }
+
+        let sum: f64 = all_values.iter().sum();
+        let count = all_values.len() as f64;
+        let mean = sum / count;
+
+        let variance: f64 = all_values.iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>() / count;
+
+        let sorted_values = {
+            let mut sorted = all_values.clone();
+            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            sorted
+        };
+
+        let median = if count as usize % 2 == 0 {
+            let mid = count as usize / 2;
+            (sorted_values[mid - 1] + sorted_values[mid]) / 2.0
+        } else {
+            sorted_values[count as usize / 2]
+        };
+
+        stats.insert("mean".to_string(), mean);
+        stats.insert("median".to_string(), median);
+        stats.insert("variance".to_string(), variance);
+        stats.insert("min".to_string(), *sorted_values.first().unwrap());
+        stats.insert("max".to_string(), *sorted_values.last().unwrap());
+        stats.insert("count".to_string(), count);
+
+        Some(stats)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_test_record() -> DataRecord {
+        let mut metadata = HashMap::new();
+        metadata.insert("source".to_string(), "test".to_string());
+        metadata.insert("version".to_string(), "1.0".to_string());
+
+        DataRecord {
+            id: 1,
+            timestamp: 1234567890,
+            values: vec![10.0, 20.0, 30.0],
+            metadata,
+        }
+    }
+
+    #[test]
+    fn test_valid_record() {
+        let processor = DataProcessor::new(
+            0.0,
+            100.0,
+            vec!["source".to_string(), "version".to_string()]
+        );
+        
+        let record = create_test_record();
+        assert!(processor.validate_record(&record).is_ok());
+    }
+
+    #[test]
+    fn test_invalid_id() {
+        let processor = DataProcessor::new(0.0, 100.0, vec![]);
+        let mut record = create_test_record();
+        record.id = 0;
+        
+        assert!(matches!(
+            processor.validate_record(&record),
+            Err(ValidationError::InvalidId)
+        ));
+    }
+
+    #[test]
+    fn test_normalization() {
+        let processor = DataProcessor::new(0.0, 100.0, vec![]);
+        let mut record = create_test_record();
+        
+        processor.normalize_values(&mut record);
+        
+        assert_eq!(record.values[0], 0.1);
+        assert_eq!(record.values[1], 0.2);
+        assert_eq!(record.values[2], 0.3);
+    }
+
+    #[test]
+    fn test_statistics() {
+        let processor = DataProcessor::new(0.0, 100.0, vec![]);
+        let records = vec![
+            create_test_record(),
+            DataRecord {
+                id: 2,
+                timestamp: 1234567891,
+                values: vec![40.0, 50.0],
+                metadata: HashMap::new(),
+            },
+        ];
+
+        let stats = processor.calculate_statistics(&records).unwrap();
+        
+        assert!((stats["mean"] - 30.0).abs() < 0.001);
+        assert!((stats["median"] - 30.0).abs() < 0.001);
+        assert_eq!(stats["count"], 5.0);
+    }
+}

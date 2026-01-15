@@ -126,3 +126,106 @@ mod tests {
         assert!(result.is_err());
     }
 }
+use csv;
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
+}
+
+fn validate_record(record: &Record) -> Result<(), String> {
+    if record.name.is_empty() {
+        return Err("Name cannot be empty".to_string());
+    }
+    if record.value < 0.0 {
+        return Err("Value must be non-negative".to_string());
+    }
+    Ok(())
+}
+
+fn process_csv_file(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
+    let input_file = File::open(input_path)?;
+    let mut reader = csv::Reader::from_reader(input_file);
+    
+    let output_file = File::create(output_path)?;
+    let mut writer = csv::Writer::from_writer(output_file);
+    
+    let mut processed_count = 0;
+    let mut error_count = 0;
+    
+    for result in reader.deserialize() {
+        let record: Record = result?;
+        
+        match validate_record(&record) {
+            Ok(_) => {
+                writer.serialize(&record)?;
+                processed_count += 1;
+            }
+            Err(e) => {
+                eprintln!("Validation error for record {}: {}", record.id, e);
+                error_count += 1;
+            }
+        }
+    }
+    
+    writer.flush()?;
+    
+    println!("Processing complete:");
+    println!("  Records processed: {}", processed_count);
+    println!("  Validation errors: {}", error_count);
+    
+    Ok(())
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let input_file = "input_data.csv";
+    let output_file = "processed_data.csv";
+    
+    process_csv_file(input_file, output_file)?;
+    
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_valid_record() {
+        let record = Record {
+            id: 1,
+            name: "Test".to_string(),
+            value: 100.0,
+            active: true,
+        };
+        assert!(validate_record(&record).is_ok());
+    }
+    
+    #[test]
+    fn test_invalid_name() {
+        let record = Record {
+            id: 2,
+            name: "".to_string(),
+            value: 50.0,
+            active: false,
+        };
+        assert!(validate_record(&record).is_err());
+    }
+    
+    #[test]
+    fn test_negative_value() {
+        let record = Record {
+            id: 3,
+            name: "Negative".to_string(),
+            value: -10.0,
+            active: true,
+        };
+        assert!(validate_record(&record).is_err());
+    }
+}

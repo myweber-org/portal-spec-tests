@@ -1,152 +1,109 @@
 
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use thiserror::Error;
+use std::error::Error;
+use std::fmt;
 
-#[derive(Error, Debug)]
-pub enum DataError {
-    #[error("Invalid data format")]
-    InvalidFormat,
-    #[error("Missing required field: {0}")]
-    MissingField(String),
-    #[error("Validation failed: {0}")]
-    ValidationFailed(String),
+#[derive(Debug)]
+pub struct ValidationError {
+    details: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct DataRecord {
-    pub id: u64,
-    pub timestamp: i64,
-    pub values: HashMap<String, f64>,
-    pub tags: Vec<String>,
-}
-
-impl DataRecord {
-    pub fn validate(&self) -> Result<(), DataError> {
-        if self.id == 0 {
-            return Err(DataError::ValidationFailed("ID cannot be zero".into()));
-        }
-        
-        if self.timestamp < 0 {
-            return Err(DataError::ValidationFailed("Timestamp cannot be negative".into()));
-        }
-        
-        if self.values.is_empty() {
-            return Err(DataError::ValidationFailed("Values cannot be empty".into()));
-        }
-        
-        Ok(())
-    }
-    
-    pub fn transform(&mut self, multiplier: f64) {
-        for value in self.values.values_mut() {
-            *value *= multiplier;
-        }
-    }
-    
-    pub fn add_tag(&mut self, tag: String) {
-        if !self.tags.contains(&tag) {
-            self.tags.push(tag);
+impl ValidationError {
+    fn new(msg: &str) -> ValidationError {
+        ValidationError {
+            details: msg.to_string(),
         }
     }
 }
 
-pub fn process_records(records: &mut [DataRecord], multiplier: f64) -> Result<Vec<DataRecord>, DataError> {
-    let mut processed = Vec::with_capacity(records.len());
-    
-    for record in records.iter_mut() {
-        record.validate()?;
-        record.transform(multiplier);
-        record.add_tag("processed".into());
-        processed.push(record.clone());
+impl fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.details)
     }
-    
-    Ok(processed)
 }
 
-pub fn calculate_statistics(records: &[DataRecord]) -> HashMap<String, f64> {
-    let mut stats = HashMap::new();
-    
-    if records.is_empty() {
-        return stats;
+impl Error for ValidationError {
+    fn description(&self) -> &str {
+        &self.details
     }
-    
-    for key in records[0].values.keys() {
-        let values: Vec<f64> = records.iter()
-            .filter_map(|r| r.values.get(key).copied())
-            .collect();
-        
-        if !values.is_empty() {
-            let sum: f64 = values.iter().sum();
-            let count = values.len() as f64;
-            let avg = sum / count;
-            
-            let variance: f64 = values.iter()
-                .map(|v| (v - avg).powi(2))
-                .sum::<f64>() / count;
-            
-            stats.insert(format!("{}_mean", key), avg);
-            stats.insert(format!("{}_variance", key), variance);
+}
+
+pub fn validate_numeric_data(data: &[f64]) -> Result<(), ValidationError> {
+    if data.is_empty() {
+        return Err(ValidationError::new("Data slice cannot be empty"));
+    }
+
+    for &value in data {
+        if value.is_nan() || value.is_infinite() {
+            return Err(ValidationError::new("Data contains invalid numeric values"));
         }
     }
-    
-    stats
+
+    Ok(())
+}
+
+pub fn normalize_data(data: &[f64]) -> Vec<f64> {
+    if data.is_empty() {
+        return Vec::new();
+    }
+
+    let min = data.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+    let max = data.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+    let range = max - min;
+
+    if range == 0.0 {
+        return vec![0.5; data.len()];
+    }
+
+    data.iter()
+        .map(|&x| (x - min) / range)
+        .collect()
+}
+
+pub fn calculate_statistics(data: &[f64]) -> (f64, f64, f64) {
+    let count = data.len() as f64;
+    let sum: f64 = data.iter().sum();
+    let mean = sum / count;
+
+    let variance: f64 = data
+        .iter()
+        .map(|&value| {
+            let diff = mean - value;
+            diff * diff
+        })
+        .sum::<f64>()
+        / count;
+
+    let std_dev = variance.sqrt();
+
+    (mean, variance, std_dev)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
-    fn test_record_validation() {
-        let mut record = DataRecord {
-            id: 1,
-            timestamp: 1000,
-            values: HashMap::from([("temperature".into(), 25.5)]),
-            tags: vec![],
-        };
-        
-        assert!(record.validate().is_ok());
-        
-        record.id = 0;
-        assert!(record.validate().is_err());
+    fn test_validate_numeric_data() {
+        let valid_data = vec![1.0, 2.0, 3.0];
+        assert!(validate_numeric_data(&valid_data).is_ok());
+
+        let invalid_data = vec![1.0, f64::NAN, 3.0];
+        assert!(validate_numeric_data(&invalid_data).is_err());
     }
-    
+
     #[test]
-    fn test_record_transformation() {
-        let mut record = DataRecord {
-            id: 1,
-            timestamp: 1000,
-            values: HashMap::from([("pressure".into(), 10.0)]),
-            tags: vec![],
-        };
-        
-        record.transform(2.5);
-        assert_eq!(record.values.get("pressure"), Some(&25.0));
+    fn test_normalize_data() {
+        let data = vec![0.0, 5.0, 10.0];
+        let normalized = normalize_data(&data);
+        assert_eq!(normalized, vec![0.0, 0.5, 1.0]);
     }
-    
+
     #[test]
-    fn test_process_records() {
-        let mut records = vec![
-            DataRecord {
-                id: 1,
-                timestamp: 1000,
-                values: HashMap::from([("value".into(), 10.0)]),
-                tags: vec![],
-            },
-            DataRecord {
-                id: 2,
-                timestamp: 2000,
-                values: HashMap::from([("value".into(), 20.0)]),
-                tags: vec![],
-            },
-        ];
-        
-        let result = process_records(&mut records, 2.0);
-        assert!(result.is_ok());
-        
-        let processed = result.unwrap();
-        assert_eq!(processed.len(), 2);
-        assert!(processed[0].tags.contains(&"processed".into()));
+    fn test_calculate_statistics() {
+        let data = vec![2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0];
+        let (mean, variance, std_dev) = calculate_statistics(&data);
+        assert!((mean - 5.0).abs() < 0.0001);
+        assert!((variance - 4.0).abs() < 0.0001);
+        assert!((std_dev - 2.0).abs() < 0.0001);
     }
 }

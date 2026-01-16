@@ -12,69 +12,79 @@ pub struct DataRecord {
     pub timestamp: u64,
 }
 
+impl DataRecord {
+    pub fn new(id: u32, value: f64, category: String, timestamp: u64) -> Self {
+        Self {
+            id,
+            value,
+            category,
+            timestamp,
+        }
+    }
+
+    pub fn is_valid(&self) -> bool {
+        self.id > 0 && self.value.is_finite() && !self.category.is_empty()
+    }
+}
+
 pub struct DataProcessor {
     records: Vec<DataRecord>,
 }
 
 impl DataProcessor {
     pub fn new() -> Self {
-        DataProcessor {
+        Self {
             records: Vec::new(),
         }
     }
 
-    pub fn load_from_csv(&mut self, file_path: &str) -> Result<usize, Box<dyn Error>> {
-        let path = Path::new(file_path);
+    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<usize, Box<dyn Error>> {
         let file = File::open(path)?;
         let reader = BufReader::new(file);
-        
-        let mut count = 0;
+        let mut loaded_count = 0;
+
         for (line_num, line) in reader.lines().enumerate() {
             let line = line?;
             
             if line_num == 0 {
                 continue;
             }
-            
+
             let parts: Vec<&str> = line.split(',').collect();
             if parts.len() != 4 {
                 continue;
             }
-            
+
             let id = match parts[0].parse::<u32>() {
-                Ok(val) => val,
+                Ok(id) => id,
                 Err(_) => continue,
             };
-            
+
             let value = match parts[1].parse::<f64>() {
-                Ok(val) => val,
+                Ok(value) => value,
                 Err(_) => continue,
             };
-            
-            let category = parts[2].trim().to_string();
+
+            let category = parts[2].to_string();
             let timestamp = match parts[3].parse::<u64>() {
-                Ok(val) => val,
+                Ok(ts) => ts,
                 Err(_) => continue,
             };
-            
-            self.records.push(DataRecord {
-                id,
-                value,
-                category,
-                timestamp,
-            });
-            
-            count += 1;
+
+            let record = DataRecord::new(id, value, category, timestamp);
+            if record.is_valid() {
+                self.records.push(record);
+                loaded_count += 1;
+            }
         }
-        
-        Ok(count)
+
+        Ok(loaded_count)
     }
 
-    pub fn filter_by_category(&self, category: &str) -> Vec<DataRecord> {
+    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
         self.records
             .iter()
             .filter(|record| record.category == category)
-            .cloned()
             .collect()
     }
 
@@ -82,19 +92,17 @@ impl DataProcessor {
         if self.records.is_empty() {
             return None;
         }
-        
+
         let sum: f64 = self.records.iter().map(|r| r.value).sum();
         Some(sum / self.records.len() as f64)
     }
 
-    pub fn find_max_value(&self) -> Option<&DataRecord> {
-        self.records.iter().max_by(|a, b| {
-            a.value.partial_cmp(&b.value).unwrap()
-        })
+    pub fn get_records(&self) -> &[DataRecord] {
+        &self.records
     }
 
-    pub fn get_records_count(&self) -> usize {
-        self.records.len()
+    pub fn clear(&mut self) {
+        self.records.clear();
     }
 }
 
@@ -105,29 +113,52 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_data_processor() {
-        let mut processor = DataProcessor::new();
-        assert_eq!(processor.get_records_count(), 0);
-        
+    fn test_data_record_validation() {
+        let valid_record = DataRecord::new(1, 42.5, "test".to_string(), 1234567890);
+        assert!(valid_record.is_valid());
+
+        let invalid_record = DataRecord::new(0, 42.5, "test".to_string(), 1234567890);
+        assert!(!invalid_record.is_valid());
+    }
+
+    #[test]
+    fn test_csv_loading() {
         let mut temp_file = NamedTempFile::new().unwrap();
         writeln!(temp_file, "id,value,category,timestamp").unwrap();
-        writeln!(temp_file, "1,12.5,alpha,1625097600").unwrap();
-        writeln!(temp_file, "2,8.3,beta,1625184000").unwrap();
-        writeln!(temp_file, "3,15.7,alpha,1625270400").unwrap();
+        writeln!(temp_file, "1,42.5,category_a,1234567890").unwrap();
+        writeln!(temp_file, "2,invalid,category_b,1234567891").unwrap();
+        writeln!(temp_file, "3,78.9,category_a,1234567892").unwrap();
+
+        let mut processor = DataProcessor::new();
+        let result = processor.load_from_csv(temp_file.path());
         
-        let result = processor.load_from_csv(temp_file.path().to_str().unwrap());
         assert!(result.is_ok());
-        assert_eq!(processor.get_records_count(), 3);
-        
-        let alpha_records = processor.filter_by_category("alpha");
-        assert_eq!(alpha_records.len(), 2);
-        
+        assert_eq!(result.unwrap(), 2);
+        assert_eq!(processor.get_records().len(), 2);
+    }
+
+    #[test]
+    fn test_filtering() {
+        let mut processor = DataProcessor::new();
+        processor.records.push(DataRecord::new(1, 10.0, "A".to_string(), 1));
+        processor.records.push(DataRecord::new(2, 20.0, "B".to_string(), 2));
+        processor.records.push(DataRecord::new(3, 30.0, "A".to_string(), 3));
+
+        let filtered = processor.filter_by_category("A");
+        assert_eq!(filtered.len(), 2);
+    }
+
+    #[test]
+    fn test_average_calculation() {
+        let mut processor = DataProcessor::new();
+        assert!(processor.calculate_average().is_none());
+
+        processor.records.push(DataRecord::new(1, 10.0, "A".to_string(), 1));
+        processor.records.push(DataRecord::new(2, 20.0, "B".to_string(), 2));
+        processor.records.push(DataRecord::new(3, 30.0, "C".to_string(), 3));
+
         let average = processor.calculate_average();
         assert!(average.is_some());
-        assert!((average.unwrap() - 12.166666666666666).abs() < 0.0001);
-        
-        let max_record = processor.find_max_value();
-        assert!(max_record.is_some());
-        assert_eq!(max_record.unwrap().id, 3);
+        assert_eq!(average.unwrap(), 20.0);
     }
 }

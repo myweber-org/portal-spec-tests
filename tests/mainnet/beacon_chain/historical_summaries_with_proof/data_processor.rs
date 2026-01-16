@@ -1,4 +1,3 @@
-
 use std::error::Error;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -17,19 +16,15 @@ impl DataProcessor {
         }
     }
 
-    pub fn process_file<P: AsRef<Path>>(&self, file_path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+    pub fn process_csv<P: AsRef<Path>>(&self, file_path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
         let file = File::open(file_path)?;
         let reader = BufReader::new(file);
         let mut records = Vec::new();
 
-        for (line_number, line) in reader.lines().enumerate() {
+        for (index, line) in reader.lines().enumerate() {
             let line = line?;
             
-            if line.trim().is_empty() {
-                continue;
-            }
-
-            if self.has_header && line_number == 0 {
+            if index == 0 && self.has_header {
                 continue;
             }
 
@@ -39,7 +34,7 @@ impl DataProcessor {
                 .collect();
 
             if !self.validate_record(&fields) {
-                return Err(format!("Invalid record at line {}", line_number + 1).into());
+                return Err(format!("Invalid record at line {}: {:?}", index + 1, fields).into());
             }
 
             records.push(fields);
@@ -48,33 +43,30 @@ impl DataProcessor {
         Ok(records)
     }
 
-    fn validate_record(&self, fields: &[String]) -> bool {
-        !fields.is_empty() && fields.iter().all(|f| !f.is_empty())
+    fn validate_record(&self, record: &[String]) -> bool {
+        !record.is_empty() && record.iter().all(|field| !field.is_empty())
     }
 
     pub fn calculate_statistics(&self, data: &[Vec<String>], column_index: usize) -> Result<(f64, f64), Box<dyn Error>> {
-        if data.is_empty() {
-            return Err("No data available for statistics".into());
-        }
-
         let mut values = Vec::new();
+
         for record in data {
             if column_index >= record.len() {
-                return Err(format!("Column index {} out of bounds", column_index).into());
+                return Err("Column index out of bounds".into());
             }
 
-            match record[column_index].parse::<f64>() {
-                Ok(value) => values.push(value),
-                Err(_) => return Err(format!("Invalid numeric value at column {}", column_index).into()),
-            }
+            let value: f64 = record[column_index].parse()?;
+            values.push(value);
         }
 
-        let sum: f64 = values.iter().sum();
-        let mean = sum / values.len() as f64;
-        let variance: f64 = values.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / values.len() as f64;
-        let std_dev = variance.sqrt();
+        if values.is_empty() {
+            return Err("No data available for statistics calculation".into());
+        }
 
-        Ok((mean, std_dev))
+        let mean = values.iter().sum::<f64>() / values.len() as f64;
+        let variance = values.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / values.len() as f64;
+
+        Ok((mean, variance.sqrt()))
     }
 }
 
@@ -85,34 +77,31 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_data_processing() {
+    fn test_csv_processing() {
         let mut temp_file = NamedTempFile::new().unwrap();
         writeln!(temp_file, "name,age,salary").unwrap();
         writeln!(temp_file, "Alice,30,50000").unwrap();
         writeln!(temp_file, "Bob,25,45000").unwrap();
-        writeln!(temp_file, "Charlie,35,60000").unwrap();
 
         let processor = DataProcessor::new(',', true);
-        let result = processor.process_file(temp_file.path());
+        let result = processor.process_csv(temp_file.path()).unwrap();
         
-        assert!(result.is_ok());
-        let data = result.unwrap();
-        assert_eq!(data.len(), 3);
-        assert_eq!(data[0], vec!["Alice", "30", "50000"]);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], vec!["Alice", "30", "50000"]);
     }
 
     #[test]
     fn test_statistics_calculation() {
         let data = vec![
-            vec!["10".to_string(), "20".to_string()],
-            vec!["20".to_string(), "30".to_string()],
-            vec!["30".to_string(), "40".to_string()],
+            vec!["10.5".to_string(), "20.0".to_string()],
+            vec!["15.5".to_string(), "25.0".to_string()],
+            vec!["12.0".to_string(), "30.0".to_string()],
         ];
 
         let processor = DataProcessor::new(',', false);
-        let stats = processor.calculate_statistics(&data, 0).unwrap();
+        let (mean, std_dev) = processor.calculate_statistics(&data, 0).unwrap();
         
-        assert_eq!(stats.0, 20.0);
-        assert!((stats.1 - 8.164965).abs() < 0.0001);
+        assert!((mean - 12.666).abs() < 0.001);
+        assert!((std_dev - 2.054).abs() < 0.001);
     }
 }

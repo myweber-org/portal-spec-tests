@@ -307,3 +307,96 @@ mod tests {
         assert_eq!(result, expected);
     }
 }
+use std::collections::HashMap;
+use std::fs::{self, File};
+use std::io::{BufReader, Read, Write};
+use std::path::Path;
+
+use serde_json::{json, Value};
+
+pub fn merge_json_files(input_paths: &[&str], output_path: &str) -> Result<(), String> {
+    if input_paths.is_empty() {
+        return Err("No input files provided".to_string());
+    }
+
+    let mut merged_array = Vec::new();
+
+    for input_path in input_paths {
+        let path = Path::new(input_path);
+        if !path.exists() {
+            return Err(format!("File not found: {}", input_path));
+        }
+
+        let mut file = File::open(path)
+            .map_err(|e| format!("Failed to open {}: {}", input_path, e))?;
+        
+        let mut contents = String::new();
+        file.read_to_string(&mut contents)
+            .map_err(|e| format!("Failed to read {}: {}", input_path, e))?;
+
+        let json_value: Value = serde_json::from_str(&contents)
+            .map_err(|e| format!("Invalid JSON in {}: {}", input_path, e))?;
+
+        merged_array.push(json_value);
+    }
+
+    let output_value = Value::Array(merged_array);
+    let output_json = serde_json::to_string_pretty(&output_value)
+        .map_err(|e| format!("Failed to serialize merged JSON: {}", e))?;
+
+    let mut output_file = File::create(output_path)
+        .map_err(|e| format!("Failed to create output file: {}", e))?;
+    
+    output_file.write_all(output_json.as_bytes())
+        .map_err(|e| format!("Failed to write output file: {}", e))?;
+
+    Ok(())
+}
+
+pub fn merge_json_with_deduplication(
+    input_paths: &[&str], 
+    output_path: &str, 
+    key_field: &str
+) -> Result<(), String> {
+    let mut unique_items = HashMap::new();
+
+    for input_path in input_paths {
+        let path = Path::new(input_path);
+        if !path.exists() {
+            return Err(format!("File not found: {}", input_path));
+        }
+
+        let file = File::open(path)
+            .map_err(|e| format!("Failed to open {}: {}", input_path, e))?;
+        
+        let reader = BufReader::new(file);
+        let json_value: Value = serde_json::from_reader(reader)
+            .map_err(|e| format!("Invalid JSON in {}: {}", input_path, e))?;
+
+        match json_value {
+            Value::Array(items) => {
+                for item in items {
+                    if let Some(obj) = item.as_object() {
+                        if let Some(key_value) = obj.get(key_field) {
+                            if let Some(key_str) = key_value.as_str() {
+                                unique_items.insert(key_str.to_string(), item.clone());
+                            }
+                        }
+                    }
+                }
+            }
+            _ => return Err(format!("Expected JSON array in {}", input_path))
+        }
+    }
+
+    let merged_array: Vec<Value> = unique_items.into_values().collect();
+    let output_value = Value::Array(merged_array);
+    
+    let output_json = serde_json::to_string_pretty(&output_value)
+        .map_err(|e| format!("Failed to serialize merged JSON: {}", e))?;
+
+    fs::write(output_path, output_json)
+        .map_err(|e| format!("Failed to write output file: {}", e))?;
+
+    Ok(())
+}

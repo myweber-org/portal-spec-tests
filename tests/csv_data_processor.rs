@@ -82,4 +82,138 @@ fn main() -> Result<(), Box<dyn Error>> {
     )?;
 
     Ok(())
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::collections::HashMap;
+
+pub struct CsvProcessor {
+    headers: Vec<String>,
+    records: Vec<Vec<String>>,
+}
+
+impl CsvProcessor {
+    pub fn from_file(path: &str) -> Result<Self, Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut lines = reader.lines();
+
+        let headers = if let Some(first_line) = lines.next() {
+            first_line?
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .collect()
+        } else {
+            return Err("Empty CSV file".into());
+        };
+
+        let mut records = Vec::new();
+        for line in lines {
+            let line = line?;
+            let fields: Vec<String> = line.split(',')
+                .map(|s| s.trim().to_string())
+                .collect();
+            if fields.len() == headers.len() {
+                records.push(fields);
+            }
+        }
+
+        Ok(CsvProcessor { headers, records })
+    }
+
+    pub fn filter_by_column(&self, column_name: &str, predicate: impl Fn(&str) -> bool) -> Vec<Vec<String>> {
+        let column_index = self.headers.iter()
+            .position(|h| h == column_name);
+
+        if let Some(idx) = column_index {
+            self.records.iter()
+                .filter(|record| {
+                    if let Some(value) = record.get(idx) {
+                        predicate(value)
+                    } else {
+                        false
+                    }
+                })
+                .cloned()
+                .collect()
+        } else {
+            Vec::new()
+        }
+    }
+
+    pub fn aggregate_numeric_column(&self, group_by_column: &str, aggregate_column: &str) -> HashMap<String, f64> {
+        let group_idx = self.headers.iter()
+            .position(|h| h == group_by_column);
+        let agg_idx = self.headers.iter()
+            .position(|h| h == aggregate_column);
+
+        if let (Some(group_idx), Some(agg_idx)) = (group_idx, agg_idx) {
+            let mut result = HashMap::new();
+            
+            for record in &self.records {
+                if let (Some(group_val), Some(agg_val)) = (record.get(group_idx), record.get(agg_idx)) {
+                    if let Ok(num) = agg_val.parse::<f64>() {
+                        *result.entry(group_val.clone()).or_insert(0.0) += num;
+                    }
+                }
+            }
+            result
+        } else {
+            HashMap::new()
+        }
+    }
+
+    pub fn get_headers(&self) -> &[String] {
+        &self.headers
+    }
+
+    pub fn record_count(&self) -> usize {
+        self.records.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    fn create_test_csv() -> NamedTempFile {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "name,department,salary").unwrap();
+        writeln!(file, "Alice,Engineering,75000").unwrap();
+        writeln!(file, "Bob,Marketing,65000").unwrap();
+        writeln!(file, "Charlie,Engineering,80000").unwrap();
+        writeln!(file, "Diana,Marketing,70000").unwrap();
+        file
+    }
+
+    #[test]
+    fn test_csv_loading() {
+        let file = create_test_csv();
+        let processor = CsvProcessor::from_file(file.path().to_str().unwrap()).unwrap();
+        
+        assert_eq!(processor.get_headers(), &["name", "department", "salary"]);
+        assert_eq!(processor.record_count(), 4);
+    }
+
+    #[test]
+    fn test_filtering() {
+        let file = create_test_csv();
+        let processor = CsvProcessor::from_file(file.path().to_str().unwrap()).unwrap();
+        
+        let engineering_records = processor.filter_by_column("department", |dept| dept == "Engineering");
+        assert_eq!(engineering_records.len(), 2);
+    }
+
+    #[test]
+    fn test_aggregation() {
+        let file = create_test_csv();
+        let processor = CsvProcessor::from_file(file.path().to_str().unwrap()).unwrap();
+        
+        let totals = processor.aggregate_numeric_column("department", "salary");
+        
+        assert_eq!(totals.get("Engineering"), Some(&155000.0));
+        assert_eq!(totals.get("Marketing"), Some(&135000.0));
+    }
 }

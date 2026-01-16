@@ -1,108 +1,89 @@
+
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::Path;
 
-pub struct XorCipher {
-    key: Vec<u8>,
-    key_position: usize,
-}
+const DEFAULT_KEY: u8 = 0x55;
 
-impl XorCipher {
-    pub fn new(key: &str) -> Self {
-        XorCipher {
-            key: key.as_bytes().to_vec(),
-            key_position: 0,
-        }
-    }
-
-    pub fn encrypt_file(&mut self, source_path: &Path, dest_path: &Path) -> io::Result<()> {
-        self.process_file(source_path, dest_path)
-    }
-
-    pub fn decrypt_file(&mut self, source_path: &Path, dest_path: &Path) -> io::Result<()> {
-        self.process_file(source_path, dest_path)
-    }
-
-    fn process_file(&mut self, source_path: &Path, dest_path: &Path) -> io::Result<()> {
-        let mut source_file = fs::File::open(source_path)?;
-        let mut dest_file = fs::File::create(dest_path)?;
-        
-        let mut buffer = [0u8; 4096];
-        
-        loop {
-            let bytes_read = source_file.read(&mut buffer)?;
-            if bytes_read == 0 {
-                break;
-            }
-            
-            let processed_data = self.process_chunk(&buffer[..bytes_read]);
-            dest_file.write_all(&processed_data)?;
-        }
-        
-        self.reset_key_position();
-        Ok(())
-    }
-
-    fn process_chunk(&mut self, data: &[u8]) -> Vec<u8> {
-        let mut result = Vec::with_capacity(data.len());
-        
-        for &byte in data {
-            let key_byte = self.key[self.key_position];
-            result.push(byte ^ key_byte);
-            self.key_position = (self.key_position + 1) % self.key.len();
-        }
-        
-        result
-    }
-
-    fn reset_key_position(&mut self) {
-        self.key_position = 0;
+fn xor_cipher(data: &mut [u8], key: u8) {
+    for byte in data.iter_mut() {
+        *byte ^= key;
     }
 }
 
-pub fn validate_key(key: &str) -> Result<(), String> {
-    if key.is_empty() {
-        return Err("Encryption key cannot be empty".to_string());
+fn process_file(input_path: &Path, output_path: &Path, key: u8) -> io::Result<()> {
+    let mut file = fs::File::open(input_path)?;
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer)?;
+    
+    xor_cipher(&mut buffer, key);
+    
+    let mut output_file = fs::File::create(output_path)?;
+    output_file.write_all(&buffer)?;
+    
+    Ok(())
+}
+
+fn main() -> io::Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+    
+    if args.len() != 3 {
+        eprintln!("Usage: {} <input_file> <output_file>", args[0]);
+        std::process::exit(1);
     }
     
-    if key.len() < 8 {
-        return Err("Encryption key should be at least 8 characters long".to_string());
+    let input_path = Path::new(&args[1]);
+    let output_path = Path::new(&args[2]);
+    
+    if !input_path.exists() {
+        eprintln!("Error: Input file does not exist");
+        std::process::exit(1);
     }
     
+    process_file(input_path, output_path, DEFAULT_KEY)?;
+    
+    println!("File processed successfully with XOR key 0x{:02X}", DEFAULT_KEY);
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use tempfile::NamedTempFile;
-    use std::io::Write;
-
+    
     #[test]
-    fn test_encryption_decryption() {
-        let key = "strong_secret_key_123!";
-        let original_text = b"Hello, this is a secret message!";
+    fn test_xor_cipher() {
+        let mut data = vec![0x00, 0xFF, 0xAA, 0x55];
+        let original = data.clone();
+        let key = 0xAA;
         
-        let mut cipher = XorCipher::new(key);
+        xor_cipher(&mut data, key);
+        xor_cipher(&mut data, key);
         
-        let mut temp_file = NamedTempFile::new().unwrap();
-        temp_file.write_all(original_text).unwrap();
-        
-        let encrypted_file = NamedTempFile::new().unwrap();
-        let decrypted_file = NamedTempFile::new().unwrap();
-        
-        cipher.encrypt_file(temp_file.path(), encrypted_file.path()).unwrap();
-        cipher.reset_key_position();
-        cipher.decrypt_file(encrypted_file.path(), decrypted_file.path()).unwrap();
-        
-        let decrypted_content = fs::read(decrypted_file.path()).unwrap();
-        assert_eq!(decrypted_content, original_text);
+        assert_eq!(data, original);
     }
-
+    
     #[test]
-    fn test_key_validation() {
-        assert!(validate_key("valid_long_key").is_ok());
-        assert!(validate_key("short").is_err());
-        assert!(validate_key("").is_err());
+    fn test_file_encryption() -> io::Result<()> {
+        let test_data = b"Hello, World! This is a test file.";
+        let mut input_file = NamedTempFile::new()?;
+        input_file.write_all(test_data)?;
+        
+        let output_file = NamedTempFile::new()?;
+        
+        process_file(input_file.path(), output_file.path(), DEFAULT_KEY)?;
+        
+        let mut encrypted = Vec::new();
+        fs::File::open(output_file.path())?.read_to_end(&mut encrypted)?;
+        
+        assert_ne!(encrypted, test_data);
+        
+        let mut decrypted = encrypted.clone();
+        xor_cipher(&mut decrypted, DEFAULT_KEY);
+        
+        assert_eq!(decrypted, test_data);
+        
+        Ok(())
     }
 }

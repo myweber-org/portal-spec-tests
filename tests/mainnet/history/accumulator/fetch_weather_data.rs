@@ -112,3 +112,40 @@ mod tests {
         assert_eq!(cached.unwrap().temperature, 20.0);
     }
 }
+use reqwest;
+use serde::Deserialize;
+use std::error::Error;
+
+#[derive(Debug, Deserialize)]
+struct WeatherResponse {
+    main: MainData,
+    name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct MainData {
+    temp: f64,
+    humidity: u8,
+}
+
+pub async fn get_weather_data(api_key: &str, city: &str) -> Result<WeatherResponse, Box<dyn Error>> {
+    let url = format!(
+        "https://api.openweathermap.org/data/2.5/weather?q={}&appid={}&units=metric",
+        city, api_key
+    );
+    
+    let response = reqwest::get(&url).await?;
+    
+    if !response.status().is_success() {
+        return Err(format!("API request failed with status: {}", response.status()).into());
+    }
+    
+    let weather_data: WeatherResponse = response.json().await?;
+    Ok(weather_data)
+}
+
+pub fn display_weather_info(weather: &WeatherResponse) {
+    println!("Weather in {}:", weather.name);
+    println!("Temperature: {:.1}°C", weather.main.temp);
+    println!("Humidity: {}%", weather.main.humidity);
+}

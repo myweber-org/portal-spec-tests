@@ -76,3 +76,78 @@ mod tests {
         assert_eq!(results, vec![true, false, false]);
     }
 }
+use std::collections::HashSet;
+
+pub struct DataCleaner {
+    dedupe_set: HashSet<String>,
+}
+
+impl DataCleaner {
+    pub fn new() -> Self {
+        DataCleaner {
+            dedupe_set: HashSet::new(),
+        }
+    }
+
+    pub fn deduplicate(&mut self, data: &str) -> Option<String> {
+        if self.dedupe_set.contains(data) {
+            None
+        } else {
+            self.dedupe_set.insert(data.to_string());
+            Some(data.to_string())
+        }
+    }
+
+    pub fn validate_email(email: &str) -> bool {
+        let parts: Vec<&str> = email.split('@').collect();
+        if parts.len() != 2 {
+            return false;
+        }
+        
+        let domain_parts: Vec<&str> = parts[1].split('.').collect();
+        domain_parts.len() >= 2 
+            && !parts[0].is_empty() 
+            && !domain_parts.iter().any(|p| p.is_empty())
+    }
+
+    pub fn normalize_whitespace(text: &str) -> String {
+        text.split_whitespace().collect::<Vec<&str>>().join(" ")
+    }
+
+    pub fn clear_cache(&mut self) {
+        self.dedupe_set.clear();
+    }
+
+    pub fn get_unique_count(&self) -> usize {
+        self.dedupe_set.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_deduplication() {
+        let mut cleaner = DataCleaner::new();
+        assert_eq!(cleaner.deduplicate("test"), Some("test".to_string()));
+        assert_eq!(cleaner.deduplicate("test"), None);
+        assert_eq!(cleaner.deduplicate("another"), Some("another".to_string()));
+    }
+
+    #[test]
+    fn test_email_validation() {
+        assert!(DataCleaner::validate_email("user@example.com"));
+        assert!(!DataCleaner::validate_email("invalid-email"));
+        assert!(!DataCleaner::validate_email("@domain.com"));
+        assert!(!DataCleaner::validate_email("user@.com"));
+    }
+
+    #[test]
+    fn test_whitespace_normalization() {
+        assert_eq!(
+            DataCleaner::normalize_whitespace("  multiple   spaces   here  "),
+            "multiple spaces here"
+        );
+    }
+}

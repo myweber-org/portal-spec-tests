@@ -587,3 +587,127 @@ mod tests {
         assert_eq!(valid_records.len(), 3);
     }
 }
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct ProcessingError {
+    message: String,
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Processing error: {}", self.message)
+    }
+}
+
+impl Error for ProcessingError {}
+
+impl ProcessingError {
+    pub fn new(msg: &str) -> Self {
+        ProcessingError {
+            message: msg.to_string(),
+        }
+    }
+}
+
+pub struct DataProcessor {
+    validation_enabled: bool,
+    transformation_factor: f64,
+}
+
+impl DataProcessor {
+    pub fn new(validation_enabled: bool, transformation_factor: f64) -> Result<Self, ProcessingError> {
+        if transformation_factor <= 0.0 {
+            return Err(ProcessingError::new("Transformation factor must be positive"));
+        }
+        
+        Ok(DataProcessor {
+            validation_enabled,
+            transformation_factor,
+        })
+    }
+    
+    pub fn process_numeric_data(&self, data: &[f64]) -> Result<Vec<f64>, ProcessingError> {
+        if self.validation_enabled {
+            self.validate_data(data)?;
+        }
+        
+        let transformed: Vec<f64> = data
+            .iter()
+            .map(|&value| value * self.transformation_factor)
+            .collect();
+        
+        Ok(transformed)
+    }
+    
+    fn validate_data(&self, data: &[f64]) -> Result<(), ProcessingError> {
+        if data.is_empty() {
+            return Err(ProcessingError::new("Data slice cannot be empty"));
+        }
+        
+        for &value in data {
+            if value.is_nan() || value.is_infinite() {
+                return Err(ProcessingError::new("Data contains invalid numeric values"));
+            }
+        }
+        
+        Ok(())
+    }
+    
+    pub fn calculate_statistics(&self, data: &[f64]) -> Result<(f64, f64), ProcessingError> {
+        if data.is_empty() {
+            return Err(ProcessingError::new("Cannot calculate statistics for empty data"));
+        }
+        
+        let sum: f64 = data.iter().sum();
+        let mean = sum / data.len() as f64;
+        
+        let variance: f64 = data
+            .iter()
+            .map(|&value| {
+                let diff = value - mean;
+                diff * diff
+            })
+            .sum::<f64>() / data.len() as f64;
+        
+        let std_dev = variance.sqrt();
+        
+        Ok((mean, std_dev))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_data_processor_creation() {
+        let processor = DataProcessor::new(true, 2.5).unwrap();
+        assert!(processor.validation_enabled);
+        assert_eq!(processor.transformation_factor, 2.5);
+    }
+    
+    #[test]
+    fn test_invalid_transformation_factor() {
+        let result = DataProcessor::new(true, 0.0);
+        assert!(result.is_err());
+    }
+    
+    #[test]
+    fn test_data_processing() {
+        let processor = DataProcessor::new(true, 2.0).unwrap();
+        let data = vec![1.0, 2.0, 3.0];
+        let processed = processor.process_numeric_data(&data).unwrap();
+        assert_eq!(processed, vec![2.0, 4.0, 6.0]);
+    }
+    
+    #[test]
+    fn test_statistics_calculation() {
+        let processor = DataProcessor::new(false, 1.0).unwrap();
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let (mean, std_dev) = processor.calculate_statistics(&data).unwrap();
+        assert_eq!(mean, 3.0);
+        assert!(std_dev - 1.41421356 < 0.0001);
+    }
+}

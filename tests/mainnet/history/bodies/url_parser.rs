@@ -127,4 +127,112 @@ mod tests {
         assert!(built.contains("search=rust"));
         assert!(built.contains("sort=desc"));
     }
+}use std::collections::HashMap;
+
+pub struct UrlParser;
+
+impl UrlParser {
+    pub fn parse_domain(url: &str) -> Option<String> {
+        let url = url.trim();
+        if url.is_empty() {
+            return None;
+        }
+
+        let url_lower = url.to_lowercase();
+        let prefixes = ["http://", "https://", "ftp://", "//"];
+
+        let mut start = 0;
+        for prefix in prefixes.iter() {
+            if url_lower.starts_with(prefix) {
+                start = prefix.len();
+                break;
+            }
+        }
+
+        let url_from_start = &url[start..];
+        let domain_end = url_from_start.find('/').unwrap_or(url_from_start.len());
+        let domain = &url_from_start[..domain_end];
+
+        if domain.is_empty() {
+            None
+        } else {
+            Some(domain.to_string())
+        }
+    }
+
+    pub fn parse_query_params(url: &str) -> HashMap<String, String> {
+        let mut params = HashMap::new();
+        
+        if let Some(query_start) = url.find('?') {
+            let query_string = &url[query_start + 1..];
+            
+            for pair in query_string.split('&') {
+                let parts: Vec<&str> = pair.split('=').collect();
+                if parts.len() == 2 {
+                    let key = parts[0].to_string();
+                    let value = parts[1].to_string();
+                    params.insert(key, value);
+                }
+            }
+        }
+        
+        params
+    }
+
+    pub fn is_valid_url(url: &str) -> bool {
+        let url = url.trim();
+        if url.is_empty() {
+            return false;
+        }
+
+        let url_lower = url.to_lowercase();
+        let valid_schemes = ["http://", "https://", "ftp://"];
+        
+        for scheme in valid_schemes.iter() {
+            if url_lower.starts_with(scheme) {
+                let after_scheme = &url[scheme.len()..];
+                return !after_scheme.is_empty() && after_scheme.contains('.');
+            }
+        }
+        
+        false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_domain() {
+        assert_eq!(
+            UrlParser::parse_domain("https://www.example.com/path"),
+            Some("www.example.com".to_string())
+        );
+        assert_eq!(
+            UrlParser::parse_domain("http://sub.domain.co.uk/"),
+            Some("sub.domain.co.uk".to_string())
+        );
+        assert_eq!(UrlParser::parse_domain("invalid"), None);
+    }
+
+    #[test]
+    fn test_parse_query_params() {
+        let url = "https://example.com/search?q=rust&lang=en&page=1";
+        let params = UrlParser::parse_query_params(url);
+        
+        assert_eq!(params.get("q"), Some(&"rust".to_string()));
+        assert_eq!(params.get("lang"), Some(&"en".to_string()));
+        assert_eq!(params.get("page"), Some(&"1".to_string()));
+        assert_eq!(params.get("nonexistent"), None);
+    }
+
+    #[test]
+    fn test_is_valid_url() {
+        assert!(UrlParser::is_valid_url("https://example.com"));
+        assert!(UrlParser::is_valid_url("http://sub.domain.org/path"));
+        assert!(!UrlParser::is_valid_url("example.com"));
+        assert!(!UrlParser::is_valid_url(""));
+        assert!(!UrlParser::is_valid_url("https://"));
+    }
 }

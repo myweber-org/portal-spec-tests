@@ -192,4 +192,61 @@ mod tests {
         let validation = cleaner.validate_records();
         assert_eq!(validation, vec![true, false, false]);
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufReader, BufWriter};
+use csv::{ReaderBuilder, WriterBuilder, Trim};
+
+pub fn clean_csv(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
+    let input_file = File::open(input_path)?;
+    let reader = BufReader::new(input_file);
+    let mut csv_reader = ReaderBuilder::new()
+        .trim(Trim::All)
+        .has_headers(true)
+        .from_reader(reader);
+
+    let output_file = File::create(output_path)?;
+    let writer = BufWriter::new(output_file);
+    let mut csv_writer = WriterBuilder::new().from_writer(writer);
+
+    let headers = csv_reader.headers()?.clone();
+    csv_writer.write_record(&headers)?;
+
+    for result in csv_reader.records() {
+        let record = result?;
+        let cleaned_record: Vec<String> = record
+            .iter()
+            .map(|field| field.trim().to_lowercase())
+            .collect();
+        csv_writer.write_record(&cleaned_record)?;
+    }
+
+    csv_writer.flush()?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_clean_csv() {
+        let mut input_file = NamedTempFile::new().unwrap();
+        writeln!(input_file, "Name, Age, City").unwrap();
+        writeln!(input_file, " John , 25 , New York ").unwrap();
+        writeln!(input_file, "ALICE,30,LONDON").unwrap();
+
+        let output_file = NamedTempFile::new().unwrap();
+
+        clean_csv(
+            input_file.path().to_str().unwrap(),
+            output_file.path().to_str().unwrap(),
+        ).unwrap();
+
+        let content = std::fs::read_to_string(output_file.path()).unwrap();
+        assert!(content.contains("john,25,new york"));
+        assert!(content.contains("alice,30,london"));
+    }
 }

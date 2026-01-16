@@ -153,3 +153,90 @@ mod tests {
         assert_eq!(decrypted_content, "Test data for ChaCha encryption\n");
     }
 }
+use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce
+};
+use pbkdf2::{
+    password_hash::{
+        PasswordHasher, SaltString, PasswordHash, PasswordVerifier
+    },
+    Pbkdf2
+};
+use std::fs;
+use std::io::{Read, Write};
+use std::path::Path;
+
+const SALT_LENGTH: usize = 16;
+const NONCE_LENGTH: usize = 12;
+const PBKDF2_ITERATIONS: u32 = 100_000;
+
+pub struct FileEncryptor {
+    cipher: Aes256Gcm,
+}
+
+impl FileEncryptor {
+    pub fn new(password: &str) -> Result<Self, String> {
+        let salt = SaltString::generate(&mut OsRng);
+        let password_hash = Pbkdf2
+            .hash_password(password.as_bytes(), &salt)
+            .map_err(|e| format!("Key derivation failed: {}", e))?;
+        
+        let hash_bytes = password_hash.hash.ok_or("No hash generated")?.as_bytes();
+        if hash_bytes.len() < 32 {
+            return Err("Derived key too short".to_string());
+        }
+        
+        let key = Key::<Aes256Gcm>::from_slice(&hash_bytes[..32]);
+        let cipher = Aes256Gcm::new(key);
+        
+        Ok(Self { cipher })
+    }
+
+    pub fn encrypt_file(&self, input_path: &Path, output_path: &Path) -> Result<(), String> {
+        let mut file_content = Vec::new();
+        fs::File::open(input_path)
+            .map_err(|e| format!("Failed to open input file: {}", e))?
+            .read_to_end(&mut file_content)
+            .map_err(|e| format!("Failed to read file: {}", e))?;
+
+        let nonce = Nonce::from_slice(&[0u8; NONCE_LENGTH]);
+        let ciphertext = self.cipher
+            .encrypt(nonce, file_content.as_ref())
+            .map_err(|e| format!("Encryption failed: {}", e))?;
+
+        let mut output_file = fs::File::create(output_path)
+            .map_err(|e| format!("Failed to create output file: {}", e))?;
+        output_file.write_all(&ciphertext)
+            .map_err(|e| format!("Failed to write encrypted data: {}", e))?;
+
+        Ok(())
+    }
+
+    pub fn decrypt_file(&self, input_path: &Path, output_path: &Path) -> Result<(), String> {
+        let mut ciphertext = Vec::new();
+        fs::File::open(input_path)
+            .map_err(|e| format!("Failed to open encrypted file: {}", e))?
+            .read_to_end(&mut ciphertext)
+            .map_err(|e| format!("Failed to read encrypted data: {}", e))?;
+
+        let nonce = Nonce::from_slice(&[0u8; NONCE_LENGTH]);
+        let plaintext = self.cipher
+            .decrypt(nonce, ciphertext.as_ref())
+            .map_err(|e| format!("Decryption failed: {}", e))?;
+
+        let mut output_file = fs::File::create(output_path)
+            .map_err(|e| format!("Failed to create output file: {}", e))?;
+        output_file.write_all(&plaintext)
+            .map_err(|e| format!("Failed to write decrypted data: {}", e))?;
+
+        Ok(())
+    }
+}
+
+pub fn verify_password(password: &str, stored_hash: &str) -> Result<bool, String> {
+    let parsed_hash = PasswordHash::new(stored_hash)
+        .map_err(|e| format!("Invalid hash format: {}", e))?;
+    
+    Ok(Pbkdf2.verify_password(password.as_bytes(), &parsed_hash).is_ok())
+}

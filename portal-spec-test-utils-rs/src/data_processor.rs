@@ -84,4 +84,117 @@ mod tests {
         assert!(found.is_some());
         assert_eq!(found.unwrap().name, "test1");
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::collections::HashMap;
+
+pub struct DataProcessor {
+    records: Vec<HashMap<String, String>>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        let mut lines = reader.lines();
+        
+        if let Some(header_line) = lines.next() {
+            let headers: Vec<String> = header_line?
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .collect();
+            
+            for line in lines {
+                let line = line?;
+                let values: Vec<String> = line
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .collect();
+                
+                if values.len() == headers.len() {
+                    let mut record = HashMap::new();
+                    for (i, header) in headers.iter().enumerate() {
+                        record.insert(header.clone(), values[i].clone());
+                    }
+                    self.records.push(record);
+                }
+            }
+        }
+        
+        Ok(())
+    }
+
+    pub fn calculate_statistics(&self, column: &str) -> Option<Statistics> {
+        let values: Vec<f64> = self.records
+            .iter()
+            .filter_map(|record| record.get(column).and_then(|v| v.parse::<f64>().ok()))
+            .collect();
+        
+        if values.is_empty() {
+            return None;
+        }
+        
+        let sum: f64 = values.iter().sum();
+        let count = values.len();
+        let mean = sum / count as f64;
+        
+        let variance: f64 = values.iter()
+            .map(|v| (v - mean).powi(2))
+            .sum::<f64>() / count as f64;
+        
+        Some(Statistics {
+            count,
+            mean,
+            variance,
+            min: *values.iter().min_by(|a, b| a.partial_cmp(b).unwrap()).unwrap(),
+            max: *values.iter().max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap(),
+        })
+    }
+
+    pub fn filter_records<F>(&self, predicate: F) -> Vec<HashMap<String, String>>
+    where
+        F: Fn(&HashMap<String, String>) -> bool,
+    {
+        self.records
+            .iter()
+            .filter(|record| predicate(record))
+            .cloned()
+            .collect()
+    }
+
+    pub fn get_column_unique_values(&self, column: &str) -> Vec<String> {
+        let mut values: Vec<String> = self.records
+            .iter()
+            .filter_map(|record| record.get(column).cloned())
+            .collect();
+        
+        values.sort();
+        values.dedup();
+        values
+    }
+}
+
+pub struct Statistics {
+    pub count: usize,
+    pub mean: f64,
+    pub variance: f64,
+    pub min: f64,
+    pub max: f64,
+}
+
+impl std::fmt::Display for Statistics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Count: {}, Mean: {:.2}, Variance: {:.2}, Min: {:.2}, Max: {:.2}",
+            self.count, self.mean, self.variance, self.min, self.max
+        )
+    }
 }

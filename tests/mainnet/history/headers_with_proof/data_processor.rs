@@ -85,3 +85,114 @@ mod tests {
         assert_eq!(std_dev, 8.16496580927726);
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::path::Path;
+
+pub struct DataProcessor {
+    data: Vec<Vec<String>>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor { data: Vec::new() }
+    }
+
+    pub fn load_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let path = Path::new(file_path);
+        let file = File::open(path)?;
+        let mut rdr = csv::Reader::from_reader(file);
+        
+        for result in rdr.records() {
+            let record = result?;
+            let row: Vec<String> = record.iter().map(|field| field.to_string()).collect();
+            self.data.push(row);
+        }
+        
+        Ok(())
+    }
+
+    pub fn validate_data(&self) -> bool {
+        if self.data.is_empty() {
+            return false;
+        }
+        
+        let header_len = self.data[0].len();
+        for row in &self.data[1..] {
+            if row.len() != header_len {
+                return false;
+            }
+        }
+        
+        true
+    }
+
+    pub fn get_column(&self, index: usize) -> Option<Vec<String>> {
+        if index >= self.data.get(0)?.len() {
+            return None;
+        }
+        
+        let mut column = Vec::new();
+        for row in &self.data {
+            if let Some(value) = row.get(index) {
+                column.push(value.clone());
+            }
+        }
+        
+        Some(column)
+    }
+
+    pub fn row_count(&self) -> usize {
+        self.data.len()
+    }
+
+    pub fn column_count(&self) -> usize {
+        self.data.get(0).map_or(0, |row| row.len())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_csv_loading() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,city").unwrap();
+        writeln!(temp_file, "Alice,30,New York").unwrap();
+        writeln!(temp_file, "Bob,25,London").unwrap();
+        
+        let mut processor = DataProcessor::new();
+        let result = processor.load_csv(temp_file.path().to_str().unwrap());
+        
+        assert!(result.is_ok());
+        assert_eq!(processor.row_count(), 3);
+        assert_eq!(processor.column_count(), 3);
+    }
+
+    #[test]
+    fn test_data_validation() {
+        let mut processor = DataProcessor::new();
+        processor.data = vec![
+            vec!["a".to_string(), "b".to_string(), "c".to_string()],
+            vec!["d".to_string(), "e".to_string()],
+        ];
+        
+        assert!(!processor.validate_data());
+    }
+
+    #[test]
+    fn test_get_column() {
+        let mut processor = DataProcessor::new();
+        processor.data = vec![
+            vec!["name".to_string(), "age".to_string()],
+            vec!["Alice".to_string(), "30".to_string()],
+            vec!["Bob".to_string(), "25".to_string()],
+        ];
+        
+        let column = processor.get_column(1).unwrap();
+        assert_eq!(column, vec!["age", "30", "25"]);
+    }
+}

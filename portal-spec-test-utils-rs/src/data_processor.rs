@@ -1,200 +1,111 @@
-use csv::Reader;
+
+use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
-use std::error::Error;
-use std::path::Path;
 
-#[derive(Debug, Deserialize, Serialize)]
-pub struct Record {
-    id: u32,
-    name: String,
-    value: f64,
-    timestamp: String,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataRecord {
+    pub id: u64,
+    pub timestamp: i64,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
 }
 
-pub struct DataProcessor {
-    records: Vec<Record>,
+#[derive(Debug, PartialEq)]
+pub enum ValidationError {
+    InvalidId,
+    InvalidTimestamp,
+    EmptyValues,
+    MetadataTooLarge,
 }
 
-impl DataProcessor {
-    pub fn new() -> Self {
-        DataProcessor {
-            records: Vec::new(),
+impl DataRecord {
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        if self.id == 0 {
+            return Err(ValidationError::InvalidId);
         }
-    }
-
-    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn Error>> {
-        let mut rdr = Reader::from_path(path)?;
-        for result in rdr.deserialize() {
-            let record: Record = result?;
-            self.records.push(record);
+        
+        if self.timestamp < 0 {
+            return Err(ValidationError::InvalidTimestamp);
         }
+        
+        if self.values.is_empty() {
+            return Err(ValidationError::EmptyValues);
+        }
+        
+        if self.metadata.len() > 100 {
+            return Err(ValidationError::MetadataTooLarge);
+        }
+        
         Ok(())
     }
-
-    pub fn filter_by_value(&self, threshold: f64) -> Vec<&Record> {
-        self.records
-            .iter()
-            .filter(|record| record.value > threshold)
-            .collect()
+    
+    pub fn transform_values(&mut self, transform_fn: impl Fn(f64) -> f64) {
+        self.values = self.values.iter().map(|&v| transform_fn(v)).collect();
     }
-
-    pub fn calculate_average(&self) -> Option<f64> {
-        if self.records.is_empty() {
-            return None;
-        }
-        let sum: f64 = self.records.iter().map(|record| record.value).sum();
-        Some(sum / self.records.len() as f64)
+    
+    pub fn calculate_statistics(&self) -> (f64, f64, f64) {
+        let count = self.values.len() as f64;
+        let sum: f64 = self.values.iter().sum();
+        let mean = sum / count;
+        
+        let variance: f64 = self.values.iter()
+            .map(|&v| (v - mean).powi(2))
+            .sum::<f64>() / count;
+        
+        let std_dev = variance.sqrt();
+        
+        (mean, variance, std_dev)
     }
+}
 
-    pub fn find_by_id(&self, target_id: u32) -> Option<&Record> {
-        self.records.iter().find(|record| record.id == target_id)
-    }
-
-    pub fn export_to_json<P: AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn Error>> {
-        let json = serde_json::to_string_pretty(&self.records)?;
-        std::fs::write(path, json)?;
-        Ok(())
-    }
+pub fn process_records(records: Vec<DataRecord>) -> Vec<DataRecord> {
+    records.into_iter()
+        .filter(|record| record.validate().is_ok())
+        .map(|mut record| {
+            record.transform_values(|v| v * 2.0);
+            record
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::NamedTempFile;
-
+    
     #[test]
-    fn test_data_processor() {
-        let mut processor = DataProcessor::new();
-        let csv_data = "id,name,value,timestamp\n1,test1,10.5,2023-01-01\n2,test2,20.3,2023-01-02";
+    fn test_validation() {
+        let valid_record = DataRecord {
+            id: 1,
+            timestamp: 1234567890,
+            values: vec![1.0, 2.0, 3.0],
+            metadata: HashMap::new(),
+        };
         
-        let temp_file = NamedTempFile::new().unwrap();
-        std::fs::write(temp_file.path(), csv_data).unwrap();
+        assert!(valid_record.validate().is_ok());
         
-        assert!(processor.load_from_csv(temp_file.path()).is_ok());
-        assert_eq!(processor.records.len(), 2);
+        let invalid_record = DataRecord {
+            id: 0,
+            timestamp: -1,
+            values: vec![],
+            metadata: HashMap::new(),
+        };
         
-        let filtered = processor.filter_by_value(15.0);
-        assert_eq!(filtered.len(), 1);
-        
-        let avg = processor.calculate_average();
-        assert!(avg.is_some());
-        assert!((avg.unwrap() - 15.4).abs() < 0.01);
-        
-        let found = processor.find_by_id(1);
-        assert!(found.is_some());
-        assert_eq!(found.unwrap().name, "test1");
+        assert!(invalid_record.validate().is_err());
     }
-}use std::error::Error;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
-use std::collections::HashMap;
-
-pub struct DataProcessor {
-    records: Vec<HashMap<String, String>>,
-}
-
-impl DataProcessor {
-    pub fn new() -> Self {
-        DataProcessor {
-            records: Vec::new(),
-        }
-    }
-
-    pub fn load_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
-        let file = File::open(file_path)?;
-        let reader = BufReader::new(file);
-        let mut lines = reader.lines();
+    
+    #[test]
+    fn test_statistics() {
+        let record = DataRecord {
+            id: 1,
+            timestamp: 1234567890,
+            values: vec![1.0, 2.0, 3.0, 4.0, 5.0],
+            metadata: HashMap::new(),
+        };
         
-        if let Some(header_line) = lines.next() {
-            let headers: Vec<String> = header_line?
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .collect();
-            
-            for line in lines {
-                let line = line?;
-                let values: Vec<String> = line
-                    .split(',')
-                    .map(|s| s.trim().to_string())
-                    .collect();
-                
-                if values.len() == headers.len() {
-                    let mut record = HashMap::new();
-                    for (i, header) in headers.iter().enumerate() {
-                        record.insert(header.clone(), values[i].clone());
-                    }
-                    self.records.push(record);
-                }
-            }
-        }
+        let (mean, variance, std_dev) = record.calculate_statistics();
         
-        Ok(())
-    }
-
-    pub fn calculate_statistics(&self, column: &str) -> Option<Statistics> {
-        let values: Vec<f64> = self.records
-            .iter()
-            .filter_map(|record| record.get(column).and_then(|v| v.parse::<f64>().ok()))
-            .collect();
-        
-        if values.is_empty() {
-            return None;
-        }
-        
-        let sum: f64 = values.iter().sum();
-        let count = values.len();
-        let mean = sum / count as f64;
-        
-        let variance: f64 = values.iter()
-            .map(|v| (v - mean).powi(2))
-            .sum::<f64>() / count as f64;
-        
-        Some(Statistics {
-            count,
-            mean,
-            variance,
-            min: *values.iter().min_by(|a, b| a.partial_cmp(b).unwrap()).unwrap(),
-            max: *values.iter().max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap(),
-        })
-    }
-
-    pub fn filter_records<F>(&self, predicate: F) -> Vec<HashMap<String, String>>
-    where
-        F: Fn(&HashMap<String, String>) -> bool,
-    {
-        self.records
-            .iter()
-            .filter(|record| predicate(record))
-            .cloned()
-            .collect()
-    }
-
-    pub fn get_column_unique_values(&self, column: &str) -> Vec<String> {
-        let mut values: Vec<String> = self.records
-            .iter()
-            .filter_map(|record| record.get(column).cloned())
-            .collect();
-        
-        values.sort();
-        values.dedup();
-        values
-    }
-}
-
-pub struct Statistics {
-    pub count: usize,
-    pub mean: f64,
-    pub variance: f64,
-    pub min: f64,
-    pub max: f64,
-}
-
-impl std::fmt::Display for Statistics {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "Count: {}, Mean: {:.2}, Variance: {:.2}, Min: {:.2}, Max: {:.2}",
-            self.count, self.mean, self.variance, self.min, self.max
-        )
+        assert_eq!(mean, 3.0);
+        assert_eq!(variance, 2.0);
+        assert_eq!(std_dev, 2.0_f64.sqrt());
     }
 }

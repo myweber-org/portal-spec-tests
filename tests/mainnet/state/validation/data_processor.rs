@@ -1,145 +1,78 @@
+use csv::Reader;
+use serde::Deserialize;
 use std::error::Error;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
-use std::path::Path;
+
+#[derive(Debug, Deserialize)]
+struct Record {
+    id: u32,
+    value: f64,
+    category: String,
+}
 
 pub struct DataProcessor {
-    delimiter: char,
-    has_header: bool,
+    records: Vec<Record>,
 }
 
 impl DataProcessor {
-    pub fn new(delimiter: char, has_header: bool) -> Self {
+    pub fn new() -> Self {
         DataProcessor {
-            delimiter,
-            has_header,
+            records: Vec::new(),
         }
     }
 
-    pub fn process_file<P: AsRef<Path>>(&self, file_path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
-        let file = File::open(file_path)?;
-        let reader = BufReader::new(file);
-        let mut records = Vec::new();
-        let mut lines = reader.lines();
-
-        if self.has_header {
-            lines.next();
+    pub fn load_from_csv(&mut self, path: &str) -> Result<(), Box<dyn Error>> {
+        let mut reader = Reader::from_path(path)?;
+        for result in reader.deserialize() {
+            let record: Record = result?;
+            self.records.push(record);
         }
-
-        for line_result in lines {
-            let line = line_result?;
-            let fields: Vec<String> = line.split(self.delimiter)
-                .map(|s| s.trim().to_string())
-                .collect();
-            
-            if !fields.is_empty() {
-                records.push(fields);
-            }
-        }
-
-        Ok(records)
+        Ok(())
     }
 
-    pub fn validate_record(&self, record: &[String]) -> bool {
-        !record.is_empty() && record.iter().all(|field| !field.is_empty())
-    }
-
-    pub fn calculate_statistics(&self, records: &[Vec<String>], column_index: usize) -> Option<(f64, f64)> {
-        let values: Vec<f64> = records.iter()
-            .filter_map(|record| record.get(column_index).and_then(|s| s.parse::<f64>().ok()))
-            .collect();
-
-        if values.is_empty() {
+    pub fn calculate_mean(&self) -> Option<f64> {
+        if self.records.is_empty() {
             return None;
         }
+        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        Some(sum / self.records.len() as f64)
+    }
 
-        let sum: f64 = values.iter().sum();
-        let count = values.len() as f64;
-        let mean = sum / count;
+    pub fn filter_by_category(&self, category: &str) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|r| r.category == category)
+            .collect()
+    }
 
-        let variance: f64 = values.iter()
-            .map(|value| (value - mean).powi(2))
-            .sum::<f64>() / count;
+    pub fn max_value(&self) -> Option<f64> {
+        self.records.iter().map(|r| r.value).reduce(f64::max)
+    }
 
-        Some((mean, variance.sqrt()))
+    pub fn min_value(&self) -> Option<f64> {
+        self.records.iter().map(|r| r.value).reduce(f64::min)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
     use tempfile::NamedTempFile;
+    use std::io::Write;
 
     #[test]
     fn test_data_processing() {
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "name,age,salary").unwrap();
-        writeln!(temp_file, "Alice,30,50000.0").unwrap();
-        writeln!(temp_file, "Bob,25,45000.0").unwrap();
-        writeln!(temp_file, "Charlie,35,55000.0").unwrap();
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "id,value,category").unwrap();
+        writeln!(file, "1,10.5,A").unwrap();
+        writeln!(file, "2,20.3,B").unwrap();
+        writeln!(file, "3,15.7,A").unwrap();
 
-        let processor = DataProcessor::new(',', true);
-        let records = processor.process_file(temp_file.path()).unwrap();
-        
-        assert_eq!(records.len(), 3);
-        assert!(processor.validate_record(&records[0]));
-        
-        let stats = processor.calculate_statistics(&records, 2);
-        assert!(stats.is_some());
-        
-        let (mean, std_dev) = stats.unwrap();
-        assert!((mean - 50000.0).abs() < 0.1);
-        assert!(std_dev > 0.0);
+        let mut processor = DataProcessor::new();
+        processor.load_from_csv(file.path().to_str().unwrap()).unwrap();
+
+        assert_eq!(processor.calculate_mean(), Some(15.5));
+        assert_eq!(processor.filter_by_category("A").len(), 2);
+        assert_eq!(processor.max_value(), Some(20.3));
+        assert_eq!(processor.min_value(), Some(10.5));
     }
-}use csv::Reader;
-use serde::Deserialize;
-use std::error::Error;
-use std::fs::File;
-
-#[derive(Debug, Deserialize)]
-struct Record {
-    id: u32,
-    name: String,
-    value: f64,
-    category: String,
-}
-
-pub fn process_data_file(file_path: &str) -> Result<Vec<Record>, Box<dyn Error>> {
-    let file = File::open(file_path)?;
-    let mut reader = Reader::from_reader(file);
-    let mut records = Vec::new();
-
-    for result in reader.deserialize() {
-        let record: Record = result?;
-        if record.value >= 0.0 {
-            records.push(record);
-        }
-    }
-
-    Ok(records)
-}
-
-pub fn calculate_statistics(records: &[Record]) -> (f64, f64, f64) {
-    let count = records.len() as f64;
-    if count == 0.0 {
-        return (0.0, 0.0, 0.0);
-    }
-
-    let sum: f64 = records.iter().map(|r| r.value).sum();
-    let mean = sum / count;
-    
-    let variance: f64 = records.iter()
-        .map(|r| (r.value - mean).powi(2))
-        .sum::<f64>() / count;
-    
-    let std_dev = variance.sqrt();
-    
-    (sum, mean, std_dev)
-}
-
-pub fn filter_by_category(records: Vec<Record>, category: &str) -> Vec<Record> {
-    records.into_iter()
-        .filter(|r| r.category == category)
-        .collect()
 }

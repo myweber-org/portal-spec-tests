@@ -173,4 +173,104 @@ mod tests {
         assert_eq!(config.get_or_default("EXISTING_KEY", "default"), "actual_value");
         assert_eq!(config.get_or_default("MISSING_KEY", "default_value"), "default_value");
     }
+}use std::collections::HashMap;
+use std::env;
+use std::fs;
+
+pub struct Config {
+    values: HashMap<String, String>,
+}
+
+impl Config {
+    pub fn from_file(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let content = fs::read_to_string(path)?;
+        let mut values = HashMap::new();
+
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+
+            if let Some((key, value)) = line.split_once('=') {
+                let key = key.trim().to_string();
+                let processed_value = Self::process_value(value.trim());
+                values.insert(key, processed_value);
+            }
+        }
+
+        Ok(Config { values })
+    }
+
+    fn process_value(raw: &str) -> String {
+        let mut result = String::new();
+        let mut chars = raw.chars().peekable();
+
+        while let Some(ch) = chars.next() {
+            if ch == '$' && chars.peek() == Some(&'{') {
+                chars.next(); // Skip '{'
+                let mut var_name = String::new();
+                while let Some(ch) = chars.next() {
+                    if ch == '}' {
+                        break;
+                    }
+                    var_name.push(ch);
+                }
+                let env_value = env::var(&var_name).unwrap_or_else(|_| String::new());
+                result.push_str(&env_value);
+            } else {
+                result.push(ch);
+            }
+        }
+
+        result
+    }
+
+    pub fn get(&self, key: &str) -> Option<&String> {
+        self.values.get(key)
+    }
+
+    pub fn get_or_default(&self, key: &str, default: &str) -> String {
+        self.values.get(key).map(|s| s.as_str()).unwrap_or(default).to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_basic_parsing() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "APP_NAME=MyApp").unwrap();
+        writeln!(file, "VERSION=1.0.0").unwrap();
+        writeln!(file, "# This is a comment").unwrap();
+        writeln!(file, "EMPTY=").unwrap();
+
+        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.get("APP_NAME"), Some(&"MyApp".to_string()));
+        assert_eq!(config.get("VERSION"), Some(&"1.0.0".to_string()));
+        assert_eq!(config.get("EMPTY"), Some(&"".to_string()));
+        assert_eq!(config.get("NONEXISTENT"), None);
+    }
+
+    #[test]
+    fn test_env_substitution() {
+        env::set_var("DB_HOST", "localhost");
+        env::set_var("DB_PORT", "5432");
+
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "HOST=${DB_HOST}").unwrap();
+        writeln!(file, "PORT=${DB_PORT}").unwrap();
+        writeln!(file, "URL=${DB_HOST}:${DB_PORT}").unwrap();
+        writeln!(file, "MISSING=${NONEXISTENT_VAR}").unwrap();
+
+        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.get("HOST"), Some(&"localhost".to_string()));
+        assert_eq!(config.get("PORT"), Some(&"5432".to_string()));
+        assert_eq!(config.get("URL"), Some(&"localhost:5432".to_string()));
+        assert_eq!(config.get("MISSING"), Some(&"".to_string()));
+    }
 }

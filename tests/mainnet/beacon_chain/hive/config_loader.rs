@@ -96,4 +96,57 @@ mod tests {
         assert_eq!(config.server_port, 9090);
         env::remove_var("SERVER_PORT");
     }
+}use std::collections::HashMap;
+use std::env;
+
+pub struct Config {
+    values: HashMap<String, String>,
+}
+
+impl Config {
+    pub fn new() -> Self {
+        let mut values = HashMap::new();
+        
+        for (key, value) in env::vars() {
+            if key.starts_with("APP_") {
+                values.insert(key.to_lowercase(), value);
+            }
+        }
+        
+        Config { values }
+    }
+    
+    pub fn get(&self, key: &str) -> Option<&String> {
+        let formatted_key = format!("app_{}", key.to_lowercase());
+        self.values.get(&formatted_key)
+    }
+    
+    pub fn get_or_default(&self, key: &str, default: &str) -> String {
+        self.get(key)
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| default.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_config_loading() {
+        env::set_var("APP_DATABASE_URL", "postgres://localhost:5432");
+        env::set_var("APP_LOG_LEVEL", "debug");
+        env::set_var("OTHER_VAR", "should_be_ignored");
+        
+        let config = Config::new();
+        
+        assert_eq!(config.get("database_url"), Some(&"postgres://localhost:5432".to_string()));
+        assert_eq!(config.get("log_level"), Some(&"debug".to_string()));
+        assert_eq!(config.get("other_var"), None);
+        assert_eq!(config.get_or_default("missing_key", "default_value"), "default_value");
+        
+        env::remove_var("APP_DATABASE_URL");
+        env::remove_var("APP_LOG_LEVEL");
+        env::remove_var("OTHER_VAR");
+    }
 }

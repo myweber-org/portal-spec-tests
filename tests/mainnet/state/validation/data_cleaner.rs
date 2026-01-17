@@ -86,3 +86,61 @@ mod tests {
         assert_eq!(stats.get("count"), Some(&5.0));
     }
 }
+use std::collections::HashSet;
+
+pub struct DataCleaner {
+    pub items: Vec<String>,
+}
+
+impl DataCleaner {
+    pub fn new() -> Self {
+        DataCleaner { items: Vec::new() }
+    }
+
+    pub fn add_item(&mut self, item: &str) {
+        self.items.push(item.to_string());
+    }
+
+    pub fn remove_duplicates(&mut self) {
+        let mut seen = HashSet::new();
+        self.items.retain(|item| seen.insert(item.clone()));
+    }
+
+    pub fn normalize_strings(&mut self) {
+        for item in &mut self.items {
+            *item = item.trim().to_lowercase();
+        }
+    }
+
+    pub fn clean(&mut self) {
+        self.normalize_strings();
+        self.remove_duplicates();
+    }
+
+    pub fn get_items(&self) -> &Vec<String> {
+        &self.items
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_data_cleaner() {
+        let mut cleaner = DataCleaner::new();
+        cleaner.add_item("  Apple  ");
+        cleaner.add_item("apple");
+        cleaner.add_item("Banana");
+        cleaner.add_item("banana ");
+        cleaner.add_item("Orange");
+
+        cleaner.clean();
+        let items = cleaner.get_items();
+
+        assert_eq!(items.len(), 3);
+        assert!(items.contains(&"apple".to_string()));
+        assert!(items.contains(&"banana".to_string()));
+        assert!(items.contains(&"orange".to_string()));
+    }
+}

@@ -119,4 +119,129 @@ mod tests {
         
         assert!(generator.generate().is_err());
     }
+}use rand::Rng;
+use std::io;
+
+const DEFAULT_LENGTH: usize = 16;
+const UPPERCASE: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+const LOWERCASE: &str = "abcdefghijklmnopqrstuvwxyz";
+const NUMBERS: &str = "0123456789";
+const SYMBOLS: &str = "!@#$%^&*()_+-=[]{}|;:,.<>?";
+
+fn main() {
+    println!("Secure Password Generator");
+    println!("==========================");
+    
+    let length = get_password_length();
+    let char_set = select_character_set();
+    
+    let password = generate_password(length, &char_set);
+    println!("\nGenerated Password: {}", password);
+    println!("Password Strength: {}", assess_password_strength(&password));
+}
+
+fn get_password_length() -> usize {
+    loop {
+        println!("\nEnter password length (default: {}): ", DEFAULT_LENGTH);
+        let mut input = String::new();
+        
+        io::stdin()
+            .read_line(&mut input)
+            .expect("Failed to read line");
+            
+        let input = input.trim();
+        
+        if input.is_empty() {
+            return DEFAULT_LENGTH;
+        }
+        
+        match input.parse::<usize>() {
+            Ok(length) if length >= 8 && length <= 128 => return length,
+            Ok(_) => println!("Password length must be between 8 and 128 characters"),
+            Err(_) => println!("Please enter a valid number"),
+        }
+    }
+}
+
+fn select_character_set() -> String {
+    let mut char_set = String::new();
+    
+    println!("\nSelect character sets to include:");
+    println!("1. Uppercase letters (A-Z)");
+    println!("2. Lowercase letters (a-z)");
+    println!("3. Numbers (0-9)");
+    println!("4. Symbols (!@#$% etc.)");
+    println!("5. All of the above (default)");
+    
+    let mut input = String::new();
+    io::stdin()
+        .read_line(&mut input)
+        .expect("Failed to read line");
+        
+    let choice = input.trim();
+    
+    if choice == "1" || choice == "2" || choice == "3" || choice == "4" {
+        if choice.contains('1') || choice == "5" || choice.is_empty() {
+            char_set.push_str(UPPERCASE);
+        }
+        if choice.contains('2') || choice == "5" || choice.is_empty() {
+            char_set.push_str(LOWERCASE);
+        }
+        if choice.contains('3') || choice == "5" || choice.is_empty() {
+            char_set.push_str(NUMBERS);
+        }
+        if choice.contains('4') || choice == "5" || choice.is_empty() {
+            char_set.push_str(SYMBOLS);
+        }
+    } else {
+        char_set.push_str(UPPERCASE);
+        char_set.push_str(LOWERCASE);
+        char_set.push_str(NUMBERS);
+        char_set.push_str(SYMBOLS);
+    }
+    
+    if char_set.is_empty() {
+        char_set.push_str(UPPERCASE);
+        char_set.push_str(LOWERCASE);
+        char_set.push_str(NUMBERS);
+    }
+    
+    char_set
+}
+
+fn generate_password(length: usize, char_set: &str) -> String {
+    let mut rng = rand::thread_rng();
+    let char_set_bytes = char_set.as_bytes();
+    
+    (0..length)
+        .map(|_| {
+            let idx = rng.gen_range(0..char_set_bytes.len());
+            char_set_bytes[idx] as char
+        })
+        .collect()
+}
+
+fn assess_password_strength(password: &str) -> String {
+    let length = password.len();
+    let has_upper = password.chars().any(|c| c.is_ascii_uppercase());
+    let has_lower = password.chars().any(|c| c.is_ascii_lowercase());
+    let has_digit = password.chars().any(|c| c.is_ascii_digit());
+    let has_symbol = password.chars().any(|c| !c.is_alphanumeric());
+    
+    let mut score = 0;
+    
+    if length >= 12 { score += 2; }
+    else if length >= 8 { score += 1; }
+    
+    if has_upper { score += 1; }
+    if has_lower { score += 1; }
+    if has_digit { score += 1; }
+    if has_symbol { score += 1; }
+    
+    match score {
+        0..=2 => "Weak",
+        3..=4 => "Moderate",
+        5..=6 => "Strong",
+        _ => "Very Strong",
+    }.to_string()
 }

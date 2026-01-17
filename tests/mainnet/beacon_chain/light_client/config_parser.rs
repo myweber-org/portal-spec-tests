@@ -176,4 +176,78 @@ mod tests {
             assert_eq!(config.get("PATH"), Some(&format!("/home/{}/data", user)));
         }
     }
+}use std::fs;
+use std::collections::HashMap;
+
+#[derive(Debug)]
+pub struct Config {
+    pub settings: HashMap<String, String>,
+    pub thresholds: HashMap<String, f64>,
+}
+
+impl Config {
+    pub fn from_file(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let content = fs::read_to_string(path)?;
+        Self::from_str(&content)
+    }
+
+    pub fn from_str(content: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let parsed: toml::Value = toml::from_str(content)?;
+        
+        let mut settings = HashMap::new();
+        let mut thresholds = HashMap::new();
+
+        if let Some(table) = parsed.as_table() {
+            if let Some(settings_table) = table.get("settings").and_then(|v| v.as_table()) {
+                for (key, value) in settings_table {
+                    if let Some(str_val) = value.as_str() {
+                        settings.insert(key.clone(), str_val.to_string());
+                    }
+                }
+            }
+
+            if let Some(thresholds_table) = table.get("thresholds").and_then(|v| v.as_table()) {
+                for (key, value) in thresholds_table {
+                    if let Some(float_val) = value.as_float() {
+                        thresholds.insert(key.clone(), float_val);
+                    }
+                }
+            }
+        }
+
+        Ok(Config { settings, thresholds })
+    }
+
+    pub fn get_setting(&self, key: &str) -> Option<&String> {
+        self.settings.get(key)
+    }
+
+    pub fn get_threshold(&self, key: &str) -> Option<f64> {
+        self.thresholds.get(key).copied()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_config_parsing() {
+        let config_str = r#"
+            [settings]
+            host = "localhost"
+            port = "8080"
+            
+            [thresholds]
+            temperature = 75.5
+            pressure = 1.2
+        "#;
+
+        let config = Config::from_str(config_str).unwrap();
+        
+        assert_eq!(config.get_setting("host"), Some(&"localhost".to_string()));
+        assert_eq!(config.get_setting("port"), Some(&"8080".to_string()));
+        assert_eq!(config.get_threshold("temperature"), Some(75.5));
+        assert_eq!(config.get_threshold("pressure"), Some(1.2));
+    }
 }

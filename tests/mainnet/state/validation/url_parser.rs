@@ -1,94 +1,59 @@
-
+use regex::Regex;
 use std::collections::HashMap;
 
-pub struct QueryParser;
+pub struct UrlParser;
 
-impl QueryParser {
-    pub fn parse(query: &str) -> HashMap<String, String> {
+impl UrlParser {
+    pub fn parse_domain(url: &str) -> Option<String> {
+        let re = Regex::new(r"https?://([^/]+)").unwrap();
+        re.captures(url)
+            .and_then(|cap| cap.get(1))
+            .map(|m| m.as_str().to_string())
+    }
+
+    pub fn parse_query_params(url: &str) -> HashMap<String, String> {
         let mut params = HashMap::new();
+        let query_start = url.find('?');
         
-        if query.is_empty() {
-            return params;
-        }
-        
-        for pair in query.split('&') {
-            let mut parts = pair.splitn(2, '=');
-            if let Some(key) = parts.next() {
-                let value = parts.next().unwrap_or("");
-                params.insert(
-                    key.to_string(),
-                    urlencoding::decode(value)
-                        .unwrap_or_else(|_| value.into())
-                        .to_string(),
-                );
+        if let Some(start) = query_start {
+            let query_str = &url[start + 1..];
+            for pair in query_str.split('&') {
+                let mut parts = pair.split('=');
+                if let (Some(key), Some(value)) = (parts.next(), parts.next()) {
+                    params.insert(key.to_string(), value.to_string());
+                }
             }
         }
-        
         params
     }
-    
-    pub fn build(params: &HashMap<String, String>) -> String {
-        let mut pairs = Vec::new();
-        
-        for (key, value) in params {
-            let encoded_key = urlencoding::encode(key);
-            let encoded_value = urlencoding::encode(value);
-            pairs.push(format!("{}={}", encoded_key, encoded_value));
-        }
-        
-        pairs.join("&")
+
+    pub fn is_valid_url(url: &str) -> bool {
+        url.starts_with("http://") || url.starts_with("https://")
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
-    fn test_parse_empty() {
-        let result = QueryParser::parse("");
-        assert!(result.is_empty());
+    fn test_parse_domain() {
+        let url = "https://www.example.com/path?query=test";
+        assert_eq!(UrlParser::parse_domain(url), Some("www.example.com".to_string()));
     }
-    
+
     #[test]
-    fn test_parse_single_param() {
-        let result = QueryParser::parse("name=john");
-        assert_eq!(result.get("name"), Some(&"john".to_string()));
+    fn test_parse_query_params() {
+        let url = "https://example.com?name=john&age=30";
+        let params = UrlParser::parse_query_params(url);
+        assert_eq!(params.get("name"), Some(&"john".to_string()));
+        assert_eq!(params.get("age"), Some(&"30".to_string()));
     }
-    
+
     #[test]
-    fn test_parse_multiple_params() {
-        let result = QueryParser::parse("name=john&age=25&city=new+york");
-        assert_eq!(result.get("name"), Some(&"john".to_string()));
-        assert_eq!(result.get("age"), Some(&"25".to_string()));
-        assert_eq!(result.get("city"), Some(&"new york".to_string()));
-    }
-    
-    #[test]
-    fn test_parse_encoded_values() {
-        let result = QueryParser::parse("query=hello%20world&special=%26%3D%3F");
-        assert_eq!(result.get("query"), Some(&"hello world".to_string()));
-        assert_eq!(result.get("special"), Some(&"&=?".to_string()));
-    }
-    
-    #[test]
-    fn test_build_params() {
-        let mut params = HashMap::new();
-        params.insert("name".to_string(), "john doe".to_string());
-        params.insert("age".to_string(), "30".to_string());
-        
-        let result = QueryParser::build(&params);
-        assert!(result.contains("name=john%20doe"));
-        assert!(result.contains("age=30"));
-    }
-    
-    #[test]
-    fn test_round_trip() {
-        let original = "name=john&age=25&city=new+york";
-        let parsed = QueryParser::parse(original);
-        let rebuilt = QueryParser::build(&parsed);
-        
-        let reparsed = QueryParser::parse(&rebuilt);
-        assert_eq!(parsed, reparsed);
+    fn test_is_valid_url() {
+        assert!(UrlParser::is_valid_url("https://example.com"));
+        assert!(UrlParser::is_valid_url("http://example.com"));
+        assert!(!UrlParser::is_valid_url("ftp://example.com"));
     }
 }

@@ -1,199 +1,104 @@
-use std::collections::HashMap;
 
-#[derive(Debug, PartialEq)]
-pub enum ParseError {
-    MalformedQuery,
-    InvalidEncoding,
+use regex::Regex;
+use std::collections::HashSet;
+
+pub struct UrlParser {
+    domain_blacklist: HashSet<String>,
 }
-
-pub fn parse_query_string(query: &str) -> Result<HashMap<String, String>, ParseError> {
-    if query.is_empty() {
-        return Ok(HashMap::new());
-    }
-
-    let mut params = HashMap::new();
-    
-    for pair in query.split('&') {
-        let mut parts = pair.splitn(2, '=');
-        
-        let key = parts.next().ok_or(ParseError::MalformedQuery)?;
-        let value = parts.next().unwrap_or("");
-        
-        if key.is_empty() {
-            return Err(ParseError::MalformedQuery);
-        }
-        
-        let decoded_key = percent_decode(key).map_err(|_| ParseError::InvalidEncoding)?;
-        let decoded_value = percent_decode(value).map_err(|_| ParseError::InvalidEncoding)?;
-        
-        params.insert(decoded_key, decoded_value);
-    }
-    
-    Ok(params)
-}
-
-fn percent_decode(input: &str) -> Result<String, ()> {
-    let mut result = Vec::new();
-    let mut bytes = input.bytes();
-    
-    while let Some(byte) = bytes.next() {
-        if byte == b'%' {
-            let hex_high = bytes.next().ok_or(())?;
-            let hex_low = bytes.next().ok_or(())?;
-            
-            let decoded = hex_to_byte(hex_high, hex_low).ok_or(())?;
-            result.push(decoded);
-        } else if byte == b'+' {
-            result.push(b' ');
-        } else {
-            result.push(byte);
-        }
-    }
-    
-    String::from_utf8(result).map_err(|_| ())
-}
-
-fn hex_to_byte(high: u8, low: u8) -> Option<u8> {
-    let to_hex = |c: u8| match c {
-        b'0'..=b'9' => Some(c - b'0'),
-        b'a'..=b'f' => Some(c - b'a' + 10),
-        b'A'..=b'F' => Some(c - b'A' + 10),
-        _ => None,
-    };
-    
-    let high_val = to_hex(high)?;
-    let low_val = to_hex(low)?;
-    
-    Some((high_val << 4) | low_val)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    
-    #[test]
-    fn test_empty_query() {
-        let result = parse_query_string("").unwrap();
-        assert!(result.is_empty());
-    }
-    
-    #[test]
-    fn test_single_param() {
-        let result = parse_query_string("name=john").unwrap();
-        assert_eq!(result.get("name"), Some(&"john".to_string()));
-    }
-    
-    #[test]
-    fn test_multiple_params() {
-        let result = parse_query_string("name=john&age=25&city=new+york").unwrap();
-        assert_eq!(result.get("name"), Some(&"john".to_string()));
-        assert_eq!(result.get("age"), Some(&"25".to_string()));
-        assert_eq!(result.get("city"), Some(&"new york".to_string()));
-    }
-    
-    #[test]
-    fn test_percent_encoding() {
-        let result = parse_query_string("message=hello%20world%21").unwrap();
-        assert_eq!(result.get("message"), Some(&"hello world!".to_string()));
-    }
-    
-    #[test]
-    fn test_malformed_query() {
-        let result = parse_query_string("=value");
-        assert_eq!(result, Err(ParseError::MalformedQuery));
-    }
-    
-    #[test]
-    fn test_invalid_encoding() {
-        let result = parse_query_string("test=hello%2Gworld");
-        assert_eq!(result, Err(ParseError::InvalidEncoding));
-    }
-}
-use std::collections::HashMap;
-
-pub struct UrlParser;
 
 impl UrlParser {
-    pub fn parse_domain(url: &str) -> Option<String> {
-        let url_lower = url.to_lowercase();
-        let prefixes = ["http://", "https://", "www."];
+    pub fn new() -> Self {
+        let mut blacklist = HashSet::new();
+        blacklist.insert("localhost".to_string());
+        blacklist.insert("127.0.0.1".to_string());
+        blacklist.insert("::1".to_string());
+        blacklist.insert("0.0.0.0".to_string());
         
-        let mut processed_url = url_lower.as_str();
-        for prefix in &prefixes {
-            if processed_url.starts_with(prefix) {
-                processed_url = &processed_url[prefix.len()..];
-            }
-        }
-        
-        let domain_end = processed_url.find('/').unwrap_or(processed_url.len());
-        let domain = &processed_url[..domain_end];
-        
-        if domain.is_empty() {
-            None
-        } else {
-            Some(domain.to_string())
+        UrlParser {
+            domain_blacklist: blacklist,
         }
     }
-    
-    pub fn parse_query_params(url: &str) -> HashMap<String, String> {
-        let mut params = HashMap::new();
+
+    pub fn extract_domain(&self, url: &str) -> Option<String> {
+        let re = Regex::new(r"^(?:https?://)?(?:www\.)?([^:/]+)").unwrap();
         
-        if let Some(query_start) = url.find('?') {
-            let query_string = &url[query_start + 1..];
-            
-            for pair in query_string.split('&') {
-                let parts: Vec<&str> = pair.split('=').collect();
-                if parts.len() == 2 {
-                    params.insert(
-                        parts[0].to_string(),
-                        parts[1].to_string()
-                    );
-                }
-            }
-        }
-        
-        params
+        re.captures(url)
+            .and_then(|caps| caps.get(1))
+            .map(|m| m.as_str().to_lowercase())
+            .filter(|domain| !self.domain_blacklist.contains(domain))
     }
-    
-    pub fn is_valid_url(url: &str) -> bool {
-        url.contains("://") && 
-        (url.starts_with("http://") || url.starts_with("https://"))
+
+    pub fn is_valid_url(&self, url: &str) -> bool {
+        let url_pattern = Regex::new(
+            r"^(https?://)?(www\.)?[a-zA-Z0-9-]+(\.[a-zA-Z]{2,})+(:\d+)?(/[^\s]*)?$"
+        ).unwrap();
+        
+        url_pattern.is_match(url) && self.extract_domain(url).is_some()
+    }
+
+    pub fn normalize_url(&self, url: &str) -> Option<String> {
+        if !self.is_valid_url(url) {
+            return None;
+        }
+
+        let domain = self.extract_domain(url)?;
+        let re = Regex::new(r"^(https?://)?(www\.)?").unwrap();
+        let clean_url = re.replace(url, "");
+        
+        Some(format!("https://www.{}", clean_url))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
-    fn test_parse_domain() {
+    fn test_domain_extraction() {
+        let parser = UrlParser::new();
+        
         assert_eq!(
-            UrlParser::parse_domain("https://www.example.com/path"),
+            parser.extract_domain("https://www.example.com/path"),
             Some("example.com".to_string())
         );
+        
         assert_eq!(
-            UrlParser::parse_domain("http://subdomain.example.co.uk/"),
+            parser.extract_domain("http://subdomain.example.co.uk:8080"),
             Some("subdomain.example.co.uk".to_string())
         );
-        assert_eq!(UrlParser::parse_domain("invalid-url"), None);
-    }
-    
-    #[test]
-    fn test_parse_query_params() {
-        let url = "https://example.com/search?q=rust&page=2&sort=desc";
-        let params = UrlParser::parse_query_params(url);
         
-        assert_eq!(params.get("q"), Some(&"rust".to_string()));
-        assert_eq!(params.get("page"), Some(&"2".to_string()));
-        assert_eq!(params.get("sort"), Some(&"desc".to_string()));
-        assert_eq!(params.len(), 3);
+        assert_eq!(
+            parser.extract_domain("ftp://invalid.protocol"),
+            None
+        );
     }
-    
+
     #[test]
-    fn test_is_valid_url() {
-        assert!(UrlParser::is_valid_url("https://example.com"));
-        assert!(UrlParser::is_valid_url("http://localhost:8080"));
-        assert!(!UrlParser::is_valid_url("example.com"));
-        assert!(!UrlParser::is_valid_url("ftp://example.com"));
+    fn test_blacklist_validation() {
+        let parser = UrlParser::new();
+        
+        assert_eq!(parser.extract_domain("http://localhost/api"), None);
+        assert_eq!(parser.extract_domain("https://127.0.0.1:3000"), None);
+        assert_eq!(parser.is_valid_url("http://0.0.0.0"), false);
+    }
+
+    #[test]
+    fn test_url_normalization() {
+        let parser = UrlParser::new();
+        
+        assert_eq!(
+            parser.normalize_url("example.com"),
+            Some("https://www.example.com".to_string())
+        );
+        
+        assert_eq!(
+            parser.normalize_url("http://example.com"),
+            Some("https://www.example.com".to_string())
+        );
+        
+        assert_eq!(
+            parser.normalize_url("https://example.com/path?query=1"),
+            Some("https://www.example.com/path?query=1".to_string())
+        );
     }
 }

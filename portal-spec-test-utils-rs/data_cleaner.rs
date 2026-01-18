@@ -106,4 +106,91 @@ mod tests {
         let result = clean_and_sort_data(&input);
         assert_eq!(result, vec!["apple", "banana", "cherry"]);
     }
+}use std::collections::HashSet;
+use std::hash::Hash;
+
+pub struct DataCleaner<T> {
+    seen: HashSet<T>,
+}
+
+impl<T> DataCleaner<T>
+where
+    T: Hash + Eq + Clone,
+{
+    pub fn new() -> Self {
+        DataCleaner {
+            seen: HashSet::new(),
+        }
+    }
+
+    pub fn deduplicate(&mut self, items: Vec<T>) -> Vec<T> {
+        let mut result = Vec::new();
+        for item in items {
+            if self.seen.insert(item.clone()) {
+                result.push(item);
+            }
+        }
+        result
+    }
+
+    pub fn normalize_strings(strings: Vec<String>) -> Vec<String> {
+        strings
+            .into_iter()
+            .map(|s| s.trim().to_lowercase())
+            .collect()
+    }
+
+    pub fn reset(&mut self) {
+        self.seen.clear();
+    }
+
+    pub fn get_unique_count(&self) -> usize {
+        self.seen.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_deduplicate_integers() {
+        let mut cleaner = DataCleaner::new();
+        let data = vec![1, 2, 2, 3, 4, 4, 4, 5];
+        let deduped = cleaner.deduplicate(data);
+        assert_eq!(deduped, vec![1, 2, 3, 4, 5]);
+        assert_eq!(cleaner.get_unique_count(), 5);
+    }
+
+    #[test]
+    fn test_deduplicate_strings() {
+        let mut cleaner = DataCleaner::new();
+        let data = vec!["apple", "banana", "apple", "orange"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let deduped = cleaner.deduplicate(data);
+        assert_eq!(deduped.len(), 3);
+    }
+
+    #[test]
+    fn test_normalize_strings() {
+        let strings = vec![
+            "  HELLO  ".to_string(),
+            "World".to_string(),
+            "  RuSt  ".to_string(),
+        ];
+        let normalized = DataCleaner::normalize_strings(strings);
+        assert_eq!(normalized, vec!["hello", "world", "rust"]);
+    }
+
+    #[test]
+    fn test_reset() {
+        let mut cleaner = DataCleaner::new();
+        let data = vec![1, 2, 3];
+        cleaner.deduplicate(data);
+        assert_eq!(cleaner.get_unique_count(), 3);
+        cleaner.reset();
+        assert_eq!(cleaner.get_unique_count(), 0);
+    }
 }

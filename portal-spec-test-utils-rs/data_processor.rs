@@ -313,3 +313,140 @@ mod tests {
         assert!(result.is_err());
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug)]
+pub struct DataRecord {
+    pub id: u32,
+    pub value: f64,
+    pub category: String,
+    pub valid: bool,
+}
+
+pub struct DataProcessor {
+    records: Vec<DataRecord>,
+    validation_threshold: f64,
+}
+
+impl DataProcessor {
+    pub fn new(threshold: f64) -> Self {
+        DataProcessor {
+            records: Vec::new(),
+            validation_threshold: threshold,
+        }
+    }
+
+    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<usize, Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut count = 0;
+
+        for (line_num, line) in reader.lines().enumerate() {
+            let line = line?;
+            
+            if line_num == 0 {
+                continue;
+            }
+
+            let parts: Vec<&str> = line.split(',').collect();
+            if parts.len() != 3 {
+                continue;
+            }
+
+            let id = match parts[0].parse::<u32>() {
+                Ok(val) => val,
+                Err(_) => continue,
+            };
+
+            let value = match parts[1].parse::<f64>() {
+                Ok(val) => val,
+                Err(_) => continue,
+            };
+
+            let category = parts[2].to_string();
+            let valid = value >= self.validation_threshold;
+
+            self.records.push(DataRecord {
+                id,
+                value,
+                category,
+                valid,
+            });
+
+            count += 1;
+        }
+
+        Ok(count)
+    }
+
+    pub fn filter_valid_records(&self) -> Vec<&DataRecord> {
+        self.records
+            .iter()
+            .filter(|record| record.valid)
+            .collect()
+    }
+
+    pub fn calculate_statistics(&self) -> (f64, f64, usize) {
+        let valid_count = self.records.iter().filter(|r| r.valid).count();
+        
+        if valid_count == 0 {
+            return (0.0, 0.0, 0);
+        }
+
+        let sum: f64 = self.records
+            .iter()
+            .filter(|r| r.valid)
+            .map(|r| r.value)
+            .sum();
+
+        let avg = sum / valid_count as f64;
+
+        let variance: f64 = self.records
+            .iter()
+            .filter(|r| r.valid)
+            .map(|r| (r.value - avg).powi(2))
+            .sum::<f64>() / valid_count as f64;
+
+        (avg, variance.sqrt(), valid_count)
+    }
+
+    pub fn get_records_by_category(&self, category: &str) -> Vec<&DataRecord> {
+        self.records
+            .iter()
+            .filter(|record| record.category == category && record.valid)
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_data_processing() {
+        let mut processor = DataProcessor::new(10.0);
+        
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,value,category").unwrap();
+        writeln!(temp_file, "1,15.5,TypeA").unwrap();
+        writeln!(temp_file, "2,8.2,TypeB").unwrap();
+        writeln!(temp_file, "3,22.1,TypeA").unwrap();
+        
+        let count = processor.load_from_csv(temp_file.path()).unwrap();
+        assert_eq!(count, 3);
+        
+        let valid_records = processor.filter_valid_records();
+        assert_eq!(valid_records.len(), 2);
+        
+        let stats = processor.calculate_statistics();
+        assert!(stats.0 > 0.0);
+        
+        let type_a_records = processor.get_records_by_category("TypeA");
+        assert_eq!(type_a_records.len(), 2);
+    }
+}

@@ -1,100 +1,82 @@
-use serde::Deserialize;
+use std::collections::HashMap;
 use std::env;
 use std::fs;
-use std::path::Path;
 
-#[derive(Debug, Deserialize)]
-pub struct AppConfig {
-    pub server_port: u16,
+pub struct Config {
     pub database_url: String,
-    pub log_level: String,
-    pub cache_ttl: u32,
+    pub port: u16,
+    pub debug_mode: bool,
+    pub api_keys: HashMap<String, String>,
 }
 
-impl AppConfig {
-    pub fn load() -> Result<Self, Box<dyn std::error::Error>> {
-        let config_path = env::var("CONFIG_PATH")
-            .unwrap_or_else(|_| "config.toml".to_string());
-
-        if !Path::new(&config_path).exists() {
-            return Err("Configuration file not found".into());
+impl Config {
+    pub fn load() -> Result<Self, String> {
+        let config_path = env::var("CONFIG_PATH").unwrap_or_else(|_| "config.toml".to_string());
+        
+        let file_contents = fs::read_to_string(&config_path)
+            .map_err(|e| format!("Failed to read config file {}: {}", config_path, e))?;
+        
+        let mut config: HashMap<String, toml::Value> = toml::from_str(&file_contents)
+            .map_err(|e| format!("Failed to parse config file: {}", e))?;
+        
+        Self::apply_env_overrides(&mut config);
+        
+        Ok(Config {
+            database_url: Self::get_string(&config, "database_url")?,
+            port: Self::get_u16(&config, "port")?,
+            debug_mode: Self::get_bool(&config, "debug_mode")?,
+            api_keys: Self::get_api_keys(&config)?,
+        })
+    }
+    
+    fn apply_env_overrides(config: &mut HashMap<String, toml::Value>) {
+        if let Ok(db_url) = env::var("DATABASE_URL") {
+            config.insert("database_url".to_string(), toml::Value::String(db_url));
         }
-
-        let config_content = fs::read_to_string(&config_path)?;
-        let mut config: AppConfig = toml::from_str(&config_content)?;
-
-        if let Ok(env_port) = env::var("SERVER_PORT") {
-            if let Ok(port) = env_port.parse() {
-                config.server_port = port;
+        
+        if let Ok(port) = env::var("PORT") {
+            if let Ok(port_num) = port.parse::<u16>() {
+                config.insert("port".to_string(), toml::Value::Integer(port_num as i64));
             }
         }
-
-        if let Ok(env_db_url) = env::var("DATABASE_URL") {
-            config.database_url = env_db_url;
+        
+        if let Ok(debug) = env::var("DEBUG_MODE") {
+            let debug_bool = debug.to_lowercase() == "true" || debug == "1";
+            config.insert("debug_mode".to_string(), toml::Value::Boolean(debug_bool));
         }
-
-        config.validate()?;
-        Ok(config)
     }
-
-    fn validate(&self) -> Result<(), String> {
-        if self.server_port == 0 {
-            return Err("Server port cannot be zero".into());
-        }
-
-        if self.database_url.is_empty() {
-            return Err("Database URL cannot be empty".into());
-        }
-
-        let valid_log_levels = ["error", "warn", "info", "debug", "trace"];
-        if !valid_log_levels.contains(&self.log_level.as_str()) {
-            return Err(format!("Invalid log level: {}", self.log_level));
-        }
-
-        if self.cache_ttl > 86400 {
-            return Err("Cache TTL cannot exceed 24 hours".into());
-        }
-
-        Ok(())
+    
+    fn get_string(config: &HashMap<String, toml::Value>, key: &str) -> Result<String, String> {
+        config.get(key)
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .ok_or_else(|| format!("Missing or invalid string value for key: {}", key))
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::env;
-    use tempfile::NamedTempFile;
-
-    #[test]
-    fn test_config_load_default() {
-        let config_file = NamedTempFile::new().unwrap();
-        let config_content = r#"
-            server_port = 8080
-            database_url = "postgres://localhost:5432/mydb"
-            log_level = "info"
-            cache_ttl = 300
-        "#;
-        fs::write(config_file.path(), config_content).unwrap();
-
-        env::set_var("CONFIG_PATH", config_file.path().to_str().unwrap());
-        let config = AppConfig::load().unwrap();
-
-        assert_eq!(config.server_port, 8080);
-        assert_eq!(config.database_url, "postgres://localhost:5432/mydb");
-        assert_eq!(config.log_level, "info");
-        assert_eq!(config.cache_ttl, 300);
+    
+    fn get_u16(config: &HashMap<String, toml::Value>, key: &str) -> Result<u16, String> {
+        config.get(key)
+            .and_then(|v| v.as_integer())
+            .and_then(|i| if i >= 0 && i <= u16::MAX as i64 { Some(i as u16) } else { None })
+            .ok_or_else(|| format!("Missing or invalid u16 value for key: {}", key))
     }
-
-    #[test]
-    fn test_config_validation() {
-        let invalid_config = AppConfig {
-            server_port: 0,
-            database_url: "".to_string(),
-            log_level: "invalid".to_string(),
-            cache_ttl: 100000,
-        };
-
-        let result = invalid_config.validate();
-        assert!(result.is_err());
+    
+    fn get_bool(config: &HashMap<String, toml::Value>, key: &str) -> Result<bool, String> {
+        config.get(key)
+            .and_then(|v| v.as_bool())
+            .ok_or_else(|| format!("Missing or invalid boolean value for key: {}", key))
+    }
+    
+    fn get_api_keys(config: &HashMap<String, toml::Value>) -> Result<HashMap<String, String>, String> {
+        let mut api_keys = HashMap::new();
+        
+        if let Some(keys_table) = config.get("api_keys").and_then(|v| v.as_table()) {
+            for (service, value) in keys_table {
+                if let Some(key_str) = value.as_str() {
+                    api_keys.insert(service.clone(), key_str.to_string());
+                }
+            }
+        }
+        
+        Ok(api_keys)
     }
 }

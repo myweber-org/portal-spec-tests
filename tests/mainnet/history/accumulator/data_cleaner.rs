@@ -77,3 +77,22 @@ mod tests {
         assert_eq!(clean_csv_line("   "), "");
     }
 }
+fn clean_string(input: &str) -> String {
+    input
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || c.is_ascii_whitespace())
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_clean_string() {
+        assert_eq!(clean_string("Hello, World! 123"), "Hello World 123");
+        assert_eq!(clean_string("Test@#$%^&*()"), "Test");
+        assert_eq!(clean_string("  spaces  "), "  spaces  ");
+        assert_eq!(clean_string(""), "");
+    }
+}

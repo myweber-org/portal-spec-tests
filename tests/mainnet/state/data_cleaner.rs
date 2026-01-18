@@ -1,74 +1,69 @@
-use std::collections::HashSet;
+use csv::ReaderBuilder;
+use serde::Deserialize;
 use std::error::Error;
+use std::fs::File;
 
-#[derive(Debug, Clone)]
-pub struct DataRecord {
-    pub id: u32,
-    pub value: f64,
-    pub category: String,
+#[derive(Debug, Deserialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    category: String,
 }
 
-impl DataRecord {
-    pub fn is_valid(&self) -> bool {
-        !self.category.is_empty() && self.value.is_finite()
+fn validate_record(record: &Record) -> Result<(), String> {
+    if record.name.trim().is_empty() {
+        return Err("Name cannot be empty".to_string());
     }
-}
-
-pub fn deduplicate_records(records: Vec<DataRecord>) -> Vec<DataRecord> {
-    let mut seen_ids = HashSet::new();
-    let mut unique_records = Vec::new();
-
-    for record in records {
-        if seen_ids.insert(record.id) {
-            unique_records.push(record);
-        }
+    if record.value < 0.0 {
+        return Err("Value must be non-negative".to_string());
     }
-
-    unique_records
+    if !["A", "B", "C"].contains(&record.category.as_str()) {
+        return Err("Category must be A, B, or C".to_string());
+    }
+    Ok(())
 }
 
-pub fn validate_records(records: &[DataRecord]) -> Result<Vec<DataRecord>, Box<dyn Error>> {
+pub fn clean_csv_data(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
+    let input_file = File::open(input_path)?;
+    let mut rdr = ReaderBuilder::new().has_headers(true).from_reader(input_file);
+    
     let mut valid_records = Vec::new();
+    let mut error_count = 0;
 
-    for record in records {
-        if record.is_valid() {
-            valid_records.push(record.clone());
-        } else {
-            return Err(format!("Invalid record found with id: {}", record.id).into());
+    for result in rdr.deserialize() {
+        let record: Record = match result {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("Parsing error: {}", e);
+                error_count += 1;
+                continue;
+            }
+        };
+
+        match validate_record(&record) {
+            Ok(_) => valid_records.push(record),
+            Err(e) => {
+                eprintln!("Validation error for ID {}: {}", record.id, e);
+                error_count += 1;
+            }
         }
     }
 
-    Ok(valid_records)
-}
+    println!("Processed {} records", valid_records.len() + error_count);
+    println!("Valid records: {}", valid_records.len());
+    println!("Invalid records: {}", error_count);
 
-pub fn clean_data(mut records: Vec<DataRecord>) -> Result<Vec<DataRecord>, Box<dyn Error>> {
-    records = deduplicate_records(records);
-    validate_records(&records)?;
-    Ok(records)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_deduplicate() {
-        let records = vec![
-            DataRecord { id: 1, value: 10.5, category: "A".to_string() },
-            DataRecord { id: 1, value: 20.5, category: "B".to_string() },
-            DataRecord { id: 2, value: 30.5, category: "C".to_string() },
-        ];
-
-        let deduped = deduplicate_records(records);
-        assert_eq!(deduped.len(), 2);
+    if !valid_records.is_empty() {
+        let output_file = File::create(output_path)?;
+        let mut wtr = csv::Writer::from_writer(output_file);
+        
+        for record in valid_records {
+            wtr.serialize(record)?;
+        }
+        wtr.flush()?;
+        println!("Cleaned data written to {}", output_path);
     }
 
-    #[test]
-    fn test_validation() {
-        let valid_record = DataRecord { id: 1, value: 10.5, category: "A".to_string() };
-        assert!(valid_record.is_valid());
-
-        let invalid_record = DataRecord { id: 2, value: f64::NAN, category: "B".to_string() };
-        assert!(!invalid_record.is_valid());
-    }
+    Ok(())
 }

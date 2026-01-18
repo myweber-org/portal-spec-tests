@@ -279,3 +279,135 @@ mod tests {
         assert_eq!(processor.filter_by_category("TypeA").len(), 2);
     }
 }
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum DataError {
+    #[error("Invalid data format")]
+    InvalidFormat,
+    #[error("Missing required field: {0}")]
+    MissingField(String),
+    #[error("Value out of range: {0}")]
+    OutOfRange(String),
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DataRecord {
+    pub id: u64,
+    pub timestamp: i64,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
+}
+
+impl DataRecord {
+    pub fn validate(&self) -> Result<(), DataError> {
+        if self.id == 0 {
+            return Err(DataError::InvalidFormat);
+        }
+        
+        if self.timestamp < 0 {
+            return Err(DataError::OutOfRange("timestamp".to_string()));
+        }
+        
+        if self.values.is_empty() {
+            return Err(DataError::MissingField("values".to_string()));
+        }
+        
+        Ok(())
+    }
+    
+    pub fn transform(&mut self, factor: f64) {
+        for value in &mut self.values {
+            *value *= factor;
+        }
+    }
+    
+    pub fn add_metadata(&mut self, key: String, value: String) {
+        self.metadata.insert(key, value);
+    }
+}
+
+pub fn process_records(records: Vec<DataRecord>, factor: f64) -> Result<Vec<DataRecord>, DataError> {
+    let mut processed = Vec::with_capacity(records.len());
+    
+    for mut record in records {
+        record.validate()?;
+        record.transform(factor);
+        processed.push(record);
+    }
+    
+    Ok(processed)
+}
+
+pub fn filter_records(records: Vec<DataRecord>, min_value: f64) -> Vec<DataRecord> {
+    records
+        .into_iter()
+        .filter(|record| record.values.iter().any(|&v| v >= min_value))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_record_validation() {
+        let valid_record = DataRecord {
+            id: 1,
+            timestamp: 1000,
+            values: vec![1.0, 2.0, 3.0],
+            metadata: HashMap::new(),
+        };
+        
+        assert!(valid_record.validate().is_ok());
+        
+        let invalid_record = DataRecord {
+            id: 0,
+            timestamp: -1,
+            values: vec![],
+            metadata: HashMap::new(),
+        };
+        
+        assert!(invalid_record.validate().is_err());
+    }
+    
+    #[test]
+    fn test_record_transformation() {
+        let mut record = DataRecord {
+            id: 1,
+            timestamp: 1000,
+            values: vec![1.0, 2.0, 3.0],
+            metadata: HashMap::new(),
+        };
+        
+        record.transform(2.0);
+        assert_eq!(record.values, vec![2.0, 4.0, 6.0]);
+    }
+    
+    #[test]
+    fn test_process_records() {
+        let records = vec![
+            DataRecord {
+                id: 1,
+                timestamp: 1000,
+                values: vec![1.0, 2.0],
+                metadata: HashMap::new(),
+            },
+            DataRecord {
+                id: 2,
+                timestamp: 2000,
+                values: vec![3.0, 4.0],
+                metadata: HashMap::new(),
+            },
+        ];
+        
+        let result = process_records(records, 2.0);
+        assert!(result.is_ok());
+        
+        let processed = result.unwrap();
+        assert_eq!(processed[0].values, vec![2.0, 4.0]);
+        assert_eq!(processed[1].values, vec![6.0, 8.0]);
+    }
+}

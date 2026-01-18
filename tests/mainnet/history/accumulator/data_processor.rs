@@ -108,4 +108,198 @@ mod tests {
         let invalid = processor.validate_records();
         assert_eq!(invalid.len(), 1);
     }
+}use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug)]
+pub enum ProcessingError {
+    InvalidData(String),
+    TransformationFailed(String),
+    ValidationError(String),
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProcessingError::InvalidData(msg) => write!(f, "Invalid data: {}", msg),
+            ProcessingError::TransformationFailed(msg) => write!(f, "Transformation failed: {}", msg),
+            ProcessingError::ValidationError(msg) => write!(f, "Validation error: {}", msg),
+        }
+    }
+}
+
+impl Error for ProcessingError {}
+
+pub struct DataProcessor {
+    config: ProcessingConfig,
+}
+
+pub struct ProcessingConfig {
+    pub max_value: f64,
+    pub min_value: f64,
+    pub allowed_tags: Vec<String>,
+}
+
+impl DataProcessor {
+    pub fn new(config: ProcessingConfig) -> Self {
+        DataProcessor { config }
+    }
+
+    pub fn validate_record(&self, record: &DataRecord) -> Result<(), ProcessingError> {
+        if record.value > self.config.max_value {
+            return Err(ProcessingError::ValidationError(
+                format!("Value {} exceeds maximum {}", record.value, self.config.max_value)
+            ));
+        }
+
+        if record.value < self.config.min_value {
+            return Err(ProcessingError::ValidationError(
+                format!("Value {} below minimum {}", record.value, self.config.min_value)
+            ));
+        }
+
+        for tag in &record.tags {
+            if !self.config.allowed_tags.contains(tag) {
+                return Err(ProcessingError::ValidationError(
+                    format!("Tag '{}' is not allowed", tag)
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn transform_record(&self, record: DataRecord) -> Result<DataRecord, ProcessingError> {
+        let mut transformed = record.clone();
+        
+        transformed.value = (transformed.value * 100.0).round() / 100.0;
+        
+        transformed.tags = transformed.tags
+            .into_iter()
+            .map(|tag| tag.to_lowercase())
+            .collect();
+
+        self.validate_record(&transformed)?;
+        
+        Ok(transformed)
+    }
+
+    pub fn process_batch(&self, records: Vec<DataRecord>) -> Result<Vec<DataRecord>, ProcessingError> {
+        let mut results = Vec::new();
+        let mut error_count = 0;
+        
+        for record in records {
+            match self.transform_record(record) {
+                Ok(transformed) => results.push(transformed),
+                Err(e) => {
+                    error_count += 1;
+                    if error_count > 3 {
+                        return Err(ProcessingError::TransformationFailed(
+                            "Too many errors in batch".to_string()
+                        ));
+                    }
+                }
+            }
+        }
+        
+        Ok(results)
+    }
+
+    pub fn aggregate_by_tag(&self, records: &[DataRecord]) -> HashMap<String, f64> {
+        let mut aggregates = HashMap::new();
+        
+        for record in records {
+            for tag in &record.tags {
+                *aggregates.entry(tag.clone()).or_insert(0.0) += record.value;
+            }
+        }
+        
+        aggregates
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_test_config() -> ProcessingConfig {
+        ProcessingConfig {
+            max_value: 1000.0,
+            min_value: 0.0,
+            allowed_tags: vec!["active".to_string(), "pending".to_string(), "completed".to_string()],
+        }
+    }
+
+    #[test]
+    fn test_validate_record_valid() {
+        let processor = DataProcessor::new(create_test_config());
+        let record = DataRecord {
+            id: 1,
+            name: "Test".to_string(),
+            value: 500.0,
+            tags: vec!["active".to_string()],
+        };
+        
+        assert!(processor.validate_record(&record).is_ok());
+    }
+
+    #[test]
+    fn test_validate_record_invalid_tag() {
+        let processor = DataProcessor::new(create_test_config());
+        let record = DataRecord {
+            id: 1,
+            name: "Test".to_string(),
+            value: 500.0,
+            tags: vec!["invalid".to_string()],
+        };
+        
+        assert!(processor.validate_record(&record).is_err());
+    }
+
+    #[test]
+    fn test_transform_record() {
+        let processor = DataProcessor::new(create_test_config());
+        let record = DataRecord {
+            id: 1,
+            name: "Test".to_string(),
+            value: 123.456,
+            tags: vec!["ACTIVE".to_string()],
+        };
+        
+        let transformed = processor.transform_record(record).unwrap();
+        assert_eq!(transformed.value, 123.46);
+        assert_eq!(transformed.tags, vec!["active"]);
+    }
+
+    #[test]
+    fn test_aggregate_by_tag() {
+        let processor = DataProcessor::new(create_test_config());
+        let records = vec![
+            DataRecord {
+                id: 1,
+                name: "A".to_string(),
+                value: 100.0,
+                tags: vec!["active".to_string()],
+            },
+            DataRecord {
+                id: 2,
+                name: "B".to_string(),
+                value: 200.0,
+                tags: vec!["active".to_string(), "pending".to_string()],
+            },
+        ];
+        
+        let aggregates = processor.aggregate_by_tag(&records);
+        assert_eq!(aggregates.get("active"), Some(&300.0));
+        assert_eq!(aggregates.get("pending"), Some(&200.0));
+    }
 }

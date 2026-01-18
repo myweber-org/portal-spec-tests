@@ -1,42 +1,55 @@
 
-use aes_gcm::{
-    aead::{Aead, KeyInit, OsRng},
-    Aes256Gcm, Nonce,
-};
 use std::fs;
+use std::io::{self, Read, Write};
+use std::path::Path;
 
-pub fn encrypt_file(input_path: &str, output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let key = Aes256Gcm::generate_key(&mut OsRng);
-    let cipher = Aes256Gcm::new(&key);
-    let nonce = Nonce::from_slice(b"unique_nonce_12");
-
-    let plaintext = fs::read(input_path)?;
-    let ciphertext = cipher.encrypt(nonce, plaintext.as_ref())
-        .map_err(|e| format!("Encryption failed: {}", e))?;
-
-    let mut output_data = key.to_vec();
-    output_data.extend_from_slice(&ciphertext);
-    fs::write(output_path, output_data)?;
-
-    println!("File encrypted successfully. Key length: {} bytes", key.len());
+pub fn xor_encrypt_file(input_path: &str, output_path: &str, key: &[u8]) -> io::Result<()> {
+    let input_data = fs::read(input_path)?;
+    let encrypted_data: Vec<u8> = input_data
+        .iter()
+        .enumerate()
+        .map(|(i, &byte)| byte ^ key[i % key.len()])
+        .collect();
+    
+    fs::write(output_path, encrypted_data)?;
     Ok(())
 }
 
-pub fn decrypt_file(input_path: &str, output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let data = fs::read(input_path)?;
-    if data.len() < 32 {
-        return Err("Invalid encrypted file format".into());
+pub fn xor_decrypt_file(input_path: &str, output_path: &str, key: &[u8]) -> io::Result<()> {
+    xor_encrypt_file(input_path, output_path, key)
+}
+
+pub fn generate_random_key(length: usize) -> Vec<u8> {
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+    (0..length).map(|_| rng.gen()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_xor_roundtrip() {
+        let original_text = b"Hello, XOR encryption!";
+        let key = b"secret";
+        
+        let mut input_file = NamedTempFile::new().unwrap();
+        input_file.write_all(original_text).unwrap();
+        
+        let encrypted_file = NamedTempFile::new().unwrap();
+        let decrypted_file = NamedTempFile::new().unwrap();
+        
+        xor_encrypt_file(input_file.path().to_str().unwrap(), 
+                        encrypted_file.path().to_str().unwrap(), 
+                        key).unwrap();
+        
+        xor_decrypt_file(encrypted_file.path().to_str().unwrap(), 
+                        decrypted_file.path().to_str().unwrap(), 
+                        key).unwrap();
+        
+        let decrypted_data = fs::read(decrypted_file.path()).unwrap();
+        assert_eq!(original_text.to_vec(), decrypted_data);
     }
-
-    let (key_bytes, ciphertext) = data.split_at(32);
-    let key = key_bytes.try_into()?;
-    let cipher = Aes256Gcm::new(&key);
-    let nonce = Nonce::from_slice(b"unique_nonce_12");
-
-    let plaintext = cipher.decrypt(nonce, ciphertext)
-        .map_err(|e| format!("Decryption failed: {}", e))?;
-
-    fs::write(output_path, plaintext)?;
-    println!("File decrypted successfully.");
-    Ok(())
 }

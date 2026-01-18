@@ -1,305 +1,121 @@
 
-use csv::Reader;
-use serde::Deserialize;
 use std::error::Error;
 use std::fs::File;
-
-#[derive(Debug, Deserialize)]
-struct Record {
-    id: u32,
-    name: String,
-    value: f64,
-    category: String,
-}
+use std::io::{BufRead, BufReader};
+use std::path::Path;
 
 pub struct DataProcessor {
-    records: Vec<Record>,
+    delimiter: char,
+    has_header: bool,
 }
 
 impl DataProcessor {
-    pub fn new() -> Self {
+    pub fn new(delimiter: char, has_header: bool) -> Self {
         DataProcessor {
-            records: Vec::new(),
+            delimiter,
+            has_header,
         }
     }
 
-    pub fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
+    pub fn process_file<P: AsRef<Path>>(&self, file_path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
         let file = File::open(file_path)?;
-        let mut rdr = Reader::from_reader(file);
+        let reader = BufReader::new(file);
+        let mut records = Vec::new();
 
-        for result in rdr.deserialize() {
-            let record: Record = result?;
-            self.records.push(record);
+        for (line_number, line) in reader.lines().enumerate() {
+            let line = line?;
+            
+            if line.is_empty() {
+                continue;
+            }
+
+            if self.has_header && line_number == 0 {
+                continue;
+            }
+
+            let fields: Vec<String> = line
+                .split(self.delimiter)
+                .map(|s| s.trim().to_string())
+                .collect();
+
+            if !self.validate_record(&fields) {
+                return Err(format!("Invalid record at line {}", line_number + 1).into());
+            }
+
+            records.push(fields);
         }
 
-        Ok(())
+        Ok(records)
     }
 
-    pub fn filter_by_category(&self, category: &str) -> Vec<&Record> {
-        self.records
-            .iter()
-            .filter(|record| record.category == category)
-            .collect()
+    fn validate_record(&self, fields: &[String]) -> bool {
+        !fields.is_empty() && fields.iter().all(|field| !field.is_empty())
     }
 
-    pub fn calculate_average(&self) -> Option<f64> {
-        if self.records.is_empty() {
-            return None;
+    pub fn calculate_statistics(&self, data: &[Vec<String>], column_index: usize) -> Result<(f64, f64, f64), Box<dyn Error>> {
+        if data.is_empty() {
+            return Err("No data available for statistics".into());
         }
 
-        let sum: f64 = self.records.iter().map(|record| record.value).sum();
-        Some(sum / self.records.len() as f64)
-    }
+        let mut values = Vec::new();
+        for record in data {
+            if column_index >= record.len() {
+                return Err(format!("Column index {} out of bounds", column_index).into());
+            }
 
-    pub fn validate_records(&self) -> Vec<&Record> {
-        self.records
-            .iter()
-            .filter(|record| record.value < 0.0 || record.name.is_empty())
-            .collect()
-    }
+            match record[column_index].parse::<f64>() {
+                Ok(value) => values.push(value),
+                Err(_) => return Err(format!("Invalid numeric value at column {}", column_index).into()),
+            }
+        }
 
-    pub fn get_statistics(&self) -> (usize, Option<f64>, Option<f64>) {
-        let count = self.records.len();
-        let min = self.records.iter().map(|r| r.value).reduce(f64::min);
-        let max = self.records.iter().map(|r| r.value).reduce(f64::max);
-        (count, min, max)
+        let sum: f64 = values.iter().sum();
+        let count = values.len() as f64;
+        let mean = sum / count;
+
+        let variance: f64 = values.iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>() / count;
+
+        let std_dev = variance.sqrt();
+
+        Ok((mean, variance, std_dev))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::NamedTempFile;
     use std::io::Write;
+    use tempfile::NamedTempFile;
 
-    fn create_test_csv() -> NamedTempFile {
-        let mut file = NamedTempFile::new().unwrap();
-        writeln!(file, "id,name,value,category").unwrap();
-        writeln!(file, "1,ItemA,10.5,Category1").unwrap();
-        writeln!(file, "2,ItemB,20.3,Category2").unwrap();
-        writeln!(file, "3,ItemC,15.7,Category1").unwrap();
-        file
+    #[test]
+    fn test_data_processing() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,salary").unwrap();
+        writeln!(temp_file, "Alice,30,50000.0").unwrap();
+        writeln!(temp_file, "Bob,25,45000.0").unwrap();
+        writeln!(temp_file, "Charlie,35,55000.0").unwrap();
+
+        let processor = DataProcessor::new(',', true);
+        let result = processor.process_file(temp_file.path()).unwrap();
+
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0], vec!["Alice", "30", "50000.0"]);
     }
 
     #[test]
-    fn test_load_and_filter() {
-        let test_file = create_test_csv();
-        let mut processor = DataProcessor::new();
-        
-        processor.load_from_csv(test_file.path().to_str().unwrap()).unwrap();
-        
-        let category1_items = processor.filter_by_category("Category1");
-        assert_eq!(category1_items.len(), 2);
-        
-        let avg = processor.calculate_average().unwrap();
-        assert!((avg - 15.5).abs() < 0.1);
-    }
-
-    #[test]
-    fn test_validation() {
-        let mut processor = DataProcessor::new();
-        processor.records.push(Record {
-            id: 1,
-            name: "".to_string(),
-            value: -5.0,
-            category: "Test".to_string(),
-        });
-        
-        let invalid = processor.validate_records();
-        assert_eq!(invalid.len(), 1);
-    }
-}use std::collections::HashMap;
-use std::error::Error;
-use std::fmt;
-
-#[derive(Debug, Clone)]
-pub struct DataRecord {
-    pub id: u32,
-    pub name: String,
-    pub value: f64,
-    pub tags: Vec<String>,
-}
-
-#[derive(Debug)]
-pub enum ProcessingError {
-    InvalidData(String),
-    TransformationFailed(String),
-    ValidationError(String),
-}
-
-impl fmt::Display for ProcessingError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ProcessingError::InvalidData(msg) => write!(f, "Invalid data: {}", msg),
-            ProcessingError::TransformationFailed(msg) => write!(f, "Transformation failed: {}", msg),
-            ProcessingError::ValidationError(msg) => write!(f, "Validation error: {}", msg),
-        }
-    }
-}
-
-impl Error for ProcessingError {}
-
-pub struct DataProcessor {
-    config: ProcessingConfig,
-}
-
-pub struct ProcessingConfig {
-    pub max_value: f64,
-    pub min_value: f64,
-    pub allowed_tags: Vec<String>,
-}
-
-impl DataProcessor {
-    pub fn new(config: ProcessingConfig) -> Self {
-        DataProcessor { config }
-    }
-
-    pub fn validate_record(&self, record: &DataRecord) -> Result<(), ProcessingError> {
-        if record.value > self.config.max_value {
-            return Err(ProcessingError::ValidationError(
-                format!("Value {} exceeds maximum {}", record.value, self.config.max_value)
-            ));
-        }
-
-        if record.value < self.config.min_value {
-            return Err(ProcessingError::ValidationError(
-                format!("Value {} below minimum {}", record.value, self.config.min_value)
-            ));
-        }
-
-        for tag in &record.tags {
-            if !self.config.allowed_tags.contains(tag) {
-                return Err(ProcessingError::ValidationError(
-                    format!("Tag '{}' is not allowed", tag)
-                ));
-            }
-        }
-
-        Ok(())
-    }
-
-    pub fn transform_record(&self, record: DataRecord) -> Result<DataRecord, ProcessingError> {
-        let mut transformed = record.clone();
-        
-        transformed.value = (transformed.value * 100.0).round() / 100.0;
-        
-        transformed.tags = transformed.tags
-            .into_iter()
-            .map(|tag| tag.to_lowercase())
-            .collect();
-
-        self.validate_record(&transformed)?;
-        
-        Ok(transformed)
-    }
-
-    pub fn process_batch(&self, records: Vec<DataRecord>) -> Result<Vec<DataRecord>, ProcessingError> {
-        let mut results = Vec::new();
-        let mut error_count = 0;
-        
-        for record in records {
-            match self.transform_record(record) {
-                Ok(transformed) => results.push(transformed),
-                Err(e) => {
-                    error_count += 1;
-                    if error_count > 3 {
-                        return Err(ProcessingError::TransformationFailed(
-                            "Too many errors in batch".to_string()
-                        ));
-                    }
-                }
-            }
-        }
-        
-        Ok(results)
-    }
-
-    pub fn aggregate_by_tag(&self, records: &[DataRecord]) -> HashMap<String, f64> {
-        let mut aggregates = HashMap::new();
-        
-        for record in records {
-            for tag in &record.tags {
-                *aggregates.entry(tag.clone()).or_insert(0.0) += record.value;
-            }
-        }
-        
-        aggregates
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn create_test_config() -> ProcessingConfig {
-        ProcessingConfig {
-            max_value: 1000.0,
-            min_value: 0.0,
-            allowed_tags: vec!["active".to_string(), "pending".to_string(), "completed".to_string()],
-        }
-    }
-
-    #[test]
-    fn test_validate_record_valid() {
-        let processor = DataProcessor::new(create_test_config());
-        let record = DataRecord {
-            id: 1,
-            name: "Test".to_string(),
-            value: 500.0,
-            tags: vec!["active".to_string()],
-        };
-        
-        assert!(processor.validate_record(&record).is_ok());
-    }
-
-    #[test]
-    fn test_validate_record_invalid_tag() {
-        let processor = DataProcessor::new(create_test_config());
-        let record = DataRecord {
-            id: 1,
-            name: "Test".to_string(),
-            value: 500.0,
-            tags: vec!["invalid".to_string()],
-        };
-        
-        assert!(processor.validate_record(&record).is_err());
-    }
-
-    #[test]
-    fn test_transform_record() {
-        let processor = DataProcessor::new(create_test_config());
-        let record = DataRecord {
-            id: 1,
-            name: "Test".to_string(),
-            value: 123.456,
-            tags: vec!["ACTIVE".to_string()],
-        };
-        
-        let transformed = processor.transform_record(record).unwrap();
-        assert_eq!(transformed.value, 123.46);
-        assert_eq!(transformed.tags, vec!["active"]);
-    }
-
-    #[test]
-    fn test_aggregate_by_tag() {
-        let processor = DataProcessor::new(create_test_config());
-        let records = vec![
-            DataRecord {
-                id: 1,
-                name: "A".to_string(),
-                value: 100.0,
-                tags: vec!["active".to_string()],
-            },
-            DataRecord {
-                id: 2,
-                name: "B".to_string(),
-                value: 200.0,
-                tags: vec!["active".to_string(), "pending".to_string()],
-            },
+    fn test_statistics_calculation() {
+        let data = vec![
+            vec!["50000.0".to_string()],
+            vec!["45000.0".to_string()],
+            vec!["55000.0".to_string()],
         ];
-        
-        let aggregates = processor.aggregate_by_tag(&records);
-        assert_eq!(aggregates.get("active"), Some(&300.0));
-        assert_eq!(aggregates.get("pending"), Some(&200.0));
+
+        let processor = DataProcessor::new(',', false);
+        let stats = processor.calculate_statistics(&data, 0).unwrap();
+
+        assert!((stats.0 - 50000.0).abs() < 0.1);
+        assert!(stats.2 > 0.0);
     }
 }

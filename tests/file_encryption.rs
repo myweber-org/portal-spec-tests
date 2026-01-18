@@ -1,29 +1,51 @@
-
+use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce,
+};
 use std::fs;
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
+use std::path::Path;
 
-pub fn xor_encrypt(data: &[u8], key: &[u8]) -> Vec<u8> {
-    data.iter()
-        .enumerate()
-        .map(|(i, &byte)| byte ^ key[i % key.len()])
-        .collect()
-}
+const NONCE_SIZE: usize = 12;
 
-pub fn encrypt_file(input_path: &str, output_path: &str, key: &str) -> io::Result<()> {
-    let mut input_file = fs::File::open(input_path)?;
-    let mut buffer = Vec::new();
-    input_file.read_to_end(&mut buffer)?;
+pub fn encrypt_file(input_path: &Path, output_path: &Path) -> io::Result<()> {
+    let key = Aes256Gcm::generate_key(&mut OsRng);
+    let cipher = Aes256Gcm::new(&key);
+    let nonce = Nonce::from_slice(&[0u8; NONCE_SIZE]);
 
-    let encrypted_data = xor_encrypt(&buffer, key.as_bytes());
+    let plaintext = fs::read(input_path)?;
+    let ciphertext = cipher
+        .encrypt(nonce, plaintext.as_ref())
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
 
     let mut output_file = fs::File::create(output_path)?;
-    output_file.write_all(&encrypted_data)?;
+    output_file.write_all(&key)?;
+    output_file.write_all(nonce)?;
+    output_file.write_all(&ciphertext)?;
 
     Ok(())
 }
 
-pub fn decrypt_file(input_path: &str, output_path: &str, key: &str) -> io::Result<()> {
-    encrypt_file(input_path, output_path, key)
+pub fn decrypt_file(input_path: &Path, output_path: &Path) -> io::Result<()> {
+    let data = fs::read(input_path)?;
+    if data.len() < 32 + NONCE_SIZE {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "File too short to contain key and nonce",
+        ));
+    }
+
+    let key = Key::<Aes256Gcm>::from_slice(&data[..32]);
+    let cipher = Aes256Gcm::new(key);
+    let nonce = Nonce::from_slice(&data[32..32 + NONCE_SIZE]);
+    let ciphertext = &data[32 + NONCE_SIZE..];
+
+    let plaintext = cipher
+        .decrypt(nonce, ciphertext)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+
+    fs::write(output_path, plaintext)?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -32,42 +54,18 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_xor_symmetry() {
-        let data = b"Hello, World!";
-        let key = b"secret";
-        
-        let encrypted = xor_encrypt(data, key);
-        let decrypted = xor_encrypt(&encrypted, key);
-        
-        assert_eq!(data, decrypted.as_slice());
-    }
+    fn test_encryption_roundtrip() {
+        let plaintext = b"Secret data for encryption test";
+        let input_file = NamedTempFile::new().unwrap();
+        fs::write(input_file.path(), plaintext).unwrap();
 
-    #[test]
-    fn test_file_encryption() -> io::Result<()> {
-        let original_content = b"Test data for encryption";
-        let key = "test_key";
-        
-        let input_file = NamedTempFile::new()?;
-        let encrypted_file = NamedTempFile::new()?;
-        let decrypted_file = NamedTempFile::new()?;
-        
-        fs::write(input_file.path(), original_content)?;
-        
-        encrypt_file(
-            input_file.path().to_str().unwrap(),
-            encrypted_file.path().to_str().unwrap(),
-            key,
-        )?;
-        
-        decrypt_file(
-            encrypted_file.path().to_str().unwrap(),
-            decrypted_file.path().to_str().unwrap(),
-            key,
-        )?;
-        
-        let decrypted_content = fs::read(decrypted_file.path())?;
-        assert_eq!(original_content, decrypted_content.as_slice());
-        
-        Ok(())
+        let encrypted_file = NamedTempFile::new().unwrap();
+        encrypt_file(input_file.path(), encrypted_file.path()).unwrap();
+
+        let decrypted_file = NamedTempFile::new().unwrap();
+        decrypt_file(encrypted_file.path(), decrypted_file.path()).unwrap();
+
+        let decrypted_data = fs::read(decrypted_file.path()).unwrap();
+        assert_eq!(plaintext.to_vec(), decrypted_data);
     }
 }

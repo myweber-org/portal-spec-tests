@@ -1,170 +1,127 @@
+use csv::Reader;
+use serde::{Deserialize, Serialize};
 use std::error::Error;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
 use std::path::Path;
 
-#[derive(Debug)]
-pub struct DataRecord {
-    pub id: u32,
-    pub value: f64,
-    pub category: String,
+#[derive(Debug, Deserialize, Serialize)]
+pub struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    category: String,
 }
 
-impl DataRecord {
-    pub fn new(id: u32, value: f64, category: String) -> Result<Self, String> {
-        if value < 0.0 {
-            return Err(format!("Invalid value: {}", value));
+impl Record {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.name.is_empty() {
+            return Err("Name cannot be empty".to_string());
         }
-        if category.is_empty() {
-            return Err("Category cannot be empty".to_string());
+        if self.value < 0.0 {
+            return Err("Value must be non-negative".to_string());
         }
-        Ok(Self { id, value, category })
+        if !["A", "B", "C"].contains(&self.category.as_str()) {
+            return Err("Category must be A, B, or C".to_string());
+        }
+        Ok(())
     }
 }
 
-pub struct DataProcessor {
-    records: Vec<DataRecord>,
-}
+pub fn process_csv_file<P: AsRef<Path>>(path: P) -> Result<Vec<Record>, Box<dyn Error>> {
+    let mut reader = Reader::from_path(path)?;
+    let mut records = Vec::new();
+    let mut errors = Vec::new();
 
-impl DataProcessor {
-    pub fn new() -> Self {
-        Self { records: Vec::new() }
-    }
-
-    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<usize, Box<dyn Error>> {
-        let file = File::open(path)?;
-        let reader = BufReader::new(file);
-        let mut count = 0;
-
-        for (line_num, line) in reader.lines().enumerate() {
-            let line = line?;
-            if line_num == 0 {
-                continue;
-            }
-
-            let parts: Vec<&str> = line.split(',').collect();
-            if parts.len() != 3 {
-                continue;
-            }
-
-            let id = match parts[0].parse::<u32>() {
-                Ok(id) => id,
-                Err(_) => continue,
-            };
-
-            let value = match parts[1].parse::<f64>() {
-                Ok(value) => value,
-                Err(_) => continue,
-            };
-
-            let category = parts[2].to_string();
-
-            match DataRecord::new(id, value, category) {
-                Ok(record) => {
-                    self.records.push(record);
-                    count += 1;
+    for (index, result) in reader.deserialize().enumerate() {
+        match result {
+            Ok(record) => {
+                let record: Record = record;
+                if let Err(e) = record.validate() {
+                    errors.push(format!("Row {}: {}", index + 1, e));
+                } else {
+                    records.push(record);
                 }
-                Err(_) => continue,
             }
+            Err(e) => errors.push(format!("Row {}: Parse error - {}", index + 1, e)),
         }
-
-        Ok(count)
     }
 
-    pub fn calculate_average(&self) -> Option<f64> {
-        if self.records.is_empty() {
-            return None;
-        }
-
-        let sum: f64 = self.records.iter().map(|r| r.value).sum();
-        Some(sum / self.records.len() as f64)
+    if !errors.is_empty() {
+        return Err(format!("Validation errors:\n{}", errors.join("\n")).into());
     }
 
-    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
-        self.records
-            .iter()
-            .filter(|r| r.category == category)
-            .collect()
+    Ok(records)
+}
+
+pub fn calculate_statistics(records: &[Record]) -> (f64, f64, f64) {
+    let count = records.len() as f64;
+    if count == 0.0 {
+        return (0.0, 0.0, 0.0);
     }
 
-    pub fn total_records(&self) -> usize {
-        self.records.len()
-    }
-
-    pub fn get_max_value(&self) -> Option<&DataRecord> {
-        self.records.iter().max_by(|a, b| {
-            a.value
-                .partial_cmp(&b.value)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
-    }
+    let sum: f64 = records.iter().map(|r| r.value).sum();
+    let mean = sum / count;
+    
+    let variance: f64 = records.iter()
+        .map(|r| (r.value - mean).powi(2))
+        .sum::<f64>() / count;
+    
+    let std_dev = variance.sqrt();
+    
+    (sum, mean, std_dev)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
     use tempfile::NamedTempFile;
+    use std::io::Write;
 
     #[test]
-    fn test_data_record_creation() {
-        let record = DataRecord::new(1, 42.5, "test".to_string()).unwrap();
-        assert_eq!(record.id, 1);
-        assert_eq!(record.value, 42.5);
-        assert_eq!(record.category, "test");
+    fn test_valid_record() {
+        let record = Record {
+            id: 1,
+            name: "Test".to_string(),
+            value: 100.0,
+            category: "A".to_string(),
+        };
+        assert!(record.validate().is_ok());
     }
 
     #[test]
-    fn test_invalid_data_record() {
-        let result = DataRecord::new(1, -5.0, "test".to_string());
-        assert!(result.is_err());
+    fn test_invalid_record() {
+        let record = Record {
+            id: 2,
+            name: "".to_string(),
+            value: -10.0,
+            category: "D".to_string(),
+        };
+        assert!(record.validate().is_err());
     }
 
     #[test]
-    fn test_load_csv() {
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "id,value,category").unwrap();
-        writeln!(temp_file, "1,42.5,category_a").unwrap();
-        writeln!(temp_file, "2,15.3,category_b").unwrap();
-        writeln!(temp_file, "3,invalid,category_c").unwrap();
-
-        let mut processor = DataProcessor::new();
-        let result = processor.load_from_csv(temp_file.path());
+    fn test_process_csv() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "id,name,value,category").unwrap();
+        writeln!(file, "1,Item1,100.0,A").unwrap();
+        writeln!(file, "2,Item2,200.0,B").unwrap();
+        
+        let result = process_csv_file(file.path());
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), 2);
-        assert_eq!(processor.total_records(), 2);
+        let records = result.unwrap();
+        assert_eq!(records.len(), 2);
     }
 
     #[test]
-    fn test_calculate_average() {
-        let mut processor = DataProcessor::new();
-        processor
-            .records
-            .push(DataRecord::new(1, 10.0, "test".to_string()).unwrap());
-        processor
-            .records
-            .push(DataRecord::new(2, 20.0, "test".to_string()).unwrap());
-        processor
-            .records
-            .push(DataRecord::new(3, 30.0, "test".to_string()).unwrap());
-
-        assert_eq!(processor.calculate_average(), Some(20.0));
-    }
-
-    #[test]
-    fn test_filter_by_category() {
-        let mut processor = DataProcessor::new();
-        processor
-            .records
-            .push(DataRecord::new(1, 10.0, "category_a".to_string()).unwrap());
-        processor
-            .records
-            .push(DataRecord::new(2, 20.0, "category_b".to_string()).unwrap());
-        processor
-            .records
-            .push(DataRecord::new(3, 30.0, "category_a".to_string()).unwrap());
-
-        let filtered = processor.filter_by_category("category_a");
-        assert_eq!(filtered.len(), 2);
+    fn test_statistics() {
+        let records = vec![
+            Record { id: 1, name: "A".to_string(), value: 10.0, category: "A".to_string() },
+            Record { id: 2, name: "B".to_string(), value: 20.0, category: "B".to_string() },
+            Record { id: 3, name: "C".to_string(), value: 30.0, category: "C".to_string() },
+        ];
+        
+        let (sum, mean, std_dev) = calculate_statistics(&records);
+        assert_eq!(sum, 60.0);
+        assert_eq!(mean, 20.0);
+        assert!((std_dev - 8.164965).abs() < 0.0001);
     }
 }

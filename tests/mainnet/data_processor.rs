@@ -1,195 +1,95 @@
 
-use std::collections::HashMap;
 use std::error::Error;
-use std::fmt;
+use std::fs::File;
+use std::path::Path;
 
-#[derive(Debug, Clone)]
 pub struct DataRecord {
     pub id: u32,
-    pub name: String,
     pub value: f64,
-    pub tags: Vec<String>,
+    pub category: String,
 }
-
-#[derive(Debug)]
-pub enum ValidationError {
-    InvalidId,
-    EmptyName,
-    NegativeValue,
-    DuplicateTag,
-}
-
-impl fmt::Display for ValidationError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ValidationError::InvalidId => write!(f, "ID must be greater than zero"),
-            ValidationError::EmptyName => write!(f, "Name cannot be empty"),
-            ValidationError::NegativeValue => write!(f, "Value cannot be negative"),
-            ValidationError::DuplicateTag => write!(f, "Duplicate tags are not allowed"),
-        }
-    }
-}
-
-impl Error for ValidationError {}
 
 pub struct DataProcessor {
-    records: HashMap<u32, DataRecord>,
+    records: Vec<DataRecord>,
 }
 
 impl DataProcessor {
     pub fn new() -> Self {
         DataProcessor {
-            records: HashMap::new(),
+            records: Vec::new(),
         }
     }
 
-    pub fn add_record(&mut self, record: DataRecord) -> Result<(), ValidationError> {
-        self.validate_record(&record)?;
+    pub fn load_from_csv(&mut self, file_path: &str) -> Result<usize, Box<dyn Error>> {
+        let path = Path::new(file_path);
+        let file = File::open(path)?;
+        let mut rdr = csv::Reader::from_reader(file);
         
-        if self.records.contains_key(&record.id) {
-            return Err(ValidationError::InvalidId);
+        let mut count = 0;
+        for result in rdr.deserialize() {
+            let record: DataRecord = result?;
+            self.records.push(record);
+            count += 1;
         }
         
-        self.records.insert(record.id, record);
-        Ok(())
+        Ok(count)
     }
 
-    pub fn get_record(&self, id: u32) -> Option<&DataRecord> {
-        self.records.get(&id)
+    pub fn calculate_average(&self) -> Option<f64> {
+        if self.records.is_empty() {
+            return None;
+        }
+        
+        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        Some(sum / self.records.len() as f64)
     }
 
-    pub fn calculate_total_value(&self) -> f64 {
-        self.records.values().map(|r| r.value).sum()
-    }
-
-    pub fn find_records_by_tag(&self, tag: &str) -> Vec<&DataRecord> {
+    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
         self.records
-            .values()
-            .filter(|r| r.tags.iter().any(|t| t == tag))
+            .iter()
+            .filter(|r| r.category == category)
             .collect()
     }
 
-    pub fn transform_values<F>(&mut self, transform_fn: F)
-    where
-        F: Fn(f64) -> f64,
-    {
-        for record in self.records.values_mut() {
-            record.value = transform_fn(record.value);
-        }
+    pub fn validate_records(&self) -> Vec<&DataRecord> {
+        self.records
+            .iter()
+            .filter(|r| r.value >= 0.0 && r.value <= 1000.0)
+            .collect()
     }
 
-    fn validate_record(&self, record: &DataRecord) -> Result<(), ValidationError> {
-        if record.id == 0 {
-            return Err(ValidationError::InvalidId);
-        }
-        
-        if record.name.trim().is_empty() {
-            return Err(ValidationError::EmptyName);
-        }
-        
-        if record.value < 0.0 {
-            return Err(ValidationError::NegativeValue);
-        }
-        
-        let mut seen_tags = std::collections::HashSet::new();
-        for tag in &record.tags {
-            if !seen_tags.insert(tag) {
-                return Err(ValidationError::DuplicateTag);
-            }
-        }
-        
-        Ok(())
+    pub fn record_count(&self) -> usize {
+        self.records.len()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_add_valid_record() {
-        let mut processor = DataProcessor::new();
-        let record = DataRecord {
-            id: 1,
-            name: "Test Record".to_string(),
-            value: 42.5,
-            tags: vec!["test".to_string(), "sample".to_string()],
-        };
-        
-        assert!(processor.add_record(record).is_ok());
-        assert_eq!(processor.records.len(), 1);
-    }
-
-    #[test]
-    fn test_validation_errors() {
-        let processor = DataProcessor::new();
-        
-        let invalid_id = DataRecord {
-            id: 0,
-            name: "Test".to_string(),
-            value: 10.0,
-            tags: vec![],
-        };
-        
-        let empty_name = DataRecord {
-            id: 1,
-            name: "".to_string(),
-            value: 10.0,
-            tags: vec![],
-        };
-        
-        let negative_value = DataRecord {
-            id: 2,
-            name: "Test".to_string(),
-            value: -5.0,
-            tags: vec![],
-        };
-        
-        let duplicate_tags = DataRecord {
-            id: 3,
-            name: "Test".to_string(),
-            value: 10.0,
-            tags: vec!["tag".to_string(), "tag".to_string()],
-        };
-        
-        assert!(processor.validate_record(&invalid_id).is_err());
-        assert!(processor.validate_record(&empty_name).is_err());
-        assert!(processor.validate_record(&negative_value).is_err());
-        assert!(processor.validate_record(&duplicate_tags).is_err());
-    }
-
-    #[test]
-    fn test_calculate_total() {
+    fn test_data_processor() {
         let mut processor = DataProcessor::new();
         
-        let records = vec![
-            DataRecord {
-                id: 1,
-                name: "Record 1".to_string(),
-                value: 10.0,
-                tags: vec!["a".to_string()],
-            },
-            DataRecord {
-                id: 2,
-                name: "Record 2".to_string(),
-                value: 20.0,
-                tags: vec!["b".to_string()],
-            },
-            DataRecord {
-                id: 3,
-                name: "Record 3".to_string(),
-                value: 30.0,
-                tags: vec!["a".to_string(), "c".to_string()],
-            },
-        ];
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,value,category").unwrap();
+        writeln!(temp_file, "1,100.5,TypeA").unwrap();
+        writeln!(temp_file, "2,200.3,TypeB").unwrap();
+        writeln!(temp_file, "3,150.7,TypeA").unwrap();
         
-        for record in records {
-            processor.add_record(record).unwrap();
-        }
+        let result = processor.load_from_csv(temp_file.path().to_str().unwrap());
+        assert!(result.is_ok());
+        assert_eq!(processor.record_count(), 3);
         
-        assert_eq!(processor.calculate_total_value(), 60.0);
+        let avg = processor.calculate_average().unwrap();
+        assert!((avg - 150.5).abs() < 0.1);
         
-        let tagged_records = processor.find_records_by_tag("a");
-        assert_eq!(tagged_records.len(), 2);
+        let type_a_records = processor.filter_by_category("TypeA");
+        assert_eq!(type_a_records.len(), 2);
+        
+        let valid_records = processor.validate_records();
+        assert_eq!(valid_records.len(), 3);
     }
 }

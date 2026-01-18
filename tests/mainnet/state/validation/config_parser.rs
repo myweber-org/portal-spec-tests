@@ -273,4 +273,90 @@ mod tests {
         assert_eq!(config.get("URL"), Some(&"localhost:5432".to_string()));
         assert_eq!(config.get("MISSING"), Some(&"".to_string()));
     }
+}use std::env;
+use std::fs;
+use std::collections::HashMap;
+
+pub struct Config {
+    settings: HashMap<String, String>,
+}
+
+impl Config {
+    pub fn new(file_path: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let content = fs::read_to_string(file_path)?;
+        let mut settings = HashMap::new();
+
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+
+            if let Some((key, value)) = trimmed.split_once('=') {
+                let key = key.trim().to_string();
+                let mut value = value.trim().to_string();
+
+                if value.starts_with("${") && value.ends_with('}') {
+                    let env_var = &value[2..value.len() - 1];
+                    value = env::var(env_var).unwrap_or_else(|_| value.clone());
+                }
+
+                settings.insert(key, value);
+            }
+        }
+
+        Ok(Config { settings })
+    }
+
+    pub fn get(&self, key: &str) -> Option<&String> {
+        self.settings.get(key)
+    }
+
+    pub fn get_or_default(&self, key: &str, default: &str) -> String {
+        self.settings.get(key).cloned().unwrap_or(default.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_config_parsing() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "DATABASE_URL=postgres://localhost/db").unwrap();
+        writeln!(temp_file, "# This is a comment").unwrap();
+        writeln!(temp_file, "MAX_CONNECTIONS=100").unwrap();
+        writeln!(temp_file, "").unwrap();
+
+        let config = Config::new(temp_file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.get("DATABASE_URL").unwrap(), "postgres://localhost/db");
+        assert_eq!(config.get("MAX_CONNECTIONS").unwrap(), "100");
+        assert!(config.get("NONEXISTENT").is_none());
+    }
+
+    #[test]
+    fn test_env_var_substitution() {
+        env::set_var("APP_PORT", "8080");
+        
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "PORT=${APP_PORT}").unwrap();
+        writeln!(temp_file, "HOST=localhost").unwrap();
+
+        let config = Config::new(temp_file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.get("PORT").unwrap(), "8080");
+        assert_eq!(config.get("HOST").unwrap(), "localhost");
+    }
+
+    #[test]
+    fn test_get_or_default() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "EXISTING_KEY=value").unwrap();
+
+        let config = Config::new(temp_file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.get_or_default("EXISTING_KEY", "default"), "value");
+        assert_eq!(config.get_or_default("MISSING_KEY", "default_value"), "default_value");
+    }
 }

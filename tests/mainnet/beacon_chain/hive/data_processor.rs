@@ -281,4 +281,131 @@ pub fn filter_by_category(records: Vec<Record>, category: &str) -> Vec<Record> {
     records.into_iter()
         .filter(|r| r.category == category)
         .collect()
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+pub struct DataRecord {
+    pub id: u32,
+    pub value: f64,
+    pub category: String,
+}
+
+pub struct DataProcessor {
+    records: Vec<DataRecord>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let path = Path::new(file_path);
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+
+        for (line_num, line) in reader.lines().enumerate() {
+            let line = line?;
+            if line_num == 0 {
+                continue;
+            }
+
+            let parts: Vec<&str> = line.split(',').collect();
+            if parts.len() != 3 {
+                return Err(format!("Invalid CSV format at line {}", line_num + 1).into());
+            }
+
+            let id = parts[0].parse::<u32>()?;
+            let value = parts[1].parse::<f64>()?;
+            let category = parts[2].to_string();
+
+            self.records.push(DataRecord { id, value, category });
+        }
+
+        Ok(())
+    }
+
+    pub fn calculate_average(&self) -> Option<f64> {
+        if self.records.is_empty() {
+            return None;
+        }
+
+        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        Some(sum / self.records.len() as f64)
+    }
+
+    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
+        self.records
+            .iter()
+            .filter(|record| record.category == category)
+            .collect()
+    }
+
+    pub fn validate_records(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+
+        for record in &self.records {
+            if record.value < 0.0 {
+                errors.push(format!("Negative value found for ID {}", record.id));
+            }
+
+            if record.category.is_empty() {
+                errors.push(format!("Empty category for ID {}", record.id));
+            }
+        }
+
+        errors
+    }
+
+    pub fn get_record_count(&self) -> usize {
+        self.records.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_data_processing() {
+        let mut processor = DataProcessor::new();
+        
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,value,category").unwrap();
+        writeln!(temp_file, "1,42.5,TypeA").unwrap();
+        writeln!(temp_file, "2,17.3,TypeB").unwrap();
+        writeln!(temp_file, "3,89.1,TypeA").unwrap();
+
+        let result = processor.load_from_csv(temp_file.path().to_str().unwrap());
+        assert!(result.is_ok());
+        assert_eq!(processor.get_record_count(), 3);
+
+        let average = processor.calculate_average();
+        assert!(average.is_some());
+        assert!((average.unwrap() - 49.63333).abs() < 0.001);
+
+        let type_a_records = processor.filter_by_category("TypeA");
+        assert_eq!(type_a_records.len(), 2);
+
+        let errors = processor.validate_records();
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn test_invalid_csv() {
+        let mut processor = DataProcessor::new();
+        
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,value,category").unwrap();
+        writeln!(temp_file, "1,invalid,TypeA").unwrap();
+
+        let result = processor.load_from_csv(temp_file.path().to_str().unwrap());
+        assert!(result.is_err());
+    }
 }

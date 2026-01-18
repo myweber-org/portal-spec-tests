@@ -227,4 +227,61 @@ pub fn decrypt_data(encrypted_data: &[u8], key: &[u8]) -> Result<Vec<u8>, String
     
     cipher.decrypt(nonce, encrypted_data)
         .map_err(|e| format!("Decryption failed: {}", e))
+}use std::fs;
+use std::io::{self, Read, Write};
+
+fn xor_cipher(data: &mut [u8], key: &[u8]) {
+    for (i, byte) in data.iter_mut().enumerate() {
+        *byte ^= key[i % key.len()];
+    }
+}
+
+pub fn encrypt_file(input_path: &str, output_path: &str, key: &str) -> io::Result<()> {
+    let mut file = fs::File::open(input_path)?;
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer)?;
+    
+    xor_cipher(&mut buffer, key.as_bytes());
+    
+    let mut output_file = fs::File::create(output_path)?;
+    output_file.write_all(&buffer)?;
+    
+    Ok(())
+}
+
+pub fn decrypt_file(input_path: &str, output_path: &str, key: &str) -> io::Result<()> {
+    encrypt_file(input_path, output_path, key)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+    
+    #[test]
+    fn test_encryption_decryption() {
+        let original = b"Secret data to protect";
+        let key = "encryption_key";
+        
+        let input_file = NamedTempFile::new().unwrap();
+        let encrypted_file = NamedTempFile::new().unwrap();
+        let decrypted_file = NamedTempFile::new().unwrap();
+        
+        fs::write(input_file.path(), original).unwrap();
+        
+        encrypt_file(
+            input_file.path().to_str().unwrap(),
+            encrypted_file.path().to_str().unwrap(),
+            key
+        ).unwrap();
+        
+        decrypt_file(
+            encrypted_file.path().to_str().unwrap(),
+            decrypted_file.path().to_str().unwrap(),
+            key
+        ).unwrap();
+        
+        let decrypted = fs::read(decrypted_file.path()).unwrap();
+        assert_eq!(original.to_vec(), decrypted);
+    }
 }

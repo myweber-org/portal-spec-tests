@@ -302,4 +302,137 @@ mod tests {
         assert_eq!(analyzer.get_total_entries(), 0);
         assert_eq!(analyzer.get_error_count(), 0);
     }
+}use std::collections::HashMap;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug)]
+pub struct LogSummary {
+    pub total_lines: usize,
+    pub error_count: usize,
+    pub warning_count: usize,
+    pub info_count: usize,
+    pub unique_errors: HashMap<String, usize>,
+    pub time_range: (String, String),
+}
+
+impl LogSummary {
+    pub fn new() -> Self {
+        LogSummary {
+            total_lines: 0,
+            error_count: 0,
+            warning_count: 0,
+            info_count: 0,
+            unique_errors: HashMap::new(),
+            time_range: (String::new(), String::new()),
+        }
+    }
+}
+
+pub fn analyze_log_file<P: AsRef<Path>>(path: P) -> Result<LogSummary, std::io::Error> {
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+    let mut summary = LogSummary::new();
+    let mut first_timestamp = String::new();
+    let mut last_timestamp = String::new();
+
+    for (index, line_result) in reader.lines().enumerate() {
+        let line = line_result?;
+        summary.total_lines += 1;
+
+        if let Some(timestamp) = extract_timestamp(&line) {
+            if index == 0 {
+                first_timestamp = timestamp.clone();
+            }
+            last_timestamp = timestamp;
+        }
+
+        classify_log_line(&line, &mut summary);
+    }
+
+    summary.time_range = (first_timestamp, last_timestamp);
+    Ok(summary)
+}
+
+fn extract_timestamp(line: &str) -> Option<String> {
+    if line.len() > 20 {
+        let potential_timestamp = &line[0..19];
+        if potential_timestamp.contains('-') && potential_timestamp.contains(':') {
+            return Some(potential_timestamp.to_string());
+        }
+    }
+    None
+}
+
+fn classify_log_line(line: &str, summary: &mut LogSummary) {
+    let line_lower = line.to_lowercase();
+    
+    if line_lower.contains("error") {
+        summary.error_count += 1;
+        if let Some(error_msg) = extract_error_message(line) {
+            *summary.unique_errors.entry(error_msg).or_insert(0) += 1;
+        }
+    } else if line_lower.contains("warning") {
+        summary.warning_count += 1;
+    } else if line_lower.contains("info") {
+        summary.info_count += 1;
+    }
+}
+
+fn extract_error_message(line: &str) -> Option<String> {
+    let error_keywords = ["error:", "exception:", "failed:", "unable to"];
+    
+    for keyword in error_keywords.iter() {
+        if let Some(pos) = line.to_lowercase().find(keyword) {
+            let start = pos + keyword.len();
+            let end = line.len().min(start + 100);
+            return Some(line[start..end].trim().to_string());
+        }
+    }
+    None
+}
+
+pub fn print_summary(summary: &LogSummary) {
+    println!("Log Analysis Summary");
+    println!("====================");
+    println!("Total lines: {}", summary.total_lines);
+    println!("Errors: {}", summary.error_count);
+    println!("Warnings: {}", summary.warning_count);
+    println!("Info messages: {}", summary.info_count);
+    println!("Time range: {} - {}", summary.time_range.0, summary.time_range.1);
+    
+    if !summary.unique_errors.is_empty() {
+        println!("\nUnique Errors:");
+        for (error, count) in &summary.unique_errors {
+            println!("  {} (occurrences: {})", error, count);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_analyze_log_file() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        let log_content = "2023-10-01 10:00:00 INFO Application started\n\
+                          2023-10-01 10:01:00 ERROR: Database connection failed\n\
+                          2023-10-01 10:02:00 WARNING: High memory usage\n\
+                          2023-10-01 10:03:00 INFO: Processing complete\n";
+        
+        writeln!(temp_file, "{}", log_content).unwrap();
+        
+        let summary = analyze_log_file(temp_file.path()).unwrap();
+        
+        assert_eq!(summary.total_lines, 4);
+        assert_eq!(summary.error_count, 1);
+        assert_eq!(summary.warning_count, 1);
+        assert_eq!(summary.info_count, 2);
+        assert_eq!(summary.time_range.0, "2023-10-01 10:00:00");
+        assert_eq!(summary.time_range.1, "2023-10-01 10:03:00");
+    }
 }

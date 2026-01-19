@@ -1,93 +1,127 @@
-
-use serde_json::{Value, Map};
-use std::fs;
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::{BufReader, Read};
 use std::path::Path;
 
-pub fn merge_json_files<P: AsRef<Path>>(paths: &[P], output_path: P) -> Result<(), Box<dyn std::error::Error>> {
-    let mut merged = Map::new();
-    
-    for path in paths {
-        let content = fs::read_to_string(path)?;
-        let json: Value = serde_json::from_str(&content)?;
-        
-        if let Value::Object(obj) = json {
+type JsonValue = serde_json::Value;
+type JsonObject = serde_json::Map<String, JsonValue>;
+
+pub fn merge_json_files(file_paths: &[impl AsRef<Path>]) -> Result<JsonValue, Box<dyn std::error::Error>> {
+    let mut merged = JsonObject::new();
+
+    for path in file_paths {
+        let file = File::open(path.as_ref())?;
+        let mut reader = BufReader::new(file);
+        let mut contents = String::new();
+        reader.read_to_string(&mut contents)?;
+
+        let json_data: JsonValue = serde_json::from_str(&contents)?;
+
+        if let JsonValue::Object(obj) = json_data {
             merge_objects(&mut merged, obj);
+        } else {
+            return Err("Each JSON file must contain a JSON object".into());
         }
     }
-    
-    let output_value = Value::Object(merged);
-    let output_json = serde_json::to_string_pretty(&output_value)?;
-    fs::write(output_path, output_json)?;
-    
-    Ok(())
+
+    Ok(JsonValue::Object(merged))
 }
 
-fn merge_objects(base: &mut Map<String, Value>, new: Map<String, Value>) {
-    for (key, new_value) in new {
-        match base.get_mut(&key) {
-            Some(existing_value) => {
-                if let (Value::Object(mut existing_obj), Value::Object(new_obj)) = (existing_value.clone(), new_value) {
-                    let mut existing_map = match existing_obj {
-                        Value::Object(map) => map,
-                        _ => Map::new(),
-                    };
-                    merge_objects(&mut existing_map, new_obj);
-                    base.insert(key, Value::Object(existing_map));
-                } else if existing_value != &new_value {
-                    base.insert(key.clone() + "_conflict", existing_value.clone());
-                    base.insert(key, new_value);
-                }
+fn merge_objects(target: &mut JsonObject, source: JsonObject) {
+    for (key, value) in source {
+        match (target.get_mut(&key), value) {
+            (Some(JsonValue::Object(existing_obj)), JsonValue::Object(new_obj)) => {
+                merge_objects(existing_obj.as_object_mut().unwrap(), new_obj);
             }
-            None => {
-                base.insert(key, new_value);
+            (Some(JsonValue::Array(existing_arr)), JsonValue::Array(new_arr)) => {
+                existing_arr.extend(new_arr);
+            }
+            _ => {
+                target.insert(key, value);
             }
         }
     }
+}
+
+pub fn merge_json_strings(json_strings: &[&str]) -> Result<JsonValue, Box<dyn std::error::Error>> {
+    let mut merged = JsonObject::new();
+
+    for json_str in json_strings {
+        let json_data: JsonValue = serde_json::from_str(json_str)?;
+
+        if let JsonValue::Object(obj) = json_data {
+            merge_objects(&mut merged, obj);
+        } else {
+            return Err("Each JSON string must represent a JSON object".into());
+        }
+    }
+
+    Ok(JsonValue::Object(merged))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::NamedTempFile;
     use serde_json::json;
 
     #[test]
-    fn test_basic_merge() {
-        let file1 = NamedTempFile::new().unwrap();
-        let file2 = NamedTempFile::new().unwrap();
-        let output = NamedTempFile::new().unwrap();
-        
-        fs::write(&file1, r#"{"common": "value1", "unique1": "data1"}"#).unwrap();
-        fs::write(&file2, r#"{"common": "value2", "unique2": "data2"}"#).unwrap();
-        
-        merge_json_files(&[file1.path(), file2.path()], output.path()).unwrap();
-        
-        let result_content = fs::read_to_string(output.path()).unwrap();
-        let result: Value = serde_json::from_str(&result_content).unwrap();
-        
-        assert_eq!(result["common"], json!("value2"));
-        assert_eq!(result["unique1"], json!("data1"));
-        assert_eq!(result["unique2"], json!("data2"));
-        assert!(result.get("common_conflict").is_some());
-    }
-}use serde_json::{json, Value};
-use std::fs;
-use std::path::Path;
+    fn test_merge_objects() {
+        let json1 = json!({
+            "name": "Alice",
+            "details": {
+                "age": 30,
+                "city": "London"
+            }
+        });
 
-pub fn merge_json_files(file_paths: &[&str], output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let mut merged_array = Vec::new();
+        let json2 = json!({
+            "details": {
+                "country": "UK",
+                "age": 31
+            },
+            "active": true
+        });
 
-    for file_path in file_paths {
-        let content = fs::read_to_string(file_path)?;
-        let json_value: Value = serde_json::from_str(&content)?;
-        merged_array.push(json_value);
+        let merged = merge_json_strings(&[
+            &json1.to_string(),
+            &json2.to_string()
+        ]).unwrap();
+
+        let expected = json!({
+            "name": "Alice",
+            "details": {
+                "age": 31,
+                "city": "London",
+                "country": "UK"
+            },
+            "active": true
+        });
+
+        assert_eq!(merged, expected);
     }
 
-    let output_json = json!(merged_array);
-    let output_dir = Path::new(output_path).parent().unwrap();
-    if !output_dir.exists() {
-        fs::create_dir_all(output_dir)?;
+    #[test]
+    fn test_merge_arrays() {
+        let json1 = json!({
+            "tags": ["rust", "json"],
+            "data": [1, 2]
+        });
+
+        let json2 = json!({
+            "tags": ["merge"],
+            "data": [3, 4]
+        });
+
+        let merged = merge_json_strings(&[
+            &json1.to_string(),
+            &json2.to_string()
+        ]).unwrap();
+
+        let expected = json!({
+            "tags": ["rust", "json", "merge"],
+            "data": [1, 2, 3, 4]
+        });
+
+        assert_eq!(merged, expected);
     }
-    fs::write(output_path, output_json.to_string())?;
-    Ok(())
 }

@@ -125,3 +125,46 @@ mod tests {
         assert_eq!(decrypted, test_data);
     }
 }
+use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce,
+};
+use std::fs;
+use std::io::{self, Write};
+
+pub fn encrypt_file(input_path: &str, output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let data = fs::read(input_path)?;
+    
+    let key = Aes256Gcm::generate_key(&mut OsRng);
+    let cipher = Aes256Gcm::new(&key);
+    let nonce = Nonce::from_slice(b"unique_nonce_");
+    
+    let ciphertext = cipher.encrypt(nonce, data.as_ref())
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    
+    let mut output = fs::File::create(output_path)?;
+    output.write_all(&key)?;
+    output.write_all(&ciphertext)?;
+    
+    println!("Encryption successful. Key saved with ciphertext.");
+    Ok(())
+}
+
+pub fn decrypt_file(input_path: &str, output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let mut data = fs::read(input_path)?;
+    
+    if data.len() < 32 {
+        return Err("Invalid encrypted file format".into());
+    }
+    
+    let key = Key::<Aes256Gcm>::from_slice(&data[..32]);
+    let cipher = Aes256Gcm::new(key);
+    let nonce = Nonce::from_slice(b"unique_nonce_");
+    
+    let plaintext = cipher.decrypt(nonce, &data[32..])
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    
+    fs::write(output_path, plaintext)?;
+    println!("Decryption successful.");
+    Ok(())
+}

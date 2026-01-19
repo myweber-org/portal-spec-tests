@@ -1,106 +1,136 @@
+
 use std::error::Error;
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use csv::{Reader, Writer};
 
-pub struct CsvProcessor {
-    pub headers: Vec<String>,
-    pub records: Vec<Vec<String>>,
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    id: u32,
+    name: String,
+    category: String,
+    value: f64,
+    active: bool,
 }
 
-impl CsvProcessor {
-    pub fn new() -> Self {
-        CsvProcessor {
-            headers: Vec::new(),
-            records: Vec::new(),
+impl DataRecord {
+    pub fn new(id: u32, name: String, category: String, value: f64, active: bool) -> Self {
+        Self {
+            id,
+            name,
+            category,
+            value,
+            active,
         }
     }
 
-    pub fn load_from_file(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
+    pub fn is_active(&self) -> bool {
+        self.active
+    }
+
+    pub fn value(&self) -> f64 {
+        self.value
+    }
+
+    pub fn category(&self) -> &str {
+        &self.category
+    }
+}
+
+pub struct DataProcessor {
+    records: Vec<DataRecord>,
+}
+
+impl DataProcessor {
+    pub fn from_csv(file_path: &str) -> Result<Self, Box<dyn Error>> {
         let file = File::open(file_path)?;
-        let reader = BufReader::new(file);
-        let mut lines = reader.lines();
+        let mut rdr = Reader::from_reader(file);
+        let mut records = Vec::new();
 
-        if let Some(first_line) = lines.next() {
-            self.headers = first_line?
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .collect();
+        for result in rdr.deserialize() {
+            let record: DataRecord = result?;
+            records.push(record);
         }
 
-        for line in lines {
-            let record: Vec<String> = line?
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .collect();
-            if record.len() == self.headers.len() {
-                self.records.push(record);
-            }
-        }
-
-        Ok(())
+        Ok(Self { records })
     }
 
-    pub fn validate_records(&self) -> bool {
-        for record in &self.records {
-            if record.len() != self.headers.len() {
-                return false;
-            }
-        }
-        true
-    }
-
-    pub fn transform_column(&mut self, column_index: usize, transform_fn: fn(&str) -> String) {
-        for record in &mut self.records {
-            if column_index < record.len() {
-                record[column_index] = transform_fn(&record[column_index]);
-            }
-        }
-    }
-
-    pub fn filter_records(&self, predicate: fn(&[String]) -> bool) -> Vec<Vec<String>> {
+    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
         self.records
             .iter()
-            .filter(|record| predicate(record))
-            .cloned()
+            .filter(|record| record.category() == category)
             .collect()
     }
 
-    pub fn get_column_stats(&self, column_index: usize) -> Option<(f64, f64, f64)> {
-        if column_index >= self.headers.len() {
-            return None;
-        }
+    pub fn filter_active(&self) -> Vec<&DataRecord> {
+        self.records
+            .iter()
+            .filter(|record| record.is_active())
+            .collect()
+    }
 
-        let mut values = Vec::new();
+    pub fn calculate_total_value(&self) -> f64 {
+        self.records.iter().map(|record| record.value()).sum()
+    }
+
+    pub fn calculate_average_value(&self) -> f64 {
+        if self.records.is_empty() {
+            0.0
+        } else {
+            self.calculate_total_value() / self.records.len() as f64
+        }
+    }
+
+    pub fn export_to_csv(&self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::create(file_path)?;
+        let mut wtr = Writer::from_writer(file);
+
         for record in &self.records {
-            if column_index < record.len() {
-                if let Ok(num) = record[column_index].parse::<f64>() {
-                    values.push(num);
-                }
-            }
+            wtr.serialize(record)?;
         }
 
-        if values.is_empty() {
-            return None;
-        }
+        wtr.flush()?;
+        Ok(())
+    }
 
-        let sum: f64 = values.iter().sum();
-        let count = values.len() as f64;
-        let mean = sum / count;
+    pub fn add_record(&mut self, record: DataRecord) {
+        self.records.push(record);
+    }
 
-        let variance: f64 = values.iter()
-            .map(|x| (x - mean).powi(2))
-            .sum::<f64>() / count;
+    pub fn remove_inactive(&mut self) {
+        self.records.retain(|record| record.is_active());
+    }
 
-        let std_dev = variance.sqrt();
-
-        Some((mean, variance, std_dev))
+    pub fn count_records(&self) -> usize {
+        self.records.len()
     }
 }
 
-pub fn uppercase_transform(value: &str) -> String {
-    value.to_uppercase()
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
 
-pub fn numeric_filter(record: &[String]) -> bool {
-    record.iter().all(|field| field.parse::<f64>().is_ok())
+    #[test]
+    fn test_data_processor_operations() {
+        let records = vec![
+            DataRecord::new(1, "Item1".to_string(), "A".to_string(), 100.0, true),
+            DataRecord::new(2, "Item2".to_string(), "B".to_string(), 200.0, false),
+            DataRecord::new(3, "Item3".to_string(), "A".to_string(), 150.0, true),
+        ];
+
+        let mut processor = DataProcessor { records };
+
+        assert_eq!(processor.count_records(), 3);
+        assert_eq!(processor.filter_by_category("A").len(), 2);
+        assert_eq!(processor.filter_active().len(), 2);
+        assert_eq!(processor.calculate_total_value(), 450.0);
+        assert_eq!(processor.calculate_average_value(), 150.0);
+
+        processor.remove_inactive();
+        assert_eq!(processor.count_records(), 2);
+
+        let temp_file = NamedTempFile::new().unwrap();
+        let export_result = processor.export_to_csv(temp_file.path().to_str().unwrap());
+        assert!(export_result.is_ok());
+    }
 }

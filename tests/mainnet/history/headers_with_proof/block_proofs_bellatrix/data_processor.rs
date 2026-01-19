@@ -233,3 +233,137 @@ pub fn calculate_statistics(records: &[DataRecord]) -> HashMap<String, f64> {
 
     stats
 }
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct ProcessingError {
+    message: String,
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Processing error: {}", self.message)
+    }
+}
+
+impl Error for ProcessingError {}
+
+impl ProcessingError {
+    pub fn new(msg: &str) -> Self {
+        ProcessingError {
+            message: msg.to_string(),
+        }
+    }
+}
+
+pub struct DataProcessor {
+    threshold: f64,
+    scale_factor: f64,
+}
+
+impl DataProcessor {
+    pub fn new(threshold: f64, scale_factor: f64) -> Result<Self, ProcessingError> {
+        if threshold <= 0.0 {
+            return Err(ProcessingError::new("Threshold must be positive"));
+        }
+        if scale_factor <= 0.0 {
+            return Err(ProcessingError::new("Scale factor must be positive"));
+        }
+
+        Ok(DataProcessor {
+            threshold,
+            scale_factor,
+        })
+    }
+
+    pub fn validate_data(&self, data: &[f64]) -> Result<(), ProcessingError> {
+        if data.is_empty() {
+            return Err(ProcessingError::new("Data cannot be empty"));
+        }
+
+        for &value in data {
+            if value.is_nan() || value.is_infinite() {
+                return Err(ProcessingError::new("Data contains invalid numeric values"));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn process_data(&self, data: &[f64]) -> Result<Vec<f64>, ProcessingError> {
+        self.validate_data(data)?;
+
+        let mut result = Vec::with_capacity(data.len());
+        for &value in data {
+            let processed_value = if value.abs() > self.threshold {
+                value * self.scale_factor
+            } else {
+                value
+            };
+            result.push(processed_value);
+        }
+
+        Ok(result)
+    }
+
+    pub fn calculate_statistics(&self, data: &[f64]) -> Result<(f64, f64, f64), ProcessingError> {
+        self.validate_data(data)?;
+
+        let sum: f64 = data.iter().sum();
+        let mean = sum / data.len() as f64;
+
+        let variance: f64 = data.iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>() / data.len() as f64;
+
+        let std_dev = variance.sqrt();
+
+        Ok((mean, variance, std_dev))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_processor_creation() {
+        let processor = DataProcessor::new(10.0, 2.0).unwrap();
+        assert_eq!(processor.threshold, 10.0);
+        assert_eq!(processor.scale_factor, 2.0);
+    }
+
+    #[test]
+    fn test_invalid_processor_creation() {
+        assert!(DataProcessor::new(0.0, 2.0).is_err());
+        assert!(DataProcessor::new(10.0, -1.0).is_err());
+    }
+
+    #[test]
+    fn test_data_validation() {
+        let processor = DataProcessor::new(5.0, 1.5).unwrap();
+        assert!(processor.validate_data(&[1.0, 2.0, 3.0]).is_ok());
+        assert!(processor.validate_data(&[]).is_err());
+        assert!(processor.validate_data(&[f64::NAN, 2.0]).is_err());
+    }
+
+    #[test]
+    fn test_data_processing() {
+        let processor = DataProcessor::new(2.0, 3.0).unwrap();
+        let data = vec![1.0, 2.5, 3.0, 0.5];
+        let processed = processor.process_data(&data).unwrap();
+        assert_eq!(processed, vec![1.0, 7.5, 9.0, 0.5]);
+    }
+
+    #[test]
+    fn test_statistics_calculation() {
+        let processor = DataProcessor::new(10.0, 2.0).unwrap();
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let (mean, variance, std_dev) = processor.calculate_statistics(&data).unwrap();
+        
+        assert!((mean - 3.0).abs() < 1e-10);
+        assert!((variance - 2.0).abs() < 1e-10);
+        assert!((std_dev - 2.0_f64.sqrt()).abs() < 1e-10);
+    }
+}

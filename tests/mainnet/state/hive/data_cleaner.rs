@@ -151,3 +151,54 @@ mod tests {
         );
     }
 }
+use regex::Regex;
+use std::collections::HashSet;
+
+pub fn clean_and_normalize_text(input: &str) -> String {
+    let trimmed = input.trim();
+    
+    let re_multispace = Regex::new(r"\s+").unwrap();
+    let normalized_spaces = re_multispace.replace_all(trimmed, " ");
+    
+    let re_special = Regex::new(r"[^\w\s\-.,!?]").unwrap();
+    let cleaned = re_special.replace_all(&normalized_spaces, "");
+    
+    cleaned.to_string()
+}
+
+pub fn extract_unique_words(text: &str) -> HashSet<String> {
+    let cleaned = clean_and_normalize_text(text);
+    cleaned.split_whitespace()
+        .map(|word| word.to_lowercase())
+        .collect()
+}
+
+pub fn calculate_text_metrics(text: &str) -> (usize, usize, usize) {
+    let words = text.split_whitespace().count();
+    let chars = text.chars().count();
+    let bytes = text.len();
+    
+    (words, chars, bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_clean_text() {
+        let dirty = "  Hello   World!!  @#$%  ";
+        let cleaned = clean_and_normalize_text(dirty);
+        assert_eq!(cleaned, "Hello World!!");
+    }
+
+    #[test]
+    fn test_unique_words() {
+        let text = "hello world hello universe";
+        let unique = extract_unique_words(text);
+        assert_eq!(unique.len(), 3);
+        assert!(unique.contains("hello"));
+        assert!(unique.contains("world"));
+        assert!(unique.contains("universe"));
+    }
+}

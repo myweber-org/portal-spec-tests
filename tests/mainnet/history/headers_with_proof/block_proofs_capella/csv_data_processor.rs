@@ -1,39 +1,14 @@
 
 use std::error::Error;
 use std::fs::File;
-use csv::{Reader, Writer};
+use std::path::Path;
 
 #[derive(Debug, Clone)]
 pub struct DataRecord {
-    id: u32,
-    name: String,
-    category: String,
-    value: f64,
-    active: bool,
-}
-
-impl DataRecord {
-    pub fn new(id: u32, name: String, category: String, value: f64, active: bool) -> Self {
-        Self {
-            id,
-            name,
-            category,
-            value,
-            active,
-        }
-    }
-
-    pub fn is_active(&self) -> bool {
-        self.active
-    }
-
-    pub fn value(&self) -> f64 {
-        self.value
-    }
-
-    pub fn category(&self) -> &str {
-        &self.category
-    }
+    pub id: u32,
+    pub category: String,
+    pub value: f64,
+    pub active: bool,
 }
 
 pub struct DataProcessor {
@@ -41,96 +16,98 @@ pub struct DataProcessor {
 }
 
 impl DataProcessor {
-    pub fn from_csv(file_path: &str) -> Result<Self, Box<dyn Error>> {
-        let file = File::open(file_path)?;
-        let mut rdr = Reader::from_reader(file);
-        let mut records = Vec::new();
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn Error>> {
+        let file = File::open(path)?;
+        let mut rdr = csv::Reader::from_reader(file);
 
         for result in rdr.deserialize() {
             let record: DataRecord = result?;
-            records.push(record);
+            self.records.push(record);
         }
 
-        Ok(Self { records })
-    }
-
-    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
-        self.records
-            .iter()
-            .filter(|record| record.category() == category)
-            .collect()
-    }
-
-    pub fn filter_active(&self) -> Vec<&DataRecord> {
-        self.records
-            .iter()
-            .filter(|record| record.is_active())
-            .collect()
-    }
-
-    pub fn calculate_total_value(&self) -> f64 {
-        self.records.iter().map(|record| record.value()).sum()
-    }
-
-    pub fn calculate_average_value(&self) -> f64 {
-        if self.records.is_empty() {
-            0.0
-        } else {
-            self.calculate_total_value() / self.records.len() as f64
-        }
-    }
-
-    pub fn export_to_csv(&self, file_path: &str) -> Result<(), Box<dyn Error>> {
-        let file = File::create(file_path)?;
-        let mut wtr = Writer::from_writer(file);
-
-        for record in &self.records {
-            wtr.serialize(record)?;
-        }
-
-        wtr.flush()?;
         Ok(())
     }
 
-    pub fn add_record(&mut self, record: DataRecord) {
-        self.records.push(record);
+    pub fn filter_by_category(&self, category: &str) -> Vec<DataRecord> {
+        self.records
+            .iter()
+            .filter(|r| r.category == category)
+            .cloned()
+            .collect()
     }
 
-    pub fn remove_inactive(&mut self) {
-        self.records.retain(|record| record.is_active());
+    pub fn calculate_average(&self) -> Option<f64> {
+        if self.records.is_empty() {
+            return None;
+        }
+
+        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        Some(sum / self.records.len() as f64)
     }
 
-    pub fn count_records(&self) -> usize {
-        self.records.len()
+    pub fn get_active_records(&self) -> Vec<DataRecord> {
+        self.records
+            .iter()
+            .filter(|r| r.active)
+            .cloned()
+            .collect()
+    }
+
+    pub fn find_max_value(&self) -> Option<&DataRecord> {
+        self.records.iter().max_by(|a, b| {
+            a.value
+                .partial_cmp(&b.value)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+    }
+
+    pub fn count_by_category(&self) -> std::collections::HashMap<String, usize> {
+        let mut counts = std::collections::HashMap::new();
+        
+        for record in &self.records {
+            *counts.entry(record.category.clone()).or_insert(0) += 1;
+        }
+        
+        counts
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_data_processor_operations() {
-        let records = vec![
-            DataRecord::new(1, "Item1".to_string(), "A".to_string(), 100.0, true),
-            DataRecord::new(2, "Item2".to_string(), "B".to_string(), 200.0, false),
-            DataRecord::new(3, "Item3".to_string(), "A".to_string(), 150.0, true),
-        ];
-
-        let mut processor = DataProcessor { records };
-
-        assert_eq!(processor.count_records(), 3);
-        assert_eq!(processor.filter_by_category("A").len(), 2);
-        assert_eq!(processor.filter_active().len(), 2);
-        assert_eq!(processor.calculate_total_value(), 450.0);
-        assert_eq!(processor.calculate_average_value(), 150.0);
-
-        processor.remove_inactive();
-        assert_eq!(processor.count_records(), 2);
-
-        let temp_file = NamedTempFile::new().unwrap();
-        let export_result = processor.export_to_csv(temp_file.path().to_str().unwrap());
-        assert!(export_result.is_ok());
+    fn test_data_processing() {
+        let mut processor = DataProcessor::new();
+        
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,category,value,active").unwrap();
+        writeln!(temp_file, "1,electronics,99.99,true").unwrap();
+        writeln!(temp_file, "2,books,24.50,false").unwrap();
+        writeln!(temp_file, "3,electronics,149.99,true").unwrap();
+        
+        processor.load_from_csv(temp_file.path()).unwrap();
+        
+        assert_eq!(processor.records.len(), 3);
+        assert_eq!(processor.filter_by_category("electronics").len(), 2);
+        
+        let avg = processor.calculate_average().unwrap();
+        assert!(avg > 91.0 && avg < 92.0);
+        
+        assert_eq!(processor.get_active_records().len(), 2);
+        
+        let max_record = processor.find_max_value().unwrap();
+        assert_eq!(max_record.id, 3);
+        
+        let counts = processor.count_by_category();
+        assert_eq!(counts.get("electronics"), Some(&2));
     }
 }

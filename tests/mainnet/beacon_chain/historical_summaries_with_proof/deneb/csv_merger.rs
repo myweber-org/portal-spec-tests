@@ -18,7 +18,8 @@ pub fn merge_csv_files(input_paths: &[&str], output_path: &str) -> Result<(), Bo
             writer.write_all(b"\n")?;
             headers_written = true;
         } else if headers != rdr.headers()? {
-            eprintln!("Warning: Headers in {} differ from first file. Skipping header.", input_path);
+            eprintln!("Warning: Headers in {} differ from first file. Skipping.", input_path);
+            continue;
         }
 
         for result in rdr.records() {
@@ -29,6 +30,7 @@ pub fn merge_csv_files(input_paths: &[&str], output_path: &str) -> Result<(), Bo
     }
 
     writer.flush()?;
+    println!("Successfully merged {} files into {}", input_paths.len(), output_path);
     Ok(())
 }
 
@@ -39,20 +41,23 @@ mod tests {
 
     #[test]
     fn test_merge_csv_files() {
-        let data1 = "id,name\n1,Alice\n2,Bob";
-        let data2 = "id,name\n3,Charlie\n4,Diana";
-        fs::write("test1.csv", data1).unwrap();
-        fs::write("test2.csv", data2).unwrap();
+        let test_dir = "test_merge";
+        fs::create_dir_all(test_dir).unwrap();
 
-        let inputs = vec!["test1.csv", "test2.csv"];
-        merge_csv_files(&inputs, "merged.csv").unwrap();
+        let file1 = format!("{}/data1.csv", test_dir);
+        let file2 = format!("{}/data2.csv", test_dir);
+        let output = format!("{}/merged.csv", test_dir);
 
-        let merged = fs::read_to_string("merged.csv").unwrap();
-        assert!(merged.contains("Alice"));
-        assert!(merged.contains("Diana"));
+        fs::write(&file1, "id,name\n1,Alice\n2,Bob").unwrap();
+        fs::write(&file2, "id,name\n3,Charlie\n4,Diana").unwrap();
 
-        fs::remove_file("test1.csv").unwrap();
-        fs::remove_file("test2.csv").unwrap();
-        fs::remove_file("merged.csv").unwrap();
+        let inputs = [file1.as_str(), file2.as_str()];
+        merge_csv_files(&inputs, &output).unwrap();
+
+        let content = fs::read_to_string(&output).unwrap();
+        assert!(content.contains("Alice"));
+        assert!(content.contains("Diana"));
+
+        fs::remove_dir_all(test_dir).unwrap();
     }
 }

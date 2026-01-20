@@ -2,77 +2,42 @@ use aes_gcm::{
     aead::{Aead, KeyInit, OsRng},
     Aes256Gcm, Key, Nonce,
 };
-use std::fs;
-use std::io::{self, Write};
-use std::path::Path;
+use std::error::Error;
 
-pub fn encrypt_file(input_path: &str, output_path: &str) -> io::Result<()> {
-    let data = fs::read(input_path)?;
-    
+pub fn encrypt_data(plaintext: &[u8]) -> Result<(Vec<u8>, Vec<u8>), Box<dyn Error>> {
     let key = Aes256Gcm::generate_key(&mut OsRng);
     let cipher = Aes256Gcm::new(&key);
-    let nonce = Nonce::from_slice(b"unique_nonce_");
+    let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
     
-    let encrypted_data = cipher
-        .encrypt(nonce, data.as_ref())
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-    
-    let mut output = fs::File::create(output_path)?;
-    output.write_all(&key)?;
-    output.write_all(&encrypted_data)?;
-    
-    Ok(())
+    let ciphertext = cipher.encrypt(&nonce, plaintext)?;
+    Ok((ciphertext, nonce.to_vec()))
 }
 
-pub fn decrypt_file(input_path: &str, output_path: &str) -> io::Result<()> {
-    let encrypted_content = fs::read(input_path)?;
-    
-    if encrypted_content.len() < 32 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "File too short to contain key",
-        ));
-    }
-    
-    let (key_bytes, ciphertext) = encrypted_content.split_at(32);
-    let key = Key::<Aes256Gcm>::from_slice(key_bytes);
+pub fn decrypt_data(ciphertext: &[u8], nonce: &[u8], key: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+    let key = Key::<Aes256Gcm>::from_slice(key);
     let cipher = Aes256Gcm::new(key);
-    let nonce = Nonce::from_slice(b"unique_nonce_");
+    let nonce = Nonce::from_slice(nonce);
     
-    let decrypted_data = cipher
-        .decrypt(nonce, ciphertext)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-    
-    fs::write(output_path, decrypted_data)?;
-    Ok(())
+    let plaintext = cipher.decrypt(nonce, ciphertext)?;
+    Ok(plaintext)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::NamedTempFile;
 
     #[test]
     fn test_encryption_roundtrip() {
-        let original_content = b"Secret data for encryption test";
+        let original_data = b"Secret message for encryption";
+        let (ciphertext, nonce) = encrypt_data(original_data).unwrap();
         
-        let input_file = NamedTempFile::new().unwrap();
-        let encrypted_file = NamedTempFile::new().unwrap();
-        let decrypted_file = NamedTempFile::new().unwrap();
+        let key = Aes256Gcm::generate_key(&mut OsRng).to_vec();
+        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key));
+        let encrypted = cipher.encrypt(Nonce::from_slice(&nonce), original_data).unwrap();
         
-        fs::write(input_file.path(), original_content).unwrap();
+        assert_eq!(encrypted, ciphertext);
         
-        encrypt_file(
-            input_file.path().to_str().unwrap(),
-            encrypted_file.path().to_str().unwrap(),
-        ).unwrap();
-        
-        decrypt_file(
-            encrypted_file.path().to_str().unwrap(),
-            decrypted_file.path().to_str().unwrap(),
-        ).unwrap();
-        
-        let decrypted_content = fs::read(decrypted_file.path()).unwrap();
-        assert_eq!(original_content.to_vec(), decrypted_content);
+        let decrypted = decrypt_data(&ciphertext, &nonce, &key).unwrap();
+        assert_eq!(decrypted, original_data);
     }
 }

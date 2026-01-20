@@ -133,3 +133,140 @@ mod tests {
         assert_eq!(processor.cache_size(), 0);
     }
 }
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    id: u32,
+    values: Vec<f64>,
+    metadata: HashMap<String, String>,
+}
+
+#[derive(Debug)]
+pub enum DataError {
+    InvalidId,
+    EmptyValues,
+    ValueOutOfRange(f64),
+    MissingMetadata(String),
+}
+
+impl fmt::Display for DataError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DataError::InvalidId => write!(f, "Invalid record ID"),
+            DataError::EmptyValues => write!(f, "Record contains no values"),
+            DataError::ValueOutOfRange(val) => write!(f, "Value {} is out of acceptable range", val),
+            DataError::MissingMetadata(key) => write!(f, "Missing required metadata: {}", key),
+        }
+    }
+}
+
+impl Error for DataError {}
+
+impl DataRecord {
+    pub fn new(id: u32, values: Vec<f64>, metadata: HashMap<String, String>) -> Self {
+        DataRecord {
+            id,
+            values,
+            metadata,
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), DataError> {
+        if self.id == 0 {
+            return Err(DataError::InvalidId);
+        }
+
+        if self.values.is_empty() {
+            return Err(DataError::EmptyValues);
+        }
+
+        for &value in &self.values {
+            if !value.is_finite() || value < 0.0 || value > 1000.0 {
+                return Err(DataError::ValueOutOfRange(value));
+            }
+        }
+
+        if !self.metadata.contains_key("source") {
+            return Err(DataError::MissingMetadata("source".to_string()));
+        }
+
+        Ok(())
+    }
+
+    pub fn transform(&mut self, multiplier: f64) {
+        for value in &mut self.values {
+            *value *= multiplier;
+        }
+    }
+
+    pub fn calculate_statistics(&self) -> (f64, f64, f64) {
+        let count = self.values.len() as f64;
+        let sum: f64 = self.values.iter().sum();
+        let mean = sum / count;
+
+        let variance: f64 = self.values
+            .iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>() / count;
+
+        let std_dev = variance.sqrt();
+
+        (mean, variance, std_dev)
+    }
+
+    pub fn get_metadata(&self, key: &str) -> Option<&String> {
+        self.metadata.get(key)
+    }
+}
+
+pub fn process_records(records: &mut [DataRecord], multiplier: f64) -> Result<Vec<(f64, f64, f64)>, DataError> {
+    let mut results = Vec::new();
+
+    for record in records {
+        record.validate()?;
+        record.transform(multiplier);
+        results.push(record.calculate_statistics());
+    }
+
+    Ok(results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_record() {
+        let mut metadata = HashMap::new();
+        metadata.insert("source".to_string(), "sensor_a".to_string());
+        
+        let mut record = DataRecord::new(1, vec![10.0, 20.0, 30.0], metadata);
+        
+        assert!(record.validate().is_ok());
+        
+        record.transform(2.0);
+        assert_eq!(record.values, vec![20.0, 40.0, 60.0]);
+        
+        let stats = record.calculate_statistics();
+        assert_eq!(stats.0, 40.0);
+    }
+
+    #[test]
+    fn test_invalid_id() {
+        let metadata = HashMap::new();
+        let record = DataRecord::new(0, vec![10.0], metadata);
+        
+        assert!(matches!(record.validate(), Err(DataError::InvalidId)));
+    }
+
+    #[test]
+    fn test_missing_metadata() {
+        let metadata = HashMap::new();
+        let record = DataRecord::new(1, vec![10.0], metadata);
+        
+        assert!(matches!(record.validate(), Err(DataError::MissingMetadata(_))));
+    }
+}

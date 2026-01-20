@@ -103,4 +103,97 @@ mod tests {
         assert_eq!(env_vars.get("DB_URL"), Some(&"postgresql://localhost/mydb".to_string()));
         assert_eq!(env_vars.get("LOG_LEVEL"), Some(&"info".to_string()));
     }
+}use std::collections::HashMap;
+use std::env;
+use std::fs;
+
+pub struct Config {
+    values: HashMap<String, String>,
+}
+
+impl Config {
+    pub fn from_file(path: &str) -> Result<Self, String> {
+        let content = fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read config file: {}", e))?;
+
+        let mut values = HashMap::new();
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+
+            let parts: Vec<&str> = trimmed.splitn(2, '=').collect();
+            if parts.len() == 2 {
+                let key = parts[0].trim().to_string();
+                let raw_value = parts[1].trim().to_string();
+                let value = Self::resolve_env_vars(&raw_value);
+                values.insert(key, value);
+            }
+        }
+
+        Ok(Config { values })
+    }
+
+    fn resolve_env_vars(value: &str) -> String {
+        let mut result = value.to_string();
+        if let Some(env_var) = value.strip_prefix("${").and_then(|s| s.strip_suffix('}')) {
+            if let Ok(env_value) = env::var(env_var) {
+                result = env_value;
+            }
+        }
+        result
+    }
+
+    pub fn get(&self, key: &str) -> Option<&String> {
+        self.values.get(key)
+    }
+
+    pub fn get_or_default(&self, key: &str, default: &str) -> String {
+        self.values.get(key).map(|s| s.as_str()).unwrap_or(default).to_string()
+    }
+
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.values.contains_key(key)
+    }
+
+    pub fn merge(&mut self, other: Config) {
+        for (key, value) in other.values {
+            self.values.insert(key, value);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_config_parsing() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "HOST=localhost").unwrap();
+        writeln!(file, "PORT=8080").unwrap();
+        writeln!(file, "# This is a comment").unwrap();
+        writeln!(file, "TIMEOUT=30").unwrap();
+
+        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.get("HOST"), Some(&"localhost".to_string()));
+        assert_eq!(config.get("PORT"), Some(&"8080".to_string()));
+        assert_eq!(config.get("TIMEOUT"), Some(&"30".to_string()));
+        assert_eq!(config.get("MISSING"), None);
+    }
+
+    #[test]
+    fn test_env_var_resolution() {
+        env::set_var("APP_SECRET", "super_secret");
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "SECRET=${{APP_SECRET}}").unwrap();
+        writeln!(file, "PLAIN=value").unwrap();
+
+        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.get("SECRET"), Some(&"super_secret".to_string()));
+        assert_eq!(config.get("PLAIN"), Some(&"value".to_string()));
+    }
 }

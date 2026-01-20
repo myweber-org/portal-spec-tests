@@ -16,7 +16,7 @@ impl DataProcessor {
         }
     }
 
-    pub fn process_file<P: AsRef<Path>>(&self, file_path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+    pub fn process_csv<P: AsRef<Path>>(&self, file_path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
         let file = File::open(file_path)?;
         let reader = BufReader::new(file);
         let mut records = Vec::new();
@@ -40,17 +40,28 @@ impl DataProcessor {
         Ok(records)
     }
 
-    pub fn validate_record(&self, record: &[String]) -> bool {
-        !record.is_empty() && record.iter().all(|field| !field.is_empty())
+    pub fn validate_record(&self, record: &[String], expected_fields: usize) -> bool {
+        record.len() == expected_fields && record.iter().all(|field| !field.is_empty())
     }
 
-    pub fn filter_records<F>(&self, records: Vec<Vec<String>>, predicate: F) -> Vec<Vec<String>>
-    where
-        F: Fn(&[String]) -> bool,
-    {
-        records.into_iter()
-            .filter(|record| predicate(record))
-            .collect()
+    pub fn calculate_average(&self, records: &[Vec<String>], column_index: usize) -> Option<f64> {
+        let mut sum = 0.0;
+        let mut count = 0;
+
+        for record in records {
+            if column_index < record.len() {
+                if let Ok(value) = record[column_index].parse::<f64>() {
+                    sum += value;
+                    count += 1;
+                }
+            }
+        }
+
+        if count > 0 {
+            Some(sum / count as f64)
+        } else {
+            None
+        }
     }
 }
 
@@ -61,42 +72,33 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_process_csv() {
+    fn test_csv_processing() {
         let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "name,age,city").unwrap();
-        writeln!(temp_file, "John,25,New York").unwrap();
-        writeln!(temp_file, "Alice,30,London").unwrap();
+        writeln!(temp_file, "name,age,salary").unwrap();
+        writeln!(temp_file, "Alice,30,50000.0").unwrap();
+        writeln!(temp_file, "Bob,25,45000.0").unwrap();
+        writeln!(temp_file, "Charlie,35,55000.0").unwrap();
 
         let processor = DataProcessor::new(',', true);
-        let result = processor.process_file(temp_file.path()).unwrap();
+        let records = processor.process_csv(temp_file.path()).unwrap();
         
-        assert_eq!(result.len(), 2);
-        assert_eq!(result[0], vec!["John", "25", "New York"]);
+        assert_eq!(records.len(), 3);
+        assert!(processor.validate_record(&records[0], 3));
     }
 
     #[test]
-    fn test_validate_record() {
-        let processor = DataProcessor::new(',', false);
-        let valid_record = vec!["data".to_string(), "value".to_string()];
-        let invalid_record = vec!["".to_string(), "value".to_string()];
-        
-        assert!(processor.validate_record(&valid_record));
-        assert!(!processor.validate_record(&invalid_record));
-    }
-
-    #[test]
-    fn test_filter_records() {
-        let processor = DataProcessor::new(',', false);
+    fn test_average_calculation() {
         let records = vec![
-            vec!["apple".to_string(), "10".to_string()],
-            vec!["banana".to_string(), "".to_string()],
-            vec!["orange".to_string(), "15".to_string()],
+            vec!["Alice".to_string(), "30".to_string(), "50000.0".to_string()],
+            vec!["Bob".to_string(), "25".to_string(), "45000.0".to_string()],
+            vec!["Charlie".to_string(), "35".to_string(), "55000.0".to_string()],
         ];
 
-        let filtered = processor.filter_records(records, |record| {
-            processor.validate_record(record)
-        });
+        let processor = DataProcessor::new(',', false);
+        let average_age = processor.calculate_average(&records, 1);
+        let average_salary = processor.calculate_average(&records, 2);
 
-        assert_eq!(filtered.len(), 2);
+        assert_eq!(average_age, Some(30.0));
+        assert_eq!(average_salary, Some(50000.0));
     }
 }

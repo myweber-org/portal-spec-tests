@@ -1,69 +1,25 @@
 use serde_json::Value;
-use std::collections::HashSet;
+use jsonschema::JSONSchema;
 
-pub struct JsonValidator {
-    required_fields: HashSet<String>,
-    allowed_types: HashSet<&'static str>,
-}
-
-impl JsonValidator {
-    pub fn new() -> Self {
-        JsonValidator {
-            required_fields: HashSet::new(),
-            allowed_types: HashSet::from(["string", "number", "boolean", "object", "array"]),
-        }
-    }
-
-    pub fn add_required_field(&mut self, field: &str) {
-        self.required_fields.insert(field.to_string());
-    }
-
-    pub fn validate(&self, json_str: &str) -> Result<(), String> {
-        let parsed: Value = serde_json::from_str(json_str)
-            .map_err(|e| format!("Invalid JSON: {}", e))?;
-
-        self.validate_structure(&parsed)?;
-        self.validate_required_fields(&parsed)?;
-
-        Ok(())
-    }
-
-    fn validate_structure(&self, value: &Value) -> Result<(), String> {
-        match value {
-            Value::Object(map) => {
-                for (_, v) in map {
-                    self.validate_structure(v)?;
-                }
-            }
-            Value::Array(arr) => {
-                for item in arr {
-                    self.validate_structure(item)?;
-                }
-            }
-            _ => {}
-        }
-        Ok(())
-    }
-
-    fn validate_required_fields(&self, value: &Value) -> Result<(), String> {
-        if let Value::Object(map) = value {
-            for field in &self.required_fields {
-                if !map.contains_key(field) {
-                    return Err(format!("Missing required field: {}", field));
-                }
-            }
-        }
-        Ok(())
-    }
-
-    pub fn get_field_type(value: &Value) -> &'static str {
-        match value {
-            Value::Null => "null",
-            Value::Bool(_) => "boolean",
-            Value::Number(_) => "number",
-            Value::String(_) => "string",
-            Value::Array(_) => "array",
-            Value::Object(_) => "object",
+pub fn validate_json(schema: &str, data: &str) -> Result<(), Vec<String>> {
+    let schema_value: Value = serde_json::from_str(schema)
+        .map_err(|e| vec![format!("Invalid schema: {}", e)])?;
+    
+    let data_value: Value = serde_json::from_str(data)
+        .map_err(|e| vec![format!("Invalid JSON data: {}", e)])?;
+    
+    let compiled_schema = JSONSchema::compile(&schema_value)
+        .map_err(|e| vec![format!("Schema compilation failed: {}", e)])?;
+    
+    let validation_result = compiled_schema.validate(&data_value);
+    
+    match validation_result {
+        Ok(_) => Ok(()),
+        Err(errors) => {
+            let error_messages: Vec<String> = errors
+                .map(|e| format!("Validation error: {}", e))
+                .collect();
+            Err(error_messages)
         }
     }
 }
@@ -74,19 +30,34 @@ mod tests {
 
     #[test]
     fn test_valid_json() {
-        let mut validator = JsonValidator::new();
-        validator.add_required_field("name");
-        
-        let json = r#"{"name": "test", "value": 42}"#;
-        assert!(validator.validate(json).is_ok());
+        let schema = r#"
+        {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "age": {"type": "number"}
+            },
+            "required": ["name"]
+        }
+        "#;
+
+        let valid_data = r#"{"name": "Alice", "age": 30}"#;
+        assert!(validate_json(schema, valid_data).is_ok());
     }
 
     #[test]
-    fn test_missing_required_field() {
-        let mut validator = JsonValidator::new();
-        validator.add_required_field("name");
-        
-        let json = r#"{"value": 42}"#;
-        assert!(validator.validate(json).is_err());
+    fn test_invalid_json() {
+        let schema = r#"
+        {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"}
+            },
+            "required": ["name"]
+        }
+        "#;
+
+        let invalid_data = r#"{"age": 30}"#;
+        assert!(validate_json(schema, invalid_data).is_err());
     }
 }

@@ -125,3 +125,89 @@ mod tests {
         assert!((std_dev - 8.164965).abs() < 0.0001);
     }
 }
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DataRecord {
+    id: u32,
+    value: f64,
+    category: String,
+    metadata: HashMap<String, String>,
+}
+
+impl DataRecord {
+    pub fn new(id: u32, value: f64, category: &str) -> Self {
+        DataRecord {
+            id,
+            value,
+            category: category.to_string(),
+            metadata: HashMap::new(),
+        }
+    }
+
+    pub fn is_valid(&self) -> bool {
+        self.id > 0 && self.value.is_finite() && !self.category.is_empty()
+    }
+
+    pub fn transform(&mut self, multiplier: f64) -> Result<(), &'static str> {
+        if multiplier.is_finite() && multiplier != 0.0 {
+            self.value *= multiplier;
+            Ok(())
+        } else {
+            Err("Invalid multiplier provided")
+        }
+    }
+
+    pub fn add_metadata(&mut self, key: &str, value: &str) {
+        self.metadata.insert(key.to_string(), value.to_string());
+    }
+
+    pub fn get_metadata(&self, key: &str) -> Option<&String> {
+        self.metadata.get(key)
+    }
+}
+
+pub fn process_records(records: &mut [DataRecord]) -> Vec<Result<(), &'static str>> {
+    records
+        .iter_mut()
+        .map(|record| {
+            if record.is_valid() {
+                record.transform(1.5)
+            } else {
+                Err("Invalid record detected")
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_record() {
+        let record = DataRecord::new(1, 10.5, "category_a");
+        assert!(record.is_valid());
+    }
+
+    #[test]
+    fn test_invalid_record() {
+        let record = DataRecord::new(0, f64::NAN, "");
+        assert!(!record.is_valid());
+    }
+
+    #[test]
+    fn test_transform_operation() {
+        let mut record = DataRecord::new(1, 10.0, "test");
+        assert!(record.transform(2.0).is_ok());
+        assert_eq!(record.value, 20.0);
+    }
+
+    #[test]
+    fn test_metadata_operations() {
+        let mut record = DataRecord::new(1, 5.0, "test");
+        record.add_metadata("source", "generated");
+        assert_eq!(record.get_metadata("source"), Some(&"generated".to_string()));
+    }
+}

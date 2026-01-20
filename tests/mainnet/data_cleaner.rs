@@ -165,3 +165,77 @@ mod tests {
         assert_eq!(result, vec!["apple", "banana", "cherry"]);
     }
 }
+use csv::{ReaderBuilder, WriterBuilder};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+use std::path::Path;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    id: u32,
+    name: String,
+    age: Option<u8>,
+    score: Option<f64>,
+}
+
+pub fn clean_csv_data(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
+    let input_file = File::open(Path::new(input_path))?;
+    let mut rdr = ReaderBuilder::new()
+        .has_headers(true)
+        .from_reader(input_file);
+
+    let output_file = File::create(Path::new(output_path))?;
+    let mut wtr = WriterBuilder::new()
+        .has_headers(true)
+        .from_writer(output_file);
+
+    for result in rdr.deserialize() {
+        let mut record: Record = result?;
+        
+        record.name = record.name.trim().to_string();
+        
+        if record.name.is_empty() {
+            record.name = "Unknown".to_string();
+        }
+        
+        if record.age.is_none() || record.age.unwrap() > 120 {
+            record.age = Some(30);
+        }
+        
+        if record.score.is_none() {
+            record.score = Some(0.0);
+        } else {
+            let score = record.score.unwrap();
+            record.score = Some(score.clamp(0.0, 100.0));
+        }
+        
+        wtr.serialize(&record)?;
+    }
+
+    wtr.flush()?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_clean_csv_data() {
+        let mut input_file = NamedTempFile::new().unwrap();
+        let input_content = "id,name,age,score\n1,John Doe,25,85.5\n2, ,,120.0\n3,Alice,150,95.0\n4,Bob,30,\n";
+        write!(input_file, "{}", input_content).unwrap();
+        
+        let output_file = NamedTempFile::new().unwrap();
+        
+        let result = clean_csv_data(
+            input_file.path().to_str().unwrap(),
+            output_file.path().to_str().unwrap()
+        );
+        
+        assert!(result.is_ok());
+    }
+}

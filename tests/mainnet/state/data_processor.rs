@@ -1,100 +1,120 @@
-
-use std::collections::HashMap;
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
 
 pub struct DataProcessor {
-    cache: HashMap<String, Vec<f64>>,
+    delimiter: char,
+    has_header: bool,
 }
 
 impl DataProcessor {
-    pub fn new() -> Self {
+    pub fn new(delimiter: char, has_header: bool) -> Self {
         DataProcessor {
-            cache: HashMap::new(),
+            delimiter,
+            has_header,
         }
     }
 
-    pub fn process_numeric_data(&mut self, key: &str, values: &[f64]) -> Result<Vec<f64>, String> {
+    pub fn process_file<P: AsRef<Path>>(&self, file_path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        let mut records = Vec::new();
+
+        for (line_number, line) in reader.lines().enumerate() {
+            let line = line?;
+            
+            if line_number == 0 && self.has_header {
+                continue;
+            }
+
+            let record: Vec<String> = line
+                .split(self.delimiter)
+                .map(|field| field.trim().to_string())
+                .collect();
+
+            if !record.is_empty() {
+                records.push(record);
+            }
+        }
+
+        Ok(records)
+    }
+
+    pub fn validate_record(&self, record: &[String], expected_fields: usize) -> bool {
+        record.len() == expected_fields && record.iter().all(|field| !field.is_empty())
+    }
+
+    pub fn calculate_statistics(&self, records: &[Vec<String>], column_index: usize) -> Option<(f64, f64, f64)> {
+        let values: Vec<f64> = records
+            .iter()
+            .filter_map(|record| record.get(column_index).and_then(|s| s.parse::<f64>().ok()))
+            .collect();
+
         if values.is_empty() {
-            return Err("Empty data array provided".to_string());
+            return None;
         }
 
-        if let Some(cached) = self.cache.get(key) {
-            return Ok(cached.clone());
-        }
+        let sum: f64 = values.iter().sum();
+        let count = values.len() as f64;
+        let mean = sum / count;
 
-        let validated = self.validate_data(values)?;
-        let normalized = self.normalize_data(&validated);
-        let transformed = self.apply_transformations(&normalized);
+        let variance: f64 = values
+            .iter()
+            .map(|value| {
+                let diff = mean - value;
+                diff * diff
+            })
+            .sum::<f64>()
+            / count;
 
-        self.cache.insert(key.to_string(), transformed.clone());
-        Ok(transformed)
-    }
-
-    fn validate_data(&self, data: &[f64]) -> Result<Vec<f64>, String> {
-        if data.iter().any(|&x| x.is_nan() || x.is_infinite()) {
-            return Err("Invalid numeric values detected".to_string());
-        }
-        Ok(data.to_vec())
-    }
-
-    fn normalize_data(&self, data: &[f64]) -> Vec<f64> {
-        let mean = data.iter().sum::<f64>() / data.len() as f64;
-        let variance = data.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / data.len() as f64;
         let std_dev = variance.sqrt();
 
-        if std_dev.abs() < 1e-10 {
-            return vec![0.0; data.len()];
-        }
-
-        data.iter()
-            .map(|&x| (x - mean) / std_dev)
-            .collect()
-    }
-
-    fn apply_transformations(&self, data: &[f64]) -> Vec<f64> {
-        data.iter()
-            .map(|&x| x.powi(2).ln_1p().tanh())
-            .collect()
-    }
-
-    pub fn clear_cache(&mut self) {
-        self.cache.clear();
-    }
-
-    pub fn cache_stats(&self) -> (usize, usize) {
-        let total_items: usize = self.cache.values().map(|v| v.len()).sum();
-        (self.cache.len(), total_items)
+        Some((mean, variance, std_dev))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_validation_rejects_invalid_data() {
-        let processor = DataProcessor::new();
-        let invalid_data = vec![1.0, f64::NAN, 3.0];
-        assert!(processor.validate_data(&invalid_data).is_err());
+    fn test_process_file_with_header() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,salary").unwrap();
+        writeln!(temp_file, "Alice,30,50000").unwrap();
+        writeln!(temp_file, "Bob,25,45000").unwrap();
+
+        let processor = DataProcessor::new(',', true);
+        let result = processor.process_file(temp_file.path()).unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], vec!["Alice", "30", "50000"]);
     }
 
     #[test]
-    fn test_normalization_produces_zero_mean() {
-        let processor = DataProcessor::new();
-        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
-        let normalized = processor.normalize_data(&data);
-        let mean = normalized.iter().sum::<f64>() / normalized.len() as f64;
-        assert!(mean.abs() < 1e-10);
+    fn test_validate_record() {
+        let processor = DataProcessor::new(',', false);
+        let valid_record = vec!["test".to_string(), "123".to_string()];
+        let invalid_record = vec!["".to_string(), "data".to_string()];
+
+        assert!(processor.validate_record(&valid_record, 2));
+        assert!(!processor.validate_record(&invalid_record, 2));
     }
 
     #[test]
-    fn test_cache_functionality() {
-        let mut processor = DataProcessor::new();
-        let data = vec![1.5, 2.5, 3.5];
-        
-        let result1 = processor.process_numeric_data("test", &data).unwrap();
-        let result2 = processor.process_numeric_data("test", &data).unwrap();
-        
-        assert_eq!(result1, result2);
-        assert_eq!(processor.cache_stats(), (1, 1));
+    fn test_calculate_statistics() {
+        let processor = DataProcessor::new(',', false);
+        let records = vec![
+            vec!["10.5".to_string()],
+            vec!["20.0".to_string()],
+            vec!["15.5".to_string()],
+        ];
+
+        let stats = processor.calculate_statistics(&records, 0).unwrap();
+        assert!((stats.0 - 15.333).abs() < 0.001);
+        assert!((stats.2 - 4.041).abs() < 0.001);
     }
 }

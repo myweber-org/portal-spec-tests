@@ -206,3 +206,186 @@ mod tests {
         assert_eq!(filtered[1].id, 2);
     }
 }
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataRecord {
+    pub id: u64,
+    pub value: f64,
+    pub category: String,
+    pub timestamp: i64,
+}
+
+#[derive(Debug)]
+pub enum ProcessingError {
+    InvalidValue(f64),
+    InvalidCategory(String),
+    TimestampOutOfRange(i64),
+    SerializationError(String),
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProcessingError::InvalidValue(v) => write!(f, "Invalid value: {}", v),
+            ProcessingError::InvalidCategory(c) => write!(f, "Invalid category: {}", c),
+            ProcessingError::TimestampOutOfRange(t) => write!(f, "Timestamp out of range: {}", t),
+            ProcessingError::SerializationError(e) => write!(f, "Serialization error: {}", e),
+        }
+    }
+}
+
+impl Error for ProcessingError {}
+
+pub struct DataProcessor {
+    min_value: f64,
+    max_value: f64,
+    allowed_categories: Vec<String>,
+}
+
+impl DataProcessor {
+    pub fn new(min_value: f64, max_value: f64, allowed_categories: Vec<String>) -> Self {
+        DataProcessor {
+            min_value,
+            max_value,
+            allowed_categories,
+        }
+    }
+
+    pub fn validate_record(&self, record: &DataRecord) -> Result<(), ProcessingError> {
+        if record.value < self.min_value || record.value > self.max_value {
+            return Err(ProcessingError::InvalidValue(record.value));
+        }
+
+        if !self.allowed_categories.contains(&record.category) {
+            return Err(ProcessingError::InvalidCategory(record.category.clone()));
+        }
+
+        if record.timestamp < 0 {
+            return Err(ProcessingError::TimestampOutOfRange(record.timestamp));
+        }
+
+        Ok(())
+    }
+
+    pub fn transform_record(&self, record: &DataRecord) -> DataRecord {
+        DataRecord {
+            id: record.id,
+            value: (record.value * 100.0).round() / 100.0,
+            category: record.category.to_uppercase(),
+            timestamp: record.timestamp,
+        }
+    }
+
+    pub fn process_batch(&self, records: Vec<DataRecord>) -> Result<Vec<DataRecord>, ProcessingError> {
+        let mut processed_records = Vec::with_capacity(records.len());
+        
+        for record in records {
+            self.validate_record(&record)?;
+            let transformed = self.transform_record(&record);
+            processed_records.push(transformed);
+        }
+        
+        Ok(processed_records)
+    }
+
+    pub fn serialize_records(&self, records: &[DataRecord]) -> Result<String, ProcessingError> {
+        serde_json::to_string(records)
+            .map_err(|e| ProcessingError::SerializationError(e.to_string()))
+    }
+
+    pub fn deserialize_records(&self, data: &str) -> Result<Vec<DataRecord>, ProcessingError> {
+        serde_json::from_str(data)
+            .map_err(|e| ProcessingError::SerializationError(e.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validation_success() {
+        let processor = DataProcessor::new(
+            0.0,
+            100.0,
+            vec!["A".to_string(), "B".to_string(), "C".to_string()]
+        );
+        
+        let record = DataRecord {
+            id: 1,
+            value: 50.0,
+            category: "A".to_string(),
+            timestamp: 1625097600,
+        };
+        
+        assert!(processor.validate_record(&record).is_ok());
+    }
+
+    #[test]
+    fn test_validation_invalid_value() {
+        let processor = DataProcessor::new(
+            0.0,
+            100.0,
+            vec!["A".to_string()]
+        );
+        
+        let record = DataRecord {
+            id: 1,
+            value: 150.0,
+            category: "A".to_string(),
+            timestamp: 1625097600,
+        };
+        
+        assert!(matches!(
+            processor.validate_record(&record),
+            Err(ProcessingError::InvalidValue(150.0))
+        ));
+    }
+
+    #[test]
+    fn test_transform_record() {
+        let processor = DataProcessor::new(0.0, 100.0, vec![]);
+        
+        let record = DataRecord {
+            id: 1,
+            value: 12.345,
+            category: "test".to_string(),
+            timestamp: 1625097600,
+        };
+        
+        let transformed = processor.transform_record(&record);
+        
+        assert_eq!(transformed.value, 12.35);
+        assert_eq!(transformed.category, "TEST");
+    }
+
+    #[test]
+    fn test_serialization_deserialization() {
+        let processor = DataProcessor::new(0.0, 100.0, vec![]);
+        
+        let records = vec![
+            DataRecord {
+                id: 1,
+                value: 10.5,
+                category: "A".to_string(),
+                timestamp: 1625097600,
+            },
+            DataRecord {
+                id: 2,
+                value: 20.5,
+                category: "B".to_string(),
+                timestamp: 1625184000,
+            },
+        ];
+        
+        let serialized = processor.serialize_records(&records).unwrap();
+        let deserialized = processor.deserialize_records(&serialized).unwrap();
+        
+        assert_eq!(records.len(), deserialized.len());
+        assert_eq!(records[0].id, deserialized[0].id);
+        assert_eq!(records[0].value, deserialized[0].value);
+    }
+}

@@ -190,3 +190,98 @@ fn main() -> io::Result<()> {
         }
     }
 }
+use std::fs;
+use std::io::{self, Read, Write};
+use base64::{Engine as _, engine::general_purpose};
+
+const CHUNK_SIZE: usize = 8192;
+
+pub struct FileCipher {
+    key: Vec<u8>,
+}
+
+impl FileCipher {
+    pub fn new(key: &str) -> Self {
+        let mut key_bytes = key.as_bytes().to_vec();
+        while key_bytes.len() < 256 {
+            key_bytes.extend(key_bytes.clone());
+        }
+        key_bytes.truncate(256);
+        FileCipher { key: key_bytes }
+    }
+
+    fn xor_cipher(&self, data: &mut [u8]) {
+        for (i, byte) in data.iter_mut().enumerate() {
+            *byte ^= self.key[i % self.key.len()];
+        }
+    }
+
+    pub fn encrypt_file(&self, source_path: &str, dest_path: &str) -> io::Result<()> {
+        let mut source_file = fs::File::open(source_path)?;
+        let mut dest_file = fs::File::create(dest_path)?;
+        let mut buffer = vec![0u8; CHUNK_SIZE];
+
+        loop {
+            let bytes_read = source_file.read(&mut buffer)?;
+            if bytes_read == 0 {
+                break;
+            }
+            
+            let data_slice = &mut buffer[..bytes_read];
+            self.xor_cipher(data_slice);
+            
+            let encoded = general_purpose::STANDARD.encode(data_slice);
+            dest_file.write_all(encoded.as_bytes())?;
+            dest_file.write_all(b"\n")?;
+        }
+
+        Ok(())
+    }
+
+    pub fn decrypt_file(&self, source_path: &str, dest_path: &str) -> io::Result<()> {
+        let contents = fs::read_to_string(source_path)?;
+        let mut dest_file = fs::File::create(dest_path)?;
+
+        for line in contents.lines() {
+            let decoded = general_purpose::STANDARD.decode(line)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+            
+            let mut data = decoded;
+            self.xor_cipher(&mut data);
+            dest_file.write_all(&data)?;
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_encryption_decryption() {
+        let cipher = FileCipher::new("test-key-123");
+        let test_data = b"Hello, this is a secret message!";
+        
+        let mut temp_input = NamedTempFile::new().unwrap();
+        temp_input.write_all(test_data).unwrap();
+        
+        let temp_encrypted = NamedTempFile::new().unwrap();
+        let temp_decrypted = NamedTempFile::new().unwrap();
+        
+        cipher.encrypt_file(
+            temp_input.path().to_str().unwrap(),
+            temp_encrypted.path().to_str().unwrap()
+        ).unwrap();
+        
+        cipher.decrypt_file(
+            temp_encrypted.path().to_str().unwrap(),
+            temp_decrypted.path().to_str().unwrap()
+        ).unwrap();
+        
+        let decrypted_data = fs::read(temp_decrypted.path()).unwrap();
+        assert_eq!(test_data.to_vec(), decrypted_data);
+    }
+}

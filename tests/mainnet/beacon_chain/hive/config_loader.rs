@@ -149,4 +149,56 @@ mod tests {
         env::remove_var("APP_LOG_LEVEL");
         env::remove_var("OTHER_VAR");
     }
+}use serde::Deserialize;
+use std::env;
+use std::fs;
+use std::path::Path;
+
+#[derive(Debug, Deserialize)]
+pub struct AppConfig {
+    pub server_port: u16,
+    pub database_url: String,
+    pub log_level: String,
+    pub cache_ttl: u64,
+}
+
+impl AppConfig {
+    pub fn load() -> Result<Self, Box<dyn std::error::Error>> {
+        let config_path = env::var("CONFIG_PATH")
+            .unwrap_or_else(|_| "config.json".to_string());
+
+        let config_content = fs::read_to_string(Path::new(&config_path))?;
+        let mut config: AppConfig = serde_json::from_str(&config_content)?;
+
+        if let Ok(port) = env::var("SERVER_PORT") {
+            config.server_port = port.parse()?;
+        }
+
+        if let Ok(db_url) = env::var("DATABASE_URL") {
+            config.database_url = db_url;
+        }
+
+        if let Ok(log_level) = env::var("LOG_LEVEL") {
+            config.log_level = log_level;
+        }
+
+        Ok(config)
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.server_port == 0 {
+            return Err("Server port cannot be zero".to_string());
+        }
+
+        if self.database_url.is_empty() {
+            return Err("Database URL cannot be empty".to_string());
+        }
+
+        let valid_log_levels = ["error", "warn", "info", "debug", "trace"];
+        if !valid_log_levels.contains(&self.log_level.as_str()) {
+            return Err(format!("Invalid log level: {}", self.log_level));
+        }
+
+        Ok(())
+    }
 }

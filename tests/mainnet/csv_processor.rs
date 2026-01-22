@@ -321,4 +321,146 @@ mod tests {
         fs::remove_file(test_input).unwrap();
         fs::remove_file(test_output).unwrap();
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
+}
+
+impl Record {
+    fn from_csv_line(line: &str) -> Result<Self, Box<dyn Error>> {
+        let parts: Vec<&str> = line.split(',').collect();
+        if parts.len() != 4 {
+            return Err("Invalid number of fields".into());
+        }
+
+        let id = parts[0].parse()?;
+        let name = parts[1].trim().to_string();
+        let value = parts[2].parse()?;
+        let active = parts[3].parse()?;
+
+        Ok(Record {
+            id,
+            name,
+            value,
+            active,
+        })
+    }
+}
+
+fn process_csv_file<P: AsRef<Path>>(path: P) -> Result<Vec<Record>, Box<dyn Error>> {
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+    let mut records = Vec::new();
+
+    for (line_num, line) in reader.lines().enumerate() {
+        let line = line?;
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        match Record::from_csv_line(&line) {
+            Ok(record) => records.push(record),
+            Err(e) => eprintln!("Warning: Line {} failed: {}", line_num + 1, e),
+        }
+    }
+
+    Ok(records)
+}
+
+fn calculate_statistics(records: &[Record]) -> (f64, f64, usize) {
+    let active_records: Vec<&Record> = records.iter().filter(|r| r.active).collect();
+    
+    if active_records.is_empty() {
+        return (0.0, 0.0, 0);
+    }
+
+    let sum: f64 = active_records.iter().map(|r| r.value).sum();
+    let count = active_records.len();
+    let average = sum / count as f64;
+    
+    let variance: f64 = active_records.iter()
+        .map(|r| (r.value - average).powi(2))
+        .sum::<f64>() / count as f64;
+
+    (average, variance.sqrt(), count)
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let records = process_csv_file("data.csv")?;
+    
+    println!("Loaded {} total records", records.len());
+    
+    let (mean, std_dev, active_count) = calculate_statistics(&records);
+    println!("Active records: {}", active_count);
+    println!("Mean value: {:.2}", mean);
+    println!("Standard deviation: {:.2}", std_dev);
+    
+    let max_record = records.iter()
+        .max_by(|a, b| a.value.partial_cmp(&b.value).unwrap());
+    
+    if let Some(record) = max_record {
+        println!("Highest value record: ID {}, Name: {}", record.id, record.name);
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_record_parsing() {
+        let line = "42,Test Item,123.45,true";
+        let record = Record::from_csv_line(line).unwrap();
+        
+        assert_eq!(record.id, 42);
+        assert_eq!(record.name, "Test Item");
+        assert_eq!(record.value, 123.45);
+        assert!(record.active);
+    }
+
+    #[test]
+    fn test_invalid_record() {
+        let line = "42,Test Item";
+        let result = Record::from_csv_line(line);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_statistics() {
+        let records = vec![
+            Record { id: 1, name: "A".to_string(), value: 10.0, active: true },
+            Record { id: 2, name: "B".to_string(), value: 20.0, active: true },
+            Record { id: 3, name: "C".to_string(), value: 30.0, active: false },
+        ];
+        
+        let (mean, std_dev, count) = calculate_statistics(&records);
+        assert_eq!(count, 2);
+        assert_eq!(mean, 15.0);
+        assert!(std_dev > 7.07 && std_dev < 7.08);
+    }
+
+    #[test]
+    fn test_file_processing() -> Result<(), Box<dyn Error>> {
+        let mut temp_file = NamedTempFile::new()?;
+        writeln!(temp_file, "# Test data")?;
+        writeln!(temp_file, "1,Alpha,100.5,true")?;
+        writeln!(temp_file, "2,Bravo,200.0,false")?;
+        writeln!(temp_file, "3,Charlie,300.75,true")?;
+        
+        let records = process_csv_file(temp_file.path())?;
+        assert_eq!(records.len(), 3);
+        Ok(())
+    }
 }

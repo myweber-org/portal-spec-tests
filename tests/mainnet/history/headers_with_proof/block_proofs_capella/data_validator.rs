@@ -20,7 +20,7 @@ mod tests {
 
     #[test]
     fn test_valid_email() {
-        assert!(validate_email("user@example.com"));
+        assert!(validate_email("test@example.com"));
         assert!(!validate_email("invalid-email"));
     }
 
@@ -32,6 +32,6 @@ mod tests {
 
     #[test]
     fn test_sanitize_input() {
-        assert_eq!(sanitize_input("  test  "), "test");
+        assert_eq!(sanitize_input("  hello  "), "hello");
     }
 }

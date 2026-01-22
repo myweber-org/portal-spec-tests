@@ -1,55 +1,68 @@
-use std::collections::HashMap;
+
+use serde_json::{json, Value};
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 
-pub fn merge_json_files(file_paths: &[&str]) -> Result<HashMap<String, serde_json::Value>, Box<dyn std::error::Error>> {
-    let mut merged = HashMap::new();
+pub fn merge_json_files(file_paths: &[&str], output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let mut merged_array = Vec::new();
+    let mut seen_keys = HashSet::new();
 
-    for path_str in file_paths {
-        let path = Path::new(path_str);
-        if !path.exists() {
-            eprintln!("Warning: File {} not found, skipping.", path_str);
-            continue;
-        }
+    for file_path in file_paths {
+        let content = fs::read_to_string(file_path)?;
+        let json_value: Value = serde_json::from_str(&content)?;
 
-        let content = fs::read_to_string(path)?;
-        let json_value: serde_json::Value = serde_json::from_str(&content)?;
-
-        if let Some(obj) = json_value.as_object() {
-            for (key, value) in obj {
-                merged.insert(key.clone(), value.clone());
+        if let Value::Array(arr) = json_value {
+            for item in arr {
+                if let Some(obj) = item.as_object() {
+                    if let Some(id) = obj.get("id").and_then(|v| v.as_str()) {
+                        if !seen_keys.contains(id) {
+                            seen_keys.insert(id.to_string());
+                            merged_array.push(item);
+                        }
+                    } else {
+                        merged_array.push(item);
+                    }
+                } else {
+                    merged_array.push(item);
+                }
             }
         } else {
-            eprintln!("Warning: File {} does not contain a JSON object, skipping.", path_str);
+            merged_array.push(json_value);
         }
     }
 
-    Ok(merged)
+    let output_json = json!(merged_array);
+    fs::write(output_path, output_json.to_string())?;
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
     use tempfile::NamedTempFile;
 
     #[test]
     fn test_merge_json_files() {
-        let mut file1 = NamedTempFile::new().unwrap();
-        let mut file2 = NamedTempFile::new().unwrap();
+        let file1_content = r#"[{"id": "1", "name": "Alice"}, {"id": "2", "name": "Bob"}]"#;
+        let file2_content = r#"[{"id": "2", "name": "Bob"}, {"id": "3", "name": "Charlie"}]"#;
 
-        writeln!(file1, r#"{"a": 1, "b": "test"}"#).unwrap();
-        writeln!(file2, r#"{"c": true, "d": [1,2,3]}"#).unwrap();
+        let file1 = NamedTempFile::new().unwrap();
+        let file2 = NamedTempFile::new().unwrap();
+        let output_file = NamedTempFile::new().unwrap();
+
+        fs::write(file1.path(), file1_content).unwrap();
+        fs::write(file2.path(), file2_content).unwrap();
 
         let paths = vec![
             file1.path().to_str().unwrap(),
             file2.path().to_str().unwrap(),
         ];
 
-        let result = merge_json_files(&paths).unwrap();
-        assert_eq!(result.get("a").unwrap().as_i64().unwrap(), 1);
-        assert_eq!(result.get("b").unwrap().as_str().unwrap(), "test");
-        assert_eq!(result.get("c").unwrap().as_bool().unwrap(), true);
-        assert!(result.get("d").unwrap().is_array());
+        merge_json_files(&paths, output_file.path().to_str().unwrap()).unwrap();
+
+        let result_content = fs::read_to_string(output_file.path()).unwrap();
+        let expected = r#"[{"id":"1","name":"Alice"},{"id":"2","name":"Bob"},{"id":"3","name":"Charlie"}]"#;
+        assert_eq!(result_content, expected);
     }
 }

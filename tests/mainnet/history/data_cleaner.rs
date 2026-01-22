@@ -1,272 +1,77 @@
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 
-pub struct DataCleaner {
-    pub remove_duplicates: bool,
-    pub normalize_whitespace: bool,
-    pub trim_strings: bool,
-}
+pub struct DataCleaner;
 
 impl DataCleaner {
-    pub fn new() -> Self {
-        DataCleaner {
-            remove_duplicates: true,
-            normalize_whitespace: true,
-            trim_strings: true,
-        }
+    pub fn clean_string_vector(data: Vec<Option<String>>) -> Vec<String> {
+        data.into_iter()
+            .filter_map(|item| item.map(|s| s.trim().to_string()))
+            .filter(|s| !s.is_empty())
+            .collect()
     }
 
-    pub fn clean_dataset(&self, data: Vec<String>) -> Vec<String> {
-        let mut processed_data = data;
-
-        if self.trim_strings {
-            processed_data = processed_data
-                .into_iter()
-                .map(|s| s.trim().to_string())
-                .collect();
-        }
-
-        if self.normalize_whitespace {
-            processed_data = processed_data
-                .into_iter()
-                .map(|s| s.split_whitespace().collect::<Vec<&str>>().join(" "))
-                .collect();
-        }
-
-        if self.remove_duplicates {
-            let unique_set: HashSet<String> = processed_data.into_iter().collect();
-            processed_data = unique_set.into_iter().collect();
-        }
-
-        processed_data
+    pub fn clean_hashmap(data: HashMap<String, Option<String>>) -> HashMap<String, String> {
+        data.into_iter()
+            .filter_map(|(key, value)| {
+                value
+                    .map(|v| v.trim().to_string())
+                    .filter(|v| !v.is_empty())
+                    .map(|v| (key, v))
+            })
+            .collect()
     }
 
-    pub fn clean_with_options(
-        &self,
-        data: Vec<String>,
-        remove_duplicates: bool,
-        normalize_whitespace: bool,
-        trim_strings: bool,
-    ) -> Vec<String> {
-        let mut processor = DataCleaner {
-            remove_duplicates,
-            normalize_whitespace,
-            trim_strings,
-        };
-        processor.clean_dataset(data)
+    pub fn remove_null_rows<T>(data: Vec<Vec<Option<T>>>) -> Vec<Vec<T>>
+    where
+        T: Clone,
+    {
+        data.into_iter()
+            .filter(|row| row.iter().all(|cell| cell.is_some()))
+            .map(|row| row.into_iter().filter_map(|cell| cell).collect())
+            .collect()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_cleaner_removes_duplicates() {
-        let cleaner = DataCleaner::new();
-        let data = vec![
-            "apple".to_string(),
-            "banana".to_string(),
-            "apple".to_string(),
-            "cherry".to_string(),
-        ];
-        let cleaned = cleaner.clean_dataset(data);
-        assert_eq!(cleaned.len(), 3);
-        assert!(cleaned.contains(&"apple".to_string()));
-        assert!(cleaned.contains(&"banana".to_string()));
-        assert!(cleaned.contains(&"cherry".to_string()));
-    }
-
-    #[test]
-    fn test_cleaner_normalizes_whitespace() {
-        let cleaner = DataCleaner::new();
-        let data = vec!["  hello    world  ".to_string(), "data\tprocessing".to_string()];
-        let cleaned = cleaner.clean_dataset(data);
-        assert!(cleaned.contains(&"hello world".to_string()));
-        assert!(cleaned.contains(&"data processing".to_string()));
-    }
-
-    #[test]
-    fn test_cleaner_with_custom_options() {
-        let cleaner = DataCleaner::new();
-        let data = vec!["  test  ".to_string(), "  test  ".to_string()];
-        let cleaned = cleaner.clean_with_options(data, false, true, true);
-        assert_eq!(cleaned.len(), 1);
-        assert_eq!(cleaned[0], "test");
-    }
-}
-pub fn normalize_string(input: &str) -> String {
-    input.trim().to_lowercase()
-}
-
-pub fn clean_string_vector(strings: Vec<&str>) -> Vec<String> {
-    strings
-        .iter()
-        .map(|s| normalize_string(s))
-        .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_normalize_string() {
-        assert_eq!(normalize_string("  HELLO World  "), "hello world");
-        assert_eq!(normalize_string("RUST"), "rust");
-        assert_eq!(normalize_string(""), "");
-    }
 
     #[test]
     fn test_clean_string_vector() {
-        let input = vec!["  APPLE", "Banana  ", "  CHERRY  "];
-        let expected = vec!["apple", "banana", "cherry"];
-        assert_eq!(clean_string_vector(input), expected);
-    }
-}
-use csv::Reader;
-use serde::Deserialize;
-use std::error::Error;
-use std::fs::File;
-
-#[derive(Debug, Deserialize)]
-struct Record {
-    id: u32,
-    name: String,
-    value: f64,
-    category: String,
-}
-
-pub fn clean_csv_data(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
-    let mut reader = Reader::from_path(input_path)?;
-    let mut writer = csv::Writer::from_writer(File::create(output_path)?);
-
-    for result in reader.deserialize() {
-        let record: Record = result?;
-        
-        if record.value.is_finite() && !record.name.is_empty() {
-            let cleaned_record = Record {
-                name: record.name.trim().to_string(),
-                value: (record.value * 100.0).round() / 100.0,
-                category: record.category.to_uppercase(),
-                ..record
-            };
-            
-            writer.serialize(cleaned_record)?;
-        }
-    }
-    
-    writer.flush()?;
-    Ok(())
-}
-
-pub fn validate_record(record: &Record) -> bool {
-    !record.name.is_empty() 
-        && record.value >= 0.0 
-        && record.value.is_finite()
-        && !record.category.is_empty()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::NamedTempFile;
-
-    #[test]
-    fn test_validate_record() {
-        let valid_record = Record {
-            id: 1,
-            name: "Test".to_string(),
-            value: 42.5,
-            category: "CATEGORY".to_string(),
-        };
-        
-        assert!(validate_record(&valid_record));
+        let input = vec![
+            Some("  hello  ".to_string()),
+            None,
+            Some("".to_string()),
+            Some("world".to_string()),
+        ];
+        let result = DataCleaner::clean_string_vector(input);
+        assert_eq!(result, vec!["hello", "world"]);
     }
 
     #[test]
-    fn test_clean_csv_data() -> Result<(), Box<dyn Error>> {
-        let input_data = "id,name,value,category\n1,test,42.567,category";
-        let mut temp_input = NamedTempFile::new()?;
-        std::io::write(&mut temp_input, input_data)?;
-        
-        let temp_output = NamedTempFile::new()?;
-        
-        clean_csv_data(temp_input.path().to_str().unwrap(), 
-                      temp_output.path().to_str().unwrap())?;
-        
-        Ok(())
-    }
-}use std::collections::HashSet;
+    fn test_clean_hashmap() {
+        let mut input = HashMap::new();
+        input.insert("key1".to_string(), Some("  value1  ".to_string()));
+        input.insert("key2".to_string(), None);
+        input.insert("key3".to_string(), Some("".to_string()));
 
-pub struct DataCleaner {
-    records: Vec<String>,
-}
-
-impl DataCleaner {
-    pub fn new() -> Self {
-        DataCleaner {
-            records: Vec::new(),
-        }
-    }
-
-    pub fn add_record(&mut self, record: &str) {
-        self.records.push(record.trim().to_string());
-    }
-
-    pub fn deduplicate(&mut self) {
-        let mut seen = HashSet::new();
-        self.records.retain(|r| seen.insert(r.clone()));
-    }
-
-    pub fn normalize_case(&mut self) {
-        for record in &mut self.records {
-            let words: Vec<String> = record
-                .split_whitespace()
-                .map(|word| {
-                    let mut chars = word.chars();
-                    match chars.next() {
-                        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-                        None => String::new(),
-                    }
-                })
-                .collect();
-            *record = words.join(" ");
-        }
-    }
-
-    pub fn get_records(&self) -> &[String] {
-        &self.records
-    }
-
-    pub fn clear(&mut self) {
-        self.records.clear();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_deduplication() {
-        let mut cleaner = DataCleaner::new();
-        cleaner.add_record("test record");
-        cleaner.add_record("test record");
-        cleaner.add_record("another record");
-        cleaner.deduplicate();
-        
-        assert_eq!(cleaner.get_records().len(), 2);
+        let result = DataCleaner::clean_hashmap(input);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result.get("key1").unwrap(), "value1");
     }
 
     #[test]
-    fn test_normalization() {
-        let mut cleaner = DataCleaner::new();
-        cleaner.add_record("hello world");
-        cleaner.add_record("rust programming");
-        cleaner.normalize_case();
-        
-        assert_eq!(cleaner.get_records()[0], "Hello World");
-        assert_eq!(cleaner.get_records()[1], "Rust Programming");
+    fn test_remove_null_rows() {
+        let input = vec![
+            vec![Some(1), Some(2)],
+            vec![None, Some(3)],
+            vec![Some(4), None],
+            vec![Some(5), Some(6)],
+        ];
+        let result = DataCleaner::remove_null_rows(input);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], vec![1, 2]);
+        assert_eq!(result[1], vec![5, 6]);
     }
 }

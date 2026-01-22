@@ -1,128 +1,108 @@
-use std::collections::HashMap;
+use serde_json::Value;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
-use serde_json::Value;
-use chrono::{DateTime, Utc};
+use thiserror::Error;
 
-#[derive(Debug)]
-pub struct LogEntry {
-    pub timestamp: DateTime<Utc>,
-    pub level: String,
-    pub message: String,
-    pub fields: HashMap<String, Value>,
+#[derive(Debug, Error)]
+pub enum LogParseError {
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("JSON parse error: {0}")]
+    Json(#[from] serde_json::Error),
+    #[error("Missing required field: {0}")]
+    MissingField(String),
 }
 
-pub struct LogParser {
-    min_level: String,
-    include_fields: Vec<String>,
+pub struct JsonLogParser {
+    file_path: String,
 }
 
-impl LogParser {
-    pub fn new(min_level: &str) -> Self {
-        LogParser {
-            min_level: min_level.to_lowercase(),
-            include_fields: Vec::new(),
+impl JsonLogParser {
+    pub fn new(file_path: &str) -> Self {
+        Self {
+            file_path: file_path.to_string(),
         }
     }
 
-    pub fn with_fields(mut self, fields: &[&str]) -> Self {
-        self.include_fields = fields.iter().map(|s| s.to_string()).collect();
-        self
-    }
-
-    pub fn parse_file(&self, path: &str) -> Result<Vec<LogEntry>, Box<dyn std::error::Error>> {
-        let file = File::open(path)?;
+    pub fn parse_logs(&self) -> Result<Vec<Value>, LogParseError> {
+        let file = File::open(&self.file_path)?;
         let reader = BufReader::new(file);
-        let mut entries = Vec::new();
+        let mut logs = Vec::new();
 
-        for line in reader.lines() {
-            let line = line?;
-            if let Ok(entry) = self.parse_line(&line) {
-                if self.should_include(&entry) {
-                    entries.push(entry);
-                }
+        for (line_num, line) in reader.lines().enumerate() {
+            let line_content = line?;
+            let json_value: Value = serde_json::from_str(&line_content)?;
+            
+            if !json_value.is_object() {
+                return Err(LogParseError::MissingField(
+                    format!("Line {}: Expected JSON object", line_num + 1)
+                ));
             }
+            
+            logs.push(json_value);
         }
 
-        Ok(entries)
+        Ok(logs)
     }
 
-    fn parse_line(&self, line: &str) -> Result<LogEntry, Box<dyn std::error::Error>> {
-        let json: Value = serde_json::from_str(line)?;
-        
-        let timestamp = json["timestamp"]
-            .as_str()
-            .ok_or("Missing timestamp")?
-            .parse::<DateTime<Utc>>()?;
-        
-        let level = json["level"]
-            .as_str()
-            .ok_or("Missing level")?
-            .to_string();
-        
-        let message = json["message"]
-            .as_str()
-            .ok_or("Missing message")?
-            .to_string();
-
-        let mut fields = HashMap::new();
-        if let Some(obj) = json.as_object() {
-            for (key, value) in obj {
-                if !["timestamp", "level", "message"].contains(&key.as_str()) {
-                    if self.include_fields.is_empty() || self.include_fields.contains(key) {
-                        fields.insert(key.clone(), value.clone());
-                    }
-                }
-            }
-        }
-
-        Ok(LogEntry {
-            timestamp,
-            level,
-            message,
-            fields,
-        })
+    pub fn filter_by_level(&self, logs: &[Value], level: &str) -> Vec<Value> {
+        logs.iter()
+            .filter(|log| {
+                log.get("level")
+                    .and_then(|v| v.as_str())
+                    .map(|l| l.eq_ignore_ascii_case(level))
+                    .unwrap_or(false)
+            })
+            .cloned()
+            .collect()
     }
 
-    fn should_include(&self, entry: &LogEntry) -> bool {
-        let level_order = |lvl: &str| match lvl.to_lowercase().as_str() {
-            "error" => 4,
-            "warn" => 3,
-            "info" => 2,
-            "debug" => 1,
-            "trace" => 0,
-            _ => 0,
-        };
-
-        level_order(&entry.level) >= level_order(&self.min_level)
-    }
-
-    pub fn format_entry(&self, entry: &LogEntry) -> String {
-        let mut output = format!(
-            "[{}] {}: {}",
-            entry.timestamp.format("%Y-%m-%d %H:%M:%S"),
-            entry.level.to_uppercase(),
-            entry.message
-        );
-
-        if !entry.fields.is_empty() {
-            let fields_str: Vec<String> = entry.fields
-                .iter()
-                .map(|(k, v)| format!("{}={}", k, v))
-                .collect();
-            output.push_str(&format!(" ({})", fields_str.join(", ")));
-        }
-
-        output
+    pub fn extract_timestamps(&self, logs: &[Value]) -> Vec<String> {
+        logs.iter()
+            .filter_map(|log| {
+                log.get("timestamp")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            })
+            .collect()
     }
 }
 
-pub fn analyze_logs(entries: &[LogEntry]) -> HashMap<String, usize> {
-    let mut stats = HashMap::new();
-    
-    for entry in entries {
-        *stats.entry(entry.level.clone()).or_insert(0) += 1;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_parse_valid_logs() {
+        let log_data = r#"{"timestamp": "2024-01-15T10:30:00Z", "level": "INFO", "message": "System started"}
+{"timestamp": "2024-01-15T10:31:00Z", "level": "ERROR", "message": "Connection failed"}"#;
+        
+        let mut temp_file = NamedTempFile::new().unwrap();
+        std::io::write(&mut temp_file, log_data).unwrap();
+        
+        let parser = JsonLogParser::new(temp_file.path().to_str().unwrap());
+        let logs = parser.parse_logs().unwrap();
+        
+        assert_eq!(logs.len(), 2);
+        assert_eq!(logs[0]["level"], "INFO");
+        assert_eq!(logs[1]["level"], "ERROR");
     }
-    
-    stats
+
+    #[test]
+    fn test_filter_by_level() {
+        let logs = vec![
+            json!({"level": "INFO", "message": "test1"}),
+            json!({"level": "ERROR", "message": "test2"}),
+            json!({"level": "INFO", "message": "test3"}),
+        ];
+        
+        let parser = JsonLogParser::new("dummy.log");
+        let filtered = parser.filter_by_level(&logs, "INFO");
+        
+        assert_eq!(filtered.len(), 2);
+        assert_eq!(filtered[0]["message"], "test1");
+        assert_eq!(filtered[1]["message"], "test3");
+    }
 }

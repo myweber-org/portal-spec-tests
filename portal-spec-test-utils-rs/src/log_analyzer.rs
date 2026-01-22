@@ -333,4 +333,130 @@ mod tests {
         assert_eq!(summary.status_codes.get(&404), Some(&1));
         assert_eq!(summary.status_codes.get(&500), Some(&1));
     }
+}use std::collections::HashMap;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug)]
+pub struct LogSummary {
+    pub total_lines: usize,
+    pub error_count: usize,
+    pub warning_count: usize,
+    pub info_count: usize,
+    pub unique_errors: HashMap<String, usize>,
+    pub time_range: Option<(String, String)>,
+}
+
+impl LogSummary {
+    pub fn new() -> Self {
+        LogSummary {
+            total_lines: 0,
+            error_count: 0,
+            warning_count: 0,
+            info_count: 0,
+            unique_errors: HashMap::new(),
+            time_range: None,
+        }
+    }
+
+    pub fn analyze_file<P: AsRef<Path>>(path: P) -> std::io::Result<Self> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut summary = LogSummary::new();
+        let mut first_timestamp = None;
+        let mut last_timestamp = None;
+
+        for line in reader.lines() {
+            let line = line?;
+            summary.total_lines += 1;
+
+            if line.contains("[ERROR]") {
+                summary.error_count += 1;
+                let error_key = extract_error_type(&line);
+                *summary.unique_errors.entry(error_key).or_insert(0) += 1;
+            } else if line.contains("[WARN]") {
+                summary.warning_count += 1;
+            } else if line.contains("[INFO]") {
+                summary.info_count += 1;
+            }
+
+            if let Some(ts) = extract_timestamp(&line) {
+                if first_timestamp.is_none() {
+                    first_timestamp = Some(ts.clone());
+                }
+                last_timestamp = Some(ts);
+            }
+        }
+
+        if let (Some(first), Some(last)) = (first_timestamp, last_timestamp) {
+            summary.time_range = Some((first, last));
+        }
+
+        Ok(summary)
+    }
+
+    pub fn print_summary(&self) {
+        println!("Log Analysis Summary:");
+        println!("Total lines: {}", self.total_lines);
+        println!("Errors: {}", self.error_count);
+        println!("Warnings: {}", self.warning_count);
+        println!("Info messages: {}", self.info_count);
+        
+        if !self.unique_errors.is_empty() {
+            println!("\nUnique error types:");
+            for (error, count) in &self.unique_errors {
+                println!("  {}: {}", error, count);
+            }
+        }
+        
+        if let Some((first, last)) = &self.time_range {
+            println!("\nTime range: {} - {}", first, last);
+        }
+    }
+}
+
+fn extract_error_type(line: &str) -> String {
+    let parts: Vec<&str> = line.split(": ").collect();
+    if parts.len() > 1 {
+        parts[1].split_whitespace().next().unwrap_or("Unknown").to_string()
+    } else {
+        "Unknown".to_string()
+    }
+}
+
+fn extract_timestamp(line: &str) -> Option<String> {
+    if line.len() > 20 && &line[10..11] == "T" {
+        Some(line[0..19].to_string())
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_log_analysis() {
+        let log_content = r#"2024-01-15T10:30:00 [INFO] Application started
+2024-01-15T10:31:00 [ERROR] Database: Connection timeout
+2024-01-15T10:32:00 [WARN] Memory usage high
+2024-01-15T10:33:00 [ERROR] Database: Query failed
+2024-01-15T10:34:00 [INFO] Processing complete"#;
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+        write!(temp_file, "{}", log_content).unwrap();
+        
+        let summary = LogSummary::analyze_file(temp_file.path()).unwrap();
+        
+        assert_eq!(summary.total_lines, 5);
+        assert_eq!(summary.error_count, 2);
+        assert_eq!(summary.warning_count, 1);
+        assert_eq!(summary.info_count, 2);
+        assert_eq!(summary.unique_errors.get("Database"), Some(&2));
+        assert_eq!(summary.time_range, Some(("2024-01-15T10:30:00".to_string(), "2024-01-15T10:34:00".to_string())));
+    }
 }

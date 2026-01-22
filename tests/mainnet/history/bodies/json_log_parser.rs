@@ -222,3 +222,119 @@ mod tests {
         assert_eq!(request_ids[0].as_str().unwrap(), "abc123");
     }
 }
+use serde_json::Value;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum LogParseError {
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("JSON parsing error: {0}")]
+    Json(#[from] serde_json::Error),
+    #[error("Missing required field: {0}")]
+    MissingField(String),
+}
+
+pub struct JsonLogParser {
+    file_path: String,
+}
+
+impl JsonLogParser {
+    pub fn new(file_path: &str) -> Self {
+        Self {
+            file_path: file_path.to_string(),
+        }
+    }
+
+    pub fn parse_logs(&self) -> Result<Vec<Value>, LogParseError> {
+        let file = File::open(&self.file_path)?;
+        let reader = BufReader::new(file);
+        let mut logs = Vec::new();
+
+        for line in reader.lines() {
+            let line_content = line?;
+            if line_content.trim().is_empty() {
+                continue;
+            }
+
+            let json_value: Value = serde_json::from_str(&line_content)?;
+            logs.push(json_value);
+        }
+
+        Ok(logs)
+    }
+
+    pub fn extract_field(&self, field_name: &str) -> Result<Vec<String>, LogParseError> {
+        let logs = self.parse_logs()?;
+        let mut results = Vec::new();
+
+        for log in logs {
+            if let Some(value) = log.get(field_name) {
+                results.push(value.to_string());
+            } else {
+                return Err(LogParseError::MissingField(field_name.to_string()));
+            }
+        }
+
+        Ok(results)
+    }
+
+    pub fn filter_by_level(&self, level: &str) -> Result<Vec<Value>, LogParseError> {
+        let logs = self.parse_logs()?;
+        let filtered: Vec<Value> = logs
+            .into_iter()
+            .filter(|log| {
+                log.get("level")
+                    .and_then(|v| v.as_str())
+                    .map(|l| l.eq_ignore_ascii_case(level))
+                    .unwrap_or(false)
+            })
+            .collect();
+
+        Ok(filtered)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_parse_valid_logs() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, r#"{{"level": "INFO", "message": "Test message"}}"#).unwrap();
+        writeln!(temp_file, r#"{{"level": "ERROR", "message": "Error occurred"}}"#).unwrap();
+
+        let parser = JsonLogParser::new(temp_file.path().to_str().unwrap());
+        let result = parser.parse_logs();
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_extract_field() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, r#"{{"level": "INFO", "message": "Test"}}"#).unwrap();
+
+        let parser = JsonLogParser::new(temp_file.path().to_str().unwrap());
+        let result = parser.extract_field("message");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), vec!["\"Test\""]);
+    }
+
+    #[test]
+    fn test_filter_by_level() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, r#"{{"level": "INFO", "message": "Info message"}}"#).unwrap();
+        writeln!(temp_file, r#"{{"level": "ERROR", "message": "Error message"}}"#).unwrap();
+
+        let parser = JsonLogParser::new(temp_file.path().to_str().unwrap());
+        let result = parser.filter_by_level("ERROR");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().len(), 1);
+    }
+}

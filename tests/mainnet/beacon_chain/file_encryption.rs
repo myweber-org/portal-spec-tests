@@ -1,145 +1,90 @@
-
 use std::fs;
 use std::io::{self, Read, Write};
-use std::path::Path;
 
-pub struct XorCipher {
-    key: Vec<u8>,
-    key_position: usize,
-}
+const DEFAULT_KEY: u8 = 0xAA;
 
-impl XorCipher {
-    pub fn new(key: &str) -> Self {
-        XorCipher {
-            key: key.as_bytes().to_vec(),
-            key_position: 0,
-        }
-    }
-
-    pub fn encrypt_file(&mut self, source_path: &Path, dest_path: &Path) -> io::Result<()> {
-        self.process_file(source_path, dest_path)
-    }
-
-    pub fn decrypt_file(&mut self, source_path: &Path, dest_path: &Path) -> io::Result<()> {
-        self.process_file(source_path, dest_path)
-    }
-
-    fn process_file(&mut self, source_path: &Path, dest_path: &Path) -> io::Result<()> {
-        let mut source_file = fs::File::open(source_path)?;
-        let mut dest_file = fs::File::create(dest_path)?;
-
-        let mut buffer = [0u8; 4096];
-        self.key_position = 0;
-
-        loop {
-            let bytes_read = source_file.read(&mut buffer)?;
-            if bytes_read == 0 {
-                break;
-            }
-
-            for i in 0..bytes_read {
-                buffer[i] ^= self.key[self.key_position];
-                self.key_position = (self.key_position + 1) % self.key.len();
-            }
-
-            dest_file.write_all(&buffer[..bytes_read])?;
-        }
-
-        dest_file.flush()?;
-        Ok(())
-    }
-
-    pub fn encrypt_data(&mut self, data: &[u8]) -> Vec<u8> {
-        let mut result = Vec::with_capacity(data.len());
-        self.key_position = 0;
-
-        for &byte in data {
-            result.push(byte ^ self.key[self.key_position]);
-            self.key_position = (self.key_position + 1) % self.key.len();
-        }
-
-        result
-    }
-
-    pub fn decrypt_data(&mut self, data: &[u8]) -> Vec<u8> {
-        self.encrypt_data(data)
+fn xor_cipher(data: &mut [u8], key: u8) {
+    for byte in data.iter_mut() {
+        *byte ^= key;
     }
 }
 
-pub fn calculate_file_hash(path: &Path) -> io::Result<u32> {
-    let mut file = fs::File::open(path)?;
-    let mut buffer = [0u8; 4096];
-    let mut hash: u32 = 0x811c9dc5;
+fn encrypt_file(input_path: &str, output_path: &str, key: Option<u8>) -> io::Result<()> {
+    let key = key.unwrap_or(DEFAULT_KEY);
+    let mut content = fs::read(input_path)?;
+    
+    xor_cipher(&mut content, key);
+    
+    let mut file = fs::File::create(output_path)?;
+    file.write_all(&content)?;
+    
+    Ok(())
+}
 
-    loop {
-        let bytes_read = file.read(&mut buffer)?;
-        if bytes_read == 0 {
-            break;
-        }
+fn decrypt_file(input_path: &str, output_path: &str, key: Option<u8>) -> io::Result<()> {
+    encrypt_file(input_path, output_path, key)
+}
 
-        for &byte in &buffer[..bytes_read] {
-            hash ^= byte as u32;
-            hash = hash.wrapping_mul(0x01000193);
+fn main() -> io::Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+    
+    if args.len() < 4 {
+        eprintln!("Usage: {} <encrypt|decrypt> <input> <output> [key]", args[0]);
+        std::process::exit(1);
+    }
+    
+    let operation = &args[1];
+    let input = &args[2];
+    let output = &args[3];
+    let key = args.get(4).and_then(|k| k.parse::<u8>().ok());
+    
+    match operation.as_str() {
+        "encrypt" => encrypt_file(input, output, key),
+        "decrypt" => decrypt_file(input, output, key),
+        _ => {
+            eprintln!("Invalid operation. Use 'encrypt' or 'decrypt'");
+            std::process::exit(1);
         }
     }
-
-    Ok(hash)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
-
+    use std::fs;
+    
     #[test]
     fn test_xor_cipher() {
-        let key = "secret_key";
-        let original_data = b"Hello, World! This is a test message.";
-
-        let mut cipher = XorCipher::new(key);
-        let encrypted = cipher.encrypt_data(original_data);
-
-        let mut cipher2 = XorCipher::new(key);
-        let decrypted = cipher2.decrypt_data(&encrypted);
-
-        assert_eq!(original_data, decrypted.as_slice());
+        let mut data = vec![0x00, 0xFF, 0x55, 0xAA];
+        let original = data.clone();
+        let key = 0xAA;
+        
+        xor_cipher(&mut data, key);
+        assert_ne!(data, original);
+        
+        xor_cipher(&mut data, key);
+        assert_eq!(data, original);
     }
-
+    
     #[test]
     fn test_file_encryption() -> io::Result<()> {
-        let key = "test_key_123";
-        let original_content = b"Sample file content for encryption test.";
-
-        let mut source_file = NamedTempFile::new()?;
-        source_file.write_all(original_content)?;
-        let source_path = source_file.path();
-
-        let mut dest_file = NamedTempFile::new()?;
-        let dest_path = dest_file.path();
-
-        let mut cipher = XorCipher::new(key);
-        cipher.encrypt_file(source_path, dest_path)?;
-
-        let mut cipher2 = XorCipher::new(key);
-        let mut decrypted_file = NamedTempFile::new()?;
-        let decrypted_path = decrypted_file.path();
-        cipher2.decrypt_file(dest_path, decrypted_path)?;
-
+        let test_content = b"Hello, World!";
+        let input_path = "test_input.txt";
+        let encrypted_path = "test_encrypted.txt";
+        let decrypted_path = "test_decrypted.txt";
+        
+        fs::write(input_path, test_content)?;
+        
+        encrypt_file(input_path, encrypted_path, Some(0xCC))?;
+        decrypt_file(encrypted_path, decrypted_path, Some(0xCC))?;
+        
         let decrypted_content = fs::read(decrypted_path)?;
-        assert_eq!(original_content, decrypted_content.as_slice());
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_hash_calculation() -> io::Result<()> {
-        let mut temp_file = NamedTempFile::new()?;
-        temp_file.write_all(b"Test content for hash")?;
-
-        let hash = calculate_file_hash(temp_file.path())?;
-        assert_ne!(hash, 0);
-
+        assert_eq!(decrypted_content, test_content);
+        
+        fs::remove_file(input_path)?;
+        fs::remove_file(encrypted_path)?;
+        fs::remove_file(decrypted_path)?;
+        
         Ok(())
     }
 }

@@ -1,98 +1,121 @@
-use std::fs;
 use std::collections::HashMap;
-use serde::{Deserialize, Serialize};
-use toml;
+use std::env;
+use std::fs;
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct AppConfig {
-    pub server: ServerConfig,
-    pub database: DatabaseConfig,
-    pub logging: LoggingConfig,
+pub struct Config {
+    values: HashMap<String, String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ServerConfig {
-    pub host: String,
-    pub port: u16,
-    pub enable_ssl: bool,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct DatabaseConfig {
-    pub url: String,
-    pub max_connections: u32,
-    pub timeout_seconds: u64,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct LoggingConfig {
-    pub level: String,
-    pub file_path: Option<String>,
-    pub enable_console: bool,
-}
-
-impl AppConfig {
-    pub fn from_file(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
-        let contents = fs::read_to_string(path)?;
-        let config: AppConfig = toml::from_str(&contents)?;
-        Ok(config)
-    }
-
-    pub fn to_file(&self, path: &str) -> Result<(), Box<dyn std::error::Error>> {
-        let toml_string = toml::to_string_pretty(self)?;
-        fs::write(path, toml_string)?;
-        Ok(())
-    }
-
-    pub fn default() -> Self {
-        AppConfig {
-            server: ServerConfig {
-                host: "127.0.0.1".to_string(),
-                port: 8080,
-                enable_ssl: false,
-            },
-            database: DatabaseConfig {
-                url: "postgresql://localhost:5432/mydb".to_string(),
-                max_connections: 10,
-                timeout_seconds: 30,
-            },
-            logging: LoggingConfig {
-                level: "info".to_string(),
-                file_path: Some("app.log".to_string()),
-                enable_console: true,
-            },
+impl Config {
+    pub fn from_file(path: &str) -> Result<Self, String> {
+        let content = fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read config file: {}", e))?;
+        
+        let mut values = HashMap::new();
+        
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+            
+            let parts: Vec<&str> = trimmed.splitn(2, '=').collect();
+            if parts.len() != 2 {
+                return Err(format!("Invalid config line: {}", line));
+            }
+            
+            let key = parts[0].trim().to_string();
+            let raw_value = parts[1].trim().to_string();
+            let value = Self::interpolate_env_vars(&raw_value);
+            
+            values.insert(key, value);
         }
+        
+        Ok(Config { values })
     }
-
-    pub fn to_env_map(&self) -> HashMap<String, String> {
-        let mut env_map = HashMap::new();
-        env_map.insert("SERVER_HOST".to_string(), self.server.host.clone());
-        env_map.insert("SERVER_PORT".to_string(), self.server.port.to_string());
-        env_map.insert("DB_URL".to_string(), self.database.url.clone());
-        env_map.insert("LOG_LEVEL".to_string(), self.logging.level.clone());
-        env_map
+    
+    fn interpolate_env_vars(value: &str) -> String {
+        let mut result = String::new();
+        let mut chars = value.chars().peekable();
+        
+        while let Some(ch) = chars.next() {
+            if ch == '$' && chars.peek() == Some(&'{') {
+                chars.next(); // Skip '{'
+                let mut var_name = String::new();
+                
+                while let Some(ch) = chars.next() {
+                    if ch == '}' {
+                        break;
+                    }
+                    var_name.push(ch);
+                }
+                
+                if let Ok(env_value) = env::var(&var_name) {
+                    result.push_str(&env_value);
+                } else {
+                    result.push_str(&format!("${{{}}}", var_name));
+                }
+            } else {
+                result.push(ch);
+            }
+        }
+        
+        result
+    }
+    
+    pub fn get(&self, key: &str) -> Option<&String> {
+        self.values.get(key)
+    }
+    
+    pub fn get_or_default(&self, key: &str, default: &str) -> String {
+        self.values.get(key)
+            .map(|s| s.as_str())
+            .unwrap_or(default)
+            .to_string()
     }
 }
 
-pub fn validate_config(config: &AppConfig) -> Result<(), Vec<String>> {
-    let mut errors = Vec::new();
-
-    if config.server.port == 0 {
-        errors.push("Server port cannot be zero".to_string());
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+    
+    #[test]
+    fn test_basic_parsing() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "HOST=localhost").unwrap();
+        writeln!(file, "PORT=8080").unwrap();
+        writeln!(file, "# This is a comment").unwrap();
+        writeln!(file, "TIMEOUT=30").unwrap();
+        
+        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.get("HOST"), Some(&"localhost".to_string()));
+        assert_eq!(config.get("PORT"), Some(&"8080".to_string()));
+        assert_eq!(config.get("TIMEOUT"), Some(&"30".to_string()));
+        assert_eq!(config.get("MISSING"), None);
     }
-
-    if config.database.max_connections == 0 {
-        errors.push("Database max connections cannot be zero".to_string());
+    
+    #[test]
+    fn test_env_interpolation() {
+        env::set_var("DB_PASSWORD", "secret123");
+        
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "DB_URL=postgres://user:${DB_PASSWORD}@localhost/db").unwrap();
+        
+        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(
+            config.get("DB_URL"),
+            Some(&"postgres://user:secret123@localhost/db".to_string())
+        );
     }
-
-    let valid_log_levels = ["trace", "debug", "info", "warn", "error"];
-    if !valid_log_levels.contains(&config.logging.level.as_str()) {
-        errors.push(format!("Invalid log level: {}", config.logging.level));
-    }
-
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(errors)
+    
+    #[test]
+    fn test_missing_env_var() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "VALUE=${MISSING_VAR}").unwrap();
+        
+        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.get("VALUE"), Some(&"${MISSING_VAR}".to_string()));
     }
 }

@@ -130,4 +130,134 @@ mod tests {
         assert_eq!(parsed["city"], "Berlin");
         assert_eq!(parsed["country"], "Germany");
     }
+}use serde_json::{Map, Value};
+use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
+
+pub fn merge_json_files(file_paths: &[&str]) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut merged_map = Map::new();
+
+    for path_str in file_paths {
+        let path = Path::new(path_str);
+        if !path.exists() {
+            return Err(format!("File not found: {}", path_str).into());
+        }
+
+        let content = fs::read_to_string(path)?;
+        let json_value: Value = serde_json::from_str(&content)?;
+
+        if let Value::Object(map) = json_value {
+            for (key, value) in map {
+                if merged_map.contains_key(&key) {
+                    eprintln!("Warning: Duplicate key '{}' found in {}", key, path_str);
+                }
+                merged_map.insert(key, value);
+            }
+        } else {
+            return Err(format!("Root element in {} is not a JSON object", path_str).into());
+        }
+    }
+
+    Ok(Value::Object(merged_map))
+}
+
+pub fn merge_json_with_strategy(
+    file_paths: &[&str],
+    conflict_strategy: fn(&str, &Value, &Value) -> Value,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut merged_map = HashMap::new();
+
+    for path_str in file_paths {
+        let path = Path::new(path_str);
+        let content = fs::read_to_string(path)?;
+        let json_value: Value = serde_json::from_str(&content)?;
+
+        if let Value::Object(map) = json_value {
+            for (key, value) in map {
+                match merged_map.get(&key) {
+                    Some(existing) => {
+                        let resolved = conflict_strategy(&key, existing, &value);
+                        merged_map.insert(key, resolved);
+                    }
+                    None => {
+                        merged_map.insert(key, value);
+                    }
+                }
+            }
+        } else {
+            return Err(format!("Root element in {} is not a JSON object", path_str).into());
+        }
+    }
+
+    let final_map: Map<String, Value> = merged_map.into_iter().collect();
+    Ok(Value::Object(final_map))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_basic_merge() {
+        let mut file1 = NamedTempFile::new().unwrap();
+        let mut file2 = NamedTempFile::new().unwrap();
+
+        file1.write_all(b"{\"a\": 1, \"b\": 2}").unwrap();
+        file2.write_all(b"{\"c\": 3, \"d\": 4}").unwrap();
+
+        let result = merge_json_files(&[
+            file1.path().to_str().unwrap(),
+            file2.path().to_str().unwrap(),
+        ])
+        .unwrap();
+
+        let expected = json!({
+            "a": 1,
+            "b": 2,
+            "c": 3,
+            "d": 4
+        });
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_merge_with_conflict() {
+        let mut file1 = NamedTempFile::new().unwrap();
+        let mut file2 = NamedTempFile::new().unwrap();
+
+        file1.write_all(b"{\"a\": 1, \"b\": 2}").unwrap();
+        file2.write_all(b"{\"b\": 99, \"c\": 3}").unwrap();
+
+        let strategy = |_key: &str, v1: &Value, v2: &Value| {
+            if v1.is_number() && v2.is_number() {
+                let n1 = v1.as_f64().unwrap();
+                let n2 = v2.as_f64().unwrap();
+                json!(n1 + n2)
+            } else {
+                v2.clone()
+            }
+        };
+
+        let result = merge_json_with_strategy(
+            &[
+                file1.path().to_str().unwrap(),
+                file2.path().to_str().unwrap(),
+            ],
+            strategy,
+        )
+        .unwrap();
+
+        let expected = json!({
+            "a": 1,
+            "b": 101,
+            "c": 3
+        });
+
+        assert_eq!(result, expected);
+    }
 }

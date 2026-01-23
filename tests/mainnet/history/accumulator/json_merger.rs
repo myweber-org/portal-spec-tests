@@ -1,36 +1,107 @@
-use serde_json::{json, Value};
+
 use std::collections::HashMap;
-use std::fs;
+use std::fs::{self, File};
+use std::io::{BufReader, Read};
 use std::path::Path;
 
-pub fn merge_json_files(file_paths: &[&str], output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let mut merged: HashMap<String, Value> = HashMap::new();
+use serde_json::{Value, json};
 
-    for path_str in file_paths {
-        let path = Path::new(path_str);
+pub fn merge_json_files(file_paths: &[&str], output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let mut merged_array = Vec::new();
+
+    for file_path in file_paths {
+        let path = Path::new(file_path);
         if !path.exists() {
-            eprintln!("Warning: File {} not found, skipping.", path_str);
+            eprintln!("Warning: File {} does not exist, skipping.", file_path);
+            continue;
+        }
+
+        let file = File::open(path)?;
+        let mut reader = BufReader::new(file);
+        let mut content = String::new();
+        reader.read_to_string(&mut content)?;
+
+        let parsed: Value = serde_json::from_str(&content)?;
+        
+        match parsed {
+            Value::Array(arr) => {
+                merged_array.extend(arr);
+            }
+            Value::Object(obj) => {
+                merged_array.push(Value::Object(obj));
+            }
+            _ => {
+                eprintln!("Warning: File {} does not contain JSON object or array, skipping.", file_path);
+            }
+        }
+    }
+
+    let output_value = Value::Array(merged_array);
+    let output_json = serde_json::to_string_pretty(&output_value)?;
+    
+    fs::write(output_path, output_json)?;
+    
+    Ok(())
+}
+
+pub fn merge_json_with_conflict_resolution(
+    file_paths: &[&str], 
+    output_path: &str,
+    conflict_strategy: ConflictStrategy
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut merged_map = HashMap::new();
+
+    for file_path in file_paths {
+        let path = Path::new(file_path);
+        if !path.exists() {
             continue;
         }
 
         let content = fs::read_to_string(path)?;
-        let data: Value = serde_json::from_str(&content)?;
+        let parsed: Value = serde_json::from_str(&content)?;
 
-        if let Value::Object(map) = data {
-            for (key, value) in map {
-                merged.insert(key, value);
+        if let Value::Object(obj) = parsed {
+            for (key, value) in obj {
+                match conflict_strategy {
+                    ConflictStrategy::Overwrite => {
+                        merged_map.insert(key, value);
+                    }
+                    ConflictStrategy::KeepFirst => {
+                        merged_map.entry(key).or_insert(value);
+                    }
+                    ConflictStrategy::MergeArrays => {
+                        if let Some(existing) = merged_map.get_mut(&key) {
+                            if existing.is_array() && value.is_array() {
+                                if let Value::Array(existing_arr) = existing {
+                                    if let Value::Array(new_arr) = value {
+                                        existing_arr.extend(new_arr);
+                                    }
+                                }
+                            } else {
+                                merged_map.insert(key, value);
+                            }
+                        } else {
+                            merged_map.insert(key, value);
+                        }
+                    }
+                }
             }
-        } else {
-            eprintln!("Warning: {} does not contain a JSON object, skipping.", path_str);
         }
     }
 
-    let output_value = json!(merged);
+    let output_value = json!(merged_map);
     let output_json = serde_json::to_string_pretty(&output_value)?;
+    
     fs::write(output_path, output_json)?;
-
-    println!("Merged JSON written to {}", output_path);
+    
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ConflictStrategy {
+    Overwrite,
+    KeepFirst,
+    MergeArrays,
 }
 
 #[cfg(test)]
@@ -44,20 +115,22 @@ mod tests {
         let file2 = NamedTempFile::new().unwrap();
         let output_file = NamedTempFile::new().unwrap();
 
-        fs::write(file1.path(), r#"{"a": 1, "b": 2}"#).unwrap();
-        fs::write(file2.path(), r#"{"c": 3, "d": 4}"#).unwrap();
+        fs::write(file1.path(), r#"[{"id": 1}, {"id": 2}]"#).unwrap();
+        fs::write(file2.path(), r#"[{"id": 3}, {"id": 4}]"#).unwrap();
 
-        let paths = vec![file1.path().to_str().unwrap(), file2.path().to_str().unwrap()];
-        let result = merge_json_files(&paths, output_file.path().to_str().unwrap());
+        let paths = vec![
+            file1.path().to_str().unwrap(),
+            file2.path().to_str().unwrap(),
+        ];
 
-        assert!(result.is_ok());
+        merge_json_files(&paths, output_file.path().to_str().unwrap()).unwrap();
 
-        let output_content = fs::read_to_string(output_file.path()).unwrap();
-        let parsed: Value = serde_json::from_str(&output_content).unwrap();
-
-        assert_eq!(parsed["a"], 1);
-        assert_eq!(parsed["b"], 2);
-        assert_eq!(parsed["c"], 3);
-        assert_eq!(parsed["d"], 4);
+        let content = fs::read_to_string(output_file.path()).unwrap();
+        let parsed: Value = serde_json::from_str(&content).unwrap();
+        
+        assert!(parsed.is_array());
+        if let Value::Array(arr) = parsed {
+            assert_eq!(arr.len(), 4);
+        }
     }
 }

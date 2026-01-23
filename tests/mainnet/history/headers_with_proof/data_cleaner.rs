@@ -28,3 +28,56 @@ pub fn clean_csv(input_path: &str, output_path: &str) -> Result<(), Box<dyn Erro
     wtr.flush()?;
     Ok(())
 }
+use std::collections::HashSet;
+use std::io::{self, BufRead, Write};
+
+pub struct DataCleaner;
+
+impl DataCleaner {
+    pub fn clean_lines(input: &str) -> Vec<String> {
+        let lines: Vec<String> = input.lines().map(|s| s.trim().to_string()).collect();
+        let unique_lines: HashSet<String> = lines.into_iter().collect();
+        let mut sorted_lines: Vec<String> = unique_lines.into_iter().collect();
+        sorted_lines.sort();
+        sorted_lines
+    }
+
+    pub fn process_stdin() -> io::Result<()> {
+        let stdin = io::stdin();
+        let mut buffer = String::new();
+        
+        for line in stdin.lock().lines() {
+            buffer.push_str(&line?);
+            buffer.push('\n');
+        }
+        
+        let cleaned = Self::clean_lines(&buffer);
+        let stdout = io::stdout();
+        let mut handle = stdout.lock();
+        
+        for line in cleaned {
+            writeln!(handle, "{}", line)?;
+        }
+        
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_clean_lines() {
+        let input = "zebra\nalpha\nalpha\nbeta\nzebra";
+        let result = DataCleaner::clean_lines(input);
+        assert_eq!(result, vec!["alpha", "beta", "zebra"]);
+    }
+
+    #[test]
+    fn test_empty_input() {
+        let input = "";
+        let result = DataCleaner::clean_lines(input);
+        assert!(result.is_empty());
+    }
+}

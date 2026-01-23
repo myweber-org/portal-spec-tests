@@ -1,108 +1,94 @@
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
-use std::path::Path;
-
-#[derive(Debug, PartialEq, Eq, Hash)]
-pub enum LogLevel {
-    Error,
-    Warning,
-    Info,
-    Debug,
-}
+use regex::Regex;
 
 pub struct LogAnalyzer {
-    counts: HashMap<LogLevel, usize>,
+    error_patterns: HashMap<String, usize>,
+    warning_patterns: HashMap<String, usize>,
+    info_patterns: HashMap<String, usize>,
 }
 
 impl LogAnalyzer {
     pub fn new() -> Self {
         LogAnalyzer {
-            counts: HashMap::new(),
+            error_patterns: HashMap::new(),
+            warning_patterns: HashMap::new(),
+            info_patterns: HashMap::new(),
         }
     }
 
-    pub fn analyze_file<P: AsRef<Path>>(&mut self, path: P) -> Result<(), std::io::Error> {
-        let file = File::open(path)?;
+    pub fn analyze_file(&mut self, file_path: &str) -> Result<(), std::io::Error> {
+        let file = File::open(file_path)?;
         let reader = BufReader::new(file);
+
+        let error_re = Regex::new(r"ERROR: (.+)").unwrap();
+        let warning_re = Regex::new(r"WARNING: (.+)").unwrap();
+        let info_re = Regex::new(r"INFO: (.+)").unwrap();
 
         for line in reader.lines() {
             let line = line?;
-            self.process_line(&line);
+            
+            if let Some(caps) = error_re.captures(&line) {
+                let msg = caps.get(1).unwrap().as_str().to_string();
+                *self.error_patterns.entry(msg).or_insert(0) += 1;
+            } else if let Some(caps) = warning_re.captures(&line) {
+                let msg = caps.get(1).unwrap().as_str().to_string();
+                *self.warning_patterns.entry(msg).or_insert(0) += 1;
+            } else if let Some(caps) = info_re.captures(&line) {
+                let msg = caps.get(1).unwrap().as_str().to_string();
+                *self.info_patterns.entry(msg).or_insert(0) += 1;
+            }
         }
 
         Ok(())
     }
 
-    fn process_line(&mut self, line: &str) {
-        let level = self.detect_log_level(line);
-        *self.counts.entry(level).or_insert(0) += 1;
-    }
-
-    fn detect_log_level(&self, line: &str) -> LogLevel {
-        let line_lower = line.to_lowercase();
+    pub fn generate_report(&self) -> String {
+        let mut report = String::new();
         
-        if line_lower.contains("error") || line_lower.contains("err") {
-            LogLevel::Error
-        } else if line_lower.contains("warning") || line_lower.contains("warn") {
-            LogLevel::Warning
-        } else if line_lower.contains("debug") {
-            LogLevel::Debug
-        } else {
-            LogLevel::Info
-        }
-    }
-
-    pub fn get_counts(&self) -> &HashMap<LogLevel, usize> {
-        &self.counts
-    }
-
-    pub fn print_summary(&self) {
-        println!("Log Analysis Summary:");
-        println!("=====================");
+        report.push_str("=== LOG ANALYSIS REPORT ===\n\n");
         
-        let total: usize = self.counts.values().sum();
-        
-        for (level, count) in &self.counts {
-            let percentage = if total > 0 {
-                (*count as f64 / total as f64) * 100.0
-            } else {
-                0.0
-            };
-            
-            println!("{:?}: {} ({:.1}%)", level, count, percentage);
+        report.push_str("ERRORS:\n");
+        for (msg, count) in &self.error_patterns {
+            report.push_str(&format!("  {}: {} occurrences\n", msg, count));
         }
         
-        println!("Total logs: {}", total);
+        report.push_str("\nWARNINGS:\n");
+        for (msg, count) in &self.warning_patterns {
+            report.push_str(&format!("  {}: {} occurrences\n", msg, count));
+        }
+        
+        report.push_str("\nINFO MESSAGES:\n");
+        for (msg, count) in &self.info_patterns {
+            report.push_str(&format!("  {}: {} occurrences\n", msg, count));
+        }
+        
+        report
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_detect_log_level() {
-        let analyzer = LogAnalyzer::new();
+    fn test_log_analysis() {
+        let mut log_data = NamedTempFile::new().unwrap();
+        writeln!(log_data, "INFO: Application started").unwrap();
+        writeln!(log_data, "WARNING: Memory usage high").unwrap();
+        writeln!(log_data, "ERROR: Database connection failed").unwrap();
+        writeln!(log_data, "INFO: User login successful").unwrap();
+        writeln!(log_data, "ERROR: Database connection failed").unwrap();
         
-        assert_eq!(analyzer.detect_log_level("ERROR: Something went wrong"), LogLevel::Error);
-        assert_eq!(analyzer.detect_log_level("WARN: This might be an issue"), LogLevel::Warning);
-        assert_eq!(analyzer.detect_log_level("DEBUG: Detailed information"), LogLevel::Debug);
-        assert_eq!(analyzer.detect_log_level("INFO: Normal operation"), LogLevel::Info);
-    }
-
-    #[test]
-    fn test_process_line() {
         let mut analyzer = LogAnalyzer::new();
+        analyzer.analyze_file(log_data.path().to_str().unwrap()).unwrap();
         
-        analyzer.process_line("ERROR: Failed to connect");
-        analyzer.process_line("WARNING: High memory usage");
-        analyzer.process_line("INFO: Server started");
-        analyzer.process_line("ERROR: Database timeout");
-        
-        let counts = analyzer.get_counts();
-        assert_eq!(counts.get(&LogLevel::Error), Some(&2));
-        assert_eq!(counts.get(&LogLevel::Warning), Some(&1));
-        assert_eq!(counts.get(&LogLevel::Info), Some(&1));
+        let report = analyzer.generate_report();
+        assert!(report.contains("Database connection failed: 2 occurrences"));
+        assert!(report.contains("Memory usage high: 1 occurrences"));
+        assert!(report.contains("User login successful: 1 occurrences"));
     }
 }

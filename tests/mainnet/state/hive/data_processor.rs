@@ -322,3 +322,188 @@ mod tests {
         assert_eq!(column, vec!["b".to_string(), "e".to_string()]);
     }
 }
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub timestamp: i64,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
+}
+
+#[derive(Debug)]
+pub enum DataError {
+    InvalidId,
+    InvalidTimestamp,
+    EmptyValues,
+    ValidationFailed(String),
+}
+
+impl fmt::Display for DataError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DataError::InvalidId => write!(f, "Invalid record ID"),
+            DataError::InvalidTimestamp => write!(f, "Invalid timestamp"),
+            DataError::EmptyValues => write!(f, "Record contains no values"),
+            DataError::ValidationFailed(msg) => write!(f, "Validation failed: {}", msg),
+        }
+    }
+}
+
+impl Error for DataError {}
+
+impl DataRecord {
+    pub fn new(id: u32, timestamp: i64, values: Vec<f64>) -> Result<Self, DataError> {
+        if id == 0 {
+            return Err(DataError::InvalidId);
+        }
+        if timestamp < 0 {
+            return Err(DataError::InvalidTimestamp);
+        }
+        if values.is_empty() {
+            return Err(DataError::EmptyValues);
+        }
+
+        Ok(Self {
+            id,
+            timestamp,
+            values,
+            metadata: HashMap::new(),
+        })
+    }
+
+    pub fn add_metadata(&mut self, key: String, value: String) {
+        self.metadata.insert(key, value);
+    }
+
+    pub fn validate(&self) -> Result<(), DataError> {
+        if self.id == 0 {
+            return Err(DataError::InvalidId);
+        }
+        if self.timestamp < 0 {
+            return Err(DataError::InvalidTimestamp);
+        }
+        if self.values.is_empty() {
+            return Err(DataError::EmptyValues);
+        }
+
+        for (i, &value) in self.values.iter().enumerate() {
+            if value.is_nan() || value.is_infinite() {
+                return Err(DataError::ValidationFailed(
+                    format!("Invalid value at position {}: {}", i, value)
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn calculate_statistics(&self) -> (f64, f64, f64) {
+        let count = self.values.len() as f64;
+        let sum: f64 = self.values.iter().sum();
+        let mean = sum / count;
+        
+        let variance: f64 = self.values.iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>() / count;
+        
+        let std_dev = variance.sqrt();
+        
+        (mean, variance, std_dev)
+    }
+
+    pub fn normalize_values(&mut self) {
+        let (mean, _, std_dev) = self.calculate_statistics();
+        
+        if std_dev > 0.0 {
+            for value in &mut self.values {
+                *value = (*value - mean) / std_dev;
+            }
+        }
+    }
+}
+
+pub struct DataProcessor {
+    records: Vec<DataRecord>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        Self {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn add_record(&mut self, record: DataRecord) -> Result<(), DataError> {
+        record.validate()?;
+        self.records.push(record);
+        Ok(())
+    }
+
+    pub fn process_all(&mut self) {
+        for record in &mut self.records {
+            record.normalize_values();
+        }
+    }
+
+    pub fn get_record_count(&self) -> usize {
+        self.records.len()
+    }
+
+    pub fn find_by_id(&self, id: u32) -> Option<&DataRecord> {
+        self.records.iter().find(|r| r.id == id)
+    }
+
+    pub fn filter_by_timestamp_range(&self, start: i64, end: i64) -> Vec<&DataRecord> {
+        self.records.iter()
+            .filter(|r| r.timestamp >= start && r.timestamp <= end)
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_record_creation() {
+        let record = DataRecord::new(1, 1234567890, vec![1.0, 2.0, 3.0]);
+        assert!(record.is_ok());
+    }
+
+    #[test]
+    fn test_invalid_id() {
+        let record = DataRecord::new(0, 1234567890, vec![1.0, 2.0]);
+        assert!(matches!(record, Err(DataError::InvalidId)));
+    }
+
+    #[test]
+    fn test_statistics_calculation() {
+        let record = DataRecord::new(1, 1234567890, vec![1.0, 2.0, 3.0, 4.0, 5.0]).unwrap();
+        let (mean, variance, std_dev) = record.calculate_statistics();
+        
+        assert_eq!(mean, 3.0);
+        assert_eq!(variance, 2.0);
+        assert_eq!(std_dev, 2.0_f64.sqrt());
+    }
+
+    #[test]
+    fn test_data_processor() {
+        let mut processor = DataProcessor::new();
+        
+        let record1 = DataRecord::new(1, 1000, vec![1.0, 2.0, 3.0]).unwrap();
+        let record2 = DataRecord::new(2, 2000, vec![4.0, 5.0, 6.0]).unwrap();
+        
+        assert!(processor.add_record(record1).is_ok());
+        assert!(processor.add_record(record2).is_ok());
+        
+        assert_eq!(processor.get_record_count(), 2);
+        
+        let found = processor.find_by_id(1);
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().id, 1);
+    }
+}

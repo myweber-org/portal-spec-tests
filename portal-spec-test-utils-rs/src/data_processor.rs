@@ -1,70 +1,125 @@
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataRecord {
+    pub id: u64,
+    pub timestamp: i64,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
+}
+
+#[derive(Debug)]
+pub enum ProcessingError {
+    InvalidData(String),
+    TransformationFailed(String),
+    ValidationError(String),
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProcessingError::InvalidData(msg) => write!(f, "Invalid data: {}", msg),
+            ProcessingError::TransformationFailed(msg) => write!(f, "Transformation failed: {}", msg),
+            ProcessingError::ValidationError(msg) => write!(f, "Validation error: {}", msg),
+        }
+    }
+}
+
+impl Error for ProcessingError {}
 
 pub struct DataProcessor {
-    validation_rules: HashMap<String, Box<dyn Fn(&str) -> bool>>,
+    validation_rules: Vec<Box<dyn Fn(&DataRecord) -> Result<(), ProcessingError>>>,
+    transformation_pipeline: Vec<Box<dyn Fn(DataRecord) -> Result<DataRecord, ProcessingError>>>,
 }
 
 impl DataProcessor {
     pub fn new() -> Self {
-        let mut processor = DataProcessor {
-            validation_rules: HashMap::new(),
-        };
-        
-        processor.add_validation_rule("email", |value| {
-            value.contains('@') && value.contains('.')
-        });
-        
-        processor.add_validation_rule("phone", |value| {
-            value.chars().all(|c| c.is_numeric()) && value.len() >= 10
-        });
-        
-        processor
+        DataProcessor {
+            validation_rules: Vec::new(),
+            transformation_pipeline: Vec::new(),
+        }
     }
-    
-    pub fn add_validation_rule<F>(&mut self, rule_name: &str, validator: F)
+
+    pub fn add_validation_rule<F>(&mut self, rule: F)
     where
-        F: Fn(&str) -> bool + 'static,
+        F: Fn(&DataRecord) -> Result<(), ProcessingError> + 'static,
     {
-        self.validation_rules.insert(rule_name.to_string(), Box::new(validator));
+        self.validation_rules.push(Box::new(rule));
     }
-    
-    pub fn validate(&self, rule_name: &str, value: &str) -> bool {
-        match self.validation_rules.get(rule_name) {
-            Some(validator) => validator(value),
-            None => false,
+
+    pub fn add_transformation<F>(&mut self, transform: F)
+    where
+        F: Fn(DataRecord) -> Result<DataRecord, ProcessingError> + 'static,
+    {
+        self.transformation_pipeline.push(Box::new(transform));
+    }
+
+    pub fn process(&self, mut record: DataRecord) -> Result<DataRecord, ProcessingError> {
+        for rule in &self.validation_rules {
+            rule(&record)?;
         }
-    }
-    
-    pub fn transform_data(&self, input: &str, transformation: &str) -> String {
-        match transformation {
-            "uppercase" => input.to_uppercase(),
-            "lowercase" => input.to_lowercase(),
-            "trim" => input.trim().to_string(),
-            "reverse" => input.chars().rev().collect(),
-            _ => input.to_string(),
+
+        for transform in &self.transformation_pipeline {
+            record = transform(record)?;
         }
+
+        Ok(record)
     }
-    
-    pub fn process_pipeline(&self, data: &str, operations: Vec<(&str, &str)>) -> Result<String, String> {
-        let mut result = data.to_string();
+
+    pub fn batch_process(&self, records: Vec<DataRecord>) -> Result<Vec<DataRecord>, ProcessingError> {
+        let mut results = Vec::with_capacity(records.len());
         
-        for (op_type, op_value) in operations {
-            match op_type {
-                "validate" => {
-                    if !self.validate(op_value, &result) {
-                        return Err(format!("Validation failed for rule: {}", op_value));
-                    }
-                }
-                "transform" => {
-                    result = self.transform_data(&result, op_value);
-                }
-                _ => return Err(format!("Unknown operation: {}", op_type)),
+        for record in records {
+            match self.process(record) {
+                Ok(processed) => results.push(processed),
+                Err(e) => return Err(e),
             }
         }
         
-        Ok(result)
+        Ok(results)
     }
+}
+
+pub fn create_default_processor() -> DataProcessor {
+    let mut processor = DataProcessor::new();
+    
+    processor.add_validation_rule(|record| {
+        if record.values.is_empty() {
+            Err(ProcessingError::ValidationError("Empty values array".to_string()))
+        } else {
+            Ok(())
+        }
+    });
+    
+    processor.add_validation_rule(|record| {
+        if record.timestamp < 0 {
+            Err(ProcessingError::ValidationError("Negative timestamp".to_string()))
+        } else {
+            Ok(())
+        }
+    });
+    
+    processor.add_transformation(|mut record| {
+        let sum: f64 = record.values.iter().sum();
+        let count = record.values.len() as f64;
+        let average = sum / count;
+        
+        record.metadata.insert("average".to_string(), average.to_string());
+        record.metadata.insert("count".to_string(), count.to_string());
+        
+        Ok(record)
+    });
+    
+    processor.add_transformation(|mut record| {
+        record.values = record.values.iter().map(|&x| x * 2.0).collect();
+        Ok(record)
+    });
+    
+    processor
 }
 
 #[cfg(test)]
@@ -72,38 +127,38 @@ mod tests {
     use super::*;
     
     #[test]
-    fn test_email_validation() {
-        let processor = DataProcessor::new();
-        assert!(processor.validate("email", "test@example.com"));
-        assert!(!processor.validate("email", "invalid-email"));
-    }
-    
-    #[test]
-    fn test_phone_validation() {
-        let processor = DataProcessor::new();
-        assert!(processor.validate("phone", "1234567890"));
-        assert!(!processor.validate("phone", "abc123"));
-    }
-    
-    #[test]
-    fn test_transform_operations() {
-        let processor = DataProcessor::new();
-        assert_eq!(processor.transform_data("hello", "uppercase"), "HELLO");
-        assert_eq!(processor.transform_data("WORLD", "lowercase"), "world");
-        assert_eq!(processor.transform_data("  test  ", "trim"), "test");
-        assert_eq!(processor.transform_data("rust", "reverse"), "tsur");
-    }
-    
-    #[test]
-    fn test_processing_pipeline() {
-        let processor = DataProcessor::new();
-        let operations = vec![
-            ("validate", "email"),
-            ("transform", "uppercase"),
-            ("transform", "trim"),
-        ];
+    fn test_data_processing() {
+        let processor = create_default_processor();
         
-        let result = processor.process_pipeline("  user@domain.com  ", operations);
-        assert_eq!(result, Ok("USER@DOMAIN.COM".to_string()));
+        let mut metadata = HashMap::new();
+        metadata.insert("source".to_string(), "test".to_string());
+        
+        let record = DataRecord {
+            id: 1,
+            timestamp: 1625097600,
+            values: vec![1.0, 2.0, 3.0, 4.0],
+            metadata,
+        };
+        
+        let result = processor.process(record).unwrap();
+        
+        assert_eq!(result.values, vec![2.0, 4.0, 6.0, 8.0]);
+        assert_eq!(result.metadata.get("average").unwrap(), "2.5");
+        assert_eq!(result.metadata.get("count").unwrap(), "4");
+    }
+    
+    #[test]
+    fn test_validation_error() {
+        let processor = create_default_processor();
+        
+        let record = DataRecord {
+            id: 2,
+            timestamp: -100,
+            values: vec![1.0, 2.0],
+            metadata: HashMap::new(),
+        };
+        
+        let result = processor.process(record);
+        assert!(result.is_err());
     }
 }

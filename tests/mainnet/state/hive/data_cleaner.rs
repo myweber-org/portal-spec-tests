@@ -202,3 +202,109 @@ mod tests {
         assert!(unique.contains("universe"));
     }
 }
+use std::collections::HashSet;
+
+pub struct DataCleaner {
+    deduplication_enabled: bool,
+    normalization_enabled: bool,
+}
+
+impl DataCleaner {
+    pub fn new() -> Self {
+        DataCleaner {
+            deduplication_enabled: true,
+            normalization_enabled: true,
+        }
+    }
+
+    pub fn clean_strings(&self, input: Vec<String>) -> Vec<String> {
+        let mut result = input;
+
+        if self.deduplication_enabled {
+            result = self.deduplicate(result);
+        }
+
+        if self.normalization_enabled {
+            result = self.normalize(result);
+        }
+
+        result
+    }
+
+    fn deduplicate(&self, data: Vec<String>) -> Vec<String> {
+        let mut seen = HashSet::new();
+        data.into_iter()
+            .filter(|item| seen.insert(item.clone()))
+            .collect()
+    }
+
+    fn normalize(&self, data: Vec<String>) -> Vec<String> {
+        data.into_iter()
+            .map(|s| s.trim().to_lowercase())
+            .collect()
+    }
+
+    pub fn with_deduplication(mut self, enabled: bool) -> Self {
+        self.deduplication_enabled = enabled;
+        self
+    }
+
+    pub fn with_normalization(mut self, enabled: bool) -> Self {
+        self.normalization_enabled = enabled;
+        self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_deduplication() {
+        let cleaner = DataCleaner::new();
+        let input = vec![
+            "apple".to_string(),
+            "banana".to_string(),
+            "apple".to_string(),
+            "cherry".to_string(),
+        ];
+        
+        let result = cleaner.clean_strings(input);
+        assert_eq!(result.len(), 3);
+        assert!(result.contains(&"apple".to_string()));
+        assert!(result.contains(&"banana".to_string()));
+        assert!(result.contains(&"cherry".to_string()));
+    }
+
+    #[test]
+    fn test_normalization() {
+        let cleaner = DataCleaner::new();
+        let input = vec![
+            "  Apple  ".to_string(),
+            "BANANA".to_string(),
+            "Cherry".to_string(),
+        ];
+        
+        let result = cleaner.clean_strings(input);
+        assert_eq!(result[0], "apple");
+        assert_eq!(result[1], "banana");
+        assert_eq!(result[2], "cherry");
+    }
+
+    #[test]
+    fn test_disabled_features() {
+        let cleaner = DataCleaner::new()
+            .with_deduplication(false)
+            .with_normalization(false);
+        
+        let input = vec![
+            "  Apple  ".to_string(),
+            "  Apple  ".to_string(),
+        ];
+        
+        let result = cleaner.clean_strings(input);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], "  Apple  ");
+        assert_eq!(result[1], "  Apple  ");
+    }
+}

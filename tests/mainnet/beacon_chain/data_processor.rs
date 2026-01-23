@@ -1,227 +1,151 @@
 
-use csv::Reader;
-use serde::Deserialize;
 use std::error::Error;
 use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
 
-#[derive(Debug, Deserialize)]
-struct Record {
+#[derive(Debug)]
+pub struct DataRecord {
     id: u32,
-    name: String,
     value: f64,
     category: String,
 }
 
-pub fn process_data_file(file_path: &str) -> Result<Vec<Record>, Box<dyn Error>> {
-    let file = File::open(file_path)?;
-    let mut rdr = Reader::from_reader(file);
-    let mut records = Vec::new();
-
-    for result in rdr.deserialize() {
-        let record: Record = result?;
-        if record.value >= 0.0 {
-            records.push(record);
+impl DataRecord {
+    pub fn new(id: u32, value: f64, category: String) -> Result<Self, String> {
+        if value < 0.0 {
+            return Err("Value cannot be negative".to_string());
         }
+        if category.is_empty() {
+            return Err("Category cannot be empty".to_string());
+        }
+        Ok(Self { id, value, category })
     }
 
-    Ok(records)
-}
-
-pub fn calculate_statistics(records: &[Record]) -> (f64, f64, f64) {
-    let count = records.len() as f64;
-    if count == 0.0 {
-        return (0.0, 0.0, 0.0);
+    pub fn calculate_adjusted_value(&self, multiplier: f64) -> f64 {
+        self.value * multiplier
     }
-
-    let sum: f64 = records.iter().map(|r| r.value).sum();
-    let mean = sum / count;
-    
-    let variance: f64 = records.iter()
-        .map(|r| (r.value - mean).powi(2))
-        .sum::<f64>() / count;
-    
-    let std_dev = variance.sqrt();
-    
-    (sum, mean, std_dev)
 }
-
-pub fn filter_by_category(records: Vec<Record>, category: &str) -> Vec<Record> {
-    records.into_iter()
-        .filter(|r| r.category == category)
-        .collect()
-}
-use std::collections::HashMap;
 
 pub struct DataProcessor {
-    data: HashMap<String, Vec<f64>>,
-    validation_rules: Vec<ValidationRule>,
-}
-
-pub struct ValidationRule {
-    field_name: String,
-    min_value: f64,
-    max_value: f64,
-    required: bool,
+    records: Vec<DataRecord>,
 }
 
 impl DataProcessor {
     pub fn new() -> Self {
-        DataProcessor {
-            data: HashMap::new(),
-            validation_rules: Vec::new(),
-        }
+        Self { records: Vec::new() }
     }
 
-    pub fn add_dataset(&mut self, name: String, values: Vec<f64>) -> Result<(), String> {
-        if name.is_empty() {
-            return Err("Dataset name cannot be empty".to_string());
-        }
-        
-        if values.is_empty() {
-            return Err("Dataset values cannot be empty".to_string());
-        }
+    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<usize, Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut count = 0;
 
-        self.data.insert(name, values);
-        Ok(())
-    }
+        for (line_num, line) in reader.lines().enumerate() {
+            let line = line?;
+            if line_num == 0 {
+                continue;
+            }
 
-    pub fn add_validation_rule(&mut self, rule: ValidationRule) {
-        self.validation_rules.push(rule);
-    }
+            let parts: Vec<&str> = line.split(',').collect();
+            if parts.len() != 3 {
+                continue;
+            }
 
-    pub fn validate_data(&self) -> Vec<String> {
-        let mut errors = Vec::new();
+            let id = parts[0].parse::<u32>()?;
+            let value = parts[1].parse::<f64>()?;
+            let category = parts[2].to_string();
 
-        for rule in &self.validation_rules {
-            if let Some(data) = self.data.get(&rule.field_name) {
-                if rule.required && data.is_empty() {
-                    errors.push(format!("Field '{}' is required but empty", rule.field_name));
+            match DataRecord::new(id, value, category) {
+                Ok(record) => {
+                    self.records.push(record);
+                    count += 1;
                 }
-
-                for (index, &value) in data.iter().enumerate() {
-                    if value < rule.min_value || value > rule.max_value {
-                        errors.push(format!(
-                            "Value {} at index {} in field '{}' is out of range [{}, {}]",
-                            value, index, rule.field_name, rule.min_value, rule.max_value
-                        ));
-                    }
-                }
-            } else if rule.required {
-                errors.push(format!("Required field '{}' not found", rule.field_name));
+                Err(e) => eprintln!("Skipping invalid record at line {}: {}", line_num + 1, e),
             }
         }
 
-        errors
+        Ok(count)
     }
 
-    pub fn calculate_statistics(&self, field_name: &str) -> Option<Statistics> {
-        self.data.get(field_name).map(|values| {
-            let sum: f64 = values.iter().sum();
-            let count = values.len() as f64;
-            let mean = sum / count;
-            
-            let variance: f64 = values.iter()
-                .map(|&x| (x - mean).powi(2))
-                .sum::<f64>() / count;
-            
-            let std_dev = variance.sqrt();
-            
-            let mut sorted_values = values.clone();
-            sorted_values.sort_by(|a, b| a.partial_cmp(b).unwrap());
-            
-            let median = if count as usize % 2 == 0 {
-                let mid = count as usize / 2;
-                (sorted_values[mid - 1] + sorted_values[mid]) / 2.0
-            } else {
-                sorted_values[count as usize / 2]
-            };
-
-            Statistics {
-                mean,
-                median,
-                std_dev,
-                min: *values.iter().min_by(|a, b| a.partial_cmp(b).unwrap()).unwrap_or(&0.0),
-                max: *values.iter().max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap_or(&0.0),
-                count: values.len(),
-            }
-        })
+    pub fn total_value(&self) -> f64 {
+        self.records.iter().map(|r| r.value).sum()
     }
 
-    pub fn normalize_data(&mut self, field_name: &str) -> Result<(), String> {
-        if let Some(values) = self.data.get_mut(field_name) {
-            if values.is_empty() {
-                return Err("Cannot normalize empty dataset".to_string());
-            }
-
-            let min = values.iter().fold(f64::INFINITY, |a, &b| a.min(b));
-            let max = values.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
-            
-            if (max - min).abs() < f64::EPSILON {
-                return Err("Cannot normalize dataset with zero range".to_string());
-            }
-
-            for value in values.iter_mut() {
-                *value = (*value - min) / (max - min);
-            }
-            
-            Ok(())
+    pub fn average_value(&self) -> Option<f64> {
+        if self.records.is_empty() {
+            None
         } else {
-            Err(format!("Field '{}' not found", field_name))
+            Some(self.total_value() / self.records.len() as f64)
         }
     }
-}
 
-pub struct Statistics {
-    pub mean: f64,
-    pub median: f64,
-    pub std_dev: f64,
-    pub min: f64,
-    pub max: f64,
-    pub count: usize,
-}
+    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
+        self.records
+            .iter()
+            .filter(|r| r.category == category)
+            .collect()
+    }
 
-impl ValidationRule {
-    pub fn new(field_name: String, min_value: f64, max_value: f64, required: bool) -> Self {
-        ValidationRule {
-            field_name,
-            min_value,
-            max_value,
-            required,
-        }
+    pub fn process_with_multiplier(&self, multiplier: f64) -> Vec<f64> {
+        self.records
+            .iter()
+            .map(|r| r.calculate_adjusted_value(multiplier))
+            .collect()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_add_dataset() {
+    fn test_data_record_creation() {
+        let record = DataRecord::new(1, 42.5, "test".to_string()).unwrap();
+        assert_eq!(record.id, 1);
+        assert_eq!(record.value, 42.5);
+        assert_eq!(record.category, "test");
+    }
+
+    #[test]
+    fn test_invalid_data_record() {
+        assert!(DataRecord::new(1, -5.0, "test".to_string()).is_err());
+        assert!(DataRecord::new(1, 5.0, "".to_string()).is_err());
+    }
+
+    #[test]
+    fn test_csv_loading() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,value,category").unwrap();
+        writeln!(temp_file, "1,100.0,alpha").unwrap();
+        writeln!(temp_file, "2,200.0,beta").unwrap();
+        writeln!(temp_file, "3,-50.0,alpha").unwrap();
+
         let mut processor = DataProcessor::new();
-        let result = processor.add_dataset("test_data".to_string(), vec![1.0, 2.0, 3.0]);
+        let result = processor.load_from_csv(temp_file.path());
         assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 2);
+        assert_eq!(processor.records.len(), 2);
     }
 
     #[test]
-    fn test_validation() {
+    fn test_calculations() {
         let mut processor = DataProcessor::new();
-        processor.add_dataset("temperature".to_string(), vec![25.0, 30.0, 35.0]).unwrap();
-        
-        let rule = ValidationRule::new("temperature".to_string(), 20.0, 40.0, true);
-        processor.add_validation_rule(rule);
-        
-        let errors = processor.validate_data();
-        assert!(errors.is_empty());
-    }
+        processor.records.push(
+            DataRecord::new(1, 10.0, "A".to_string()).unwrap()
+        );
+        processor.records.push(
+            DataRecord::new(2, 20.0, "A".to_string()).unwrap()
+        );
+        processor.records.push(
+            DataRecord::new(3, 30.0, "B".to_string()).unwrap()
+        );
 
-    #[test]
-    fn test_statistics_calculation() {
-        let mut processor = DataProcessor::new();
-        processor.add_dataset("values".to_string(), vec![1.0, 2.0, 3.0, 4.0, 5.0]).unwrap();
-        
-        let stats = processor.calculate_statistics("values").unwrap();
-        assert_eq!(stats.mean, 3.0);
-        assert_eq!(stats.median, 3.0);
-        assert_eq!(stats.count, 5);
+        assert_eq!(processor.total_value(), 60.0);
+        assert_eq!(processor.average_value(), Some(20.0));
+        assert_eq!(processor.filter_by_category("A").len(), 2);
+        assert_eq!(processor.process_with_multiplier(2.0), vec![20.0, 40.0, 60.0]);
     }
 }

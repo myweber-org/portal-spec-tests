@@ -76,4 +76,48 @@ mod tests {
         assert!(parsed.is_array());
         assert_eq!(parsed.as_array().unwrap().len(), 3);
     }
+}use std::collections::HashMap;
+use std::fs::File;
+use std::io::{BufReader, Write};
+use std::path::Path;
+
+use serde_json::{Map, Value};
+
+fn merge_json_files(input_paths: &[&str], output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let mut merged_map = Map::new();
+
+    for input_path in input_paths {
+        let path = Path::new(input_path);
+        if !path.exists() {
+            eprintln!("Warning: File {} not found, skipping.", input_path);
+            continue;
+        }
+
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let json_value: Value = serde_json::from_reader(reader)?;
+
+        if let Value::Object(map) = json_value {
+            for (key, value) in map {
+                merged_map.insert(key, value);
+            }
+        } else {
+            eprintln!("Warning: {} does not contain a JSON object, skipping.", input_path);
+        }
+    }
+
+    let output_file = File::create(output_path)?;
+    serde_json::to_writer_pretty(output_file, &Value::Object(merged_map))?;
+
+    Ok(())
+}
+
+fn main() {
+    let inputs = vec!["config1.json", "config2.json", "config3.json"];
+    let output = "merged_config.json";
+
+    match merge_json_files(&inputs, output) {
+        Ok(()) => println!("Successfully merged JSON files into {}", output),
+        Err(e) => eprintln!("Error merging JSON files: {}", e),
+    }
 }

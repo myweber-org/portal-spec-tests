@@ -1,110 +1,180 @@
-use std::collections::HashMap;
+use serde::Deserialize;
+use std::env;
 use std::fs;
 use std::path::Path;
 
-#[derive(Debug, Clone)]
-pub struct Config {
-    pub settings: HashMap<String, String>,
-    pub defaults: HashMap<String, String>,
+#[derive(Debug, Deserialize)]
+pub struct DatabaseConfig {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: String,
+    pub database_name: String,
 }
 
-impl Config {
-    pub fn new() -> Self {
-        Config {
-            settings: HashMap::new(),
-            defaults: HashMap::from([
-                ("timeout".to_string(), "30".to_string()),
-                ("retries".to_string(), "3".to_string()),
-                ("log_level".to_string(), "info".to_string()),
-            ]),
+#[derive(Debug, Deserialize)]
+pub struct ServerConfig {
+    pub address: String,
+    pub port: u16,
+    pub max_connections: u32,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AppConfig {
+    pub database: DatabaseConfig,
+    pub server: ServerConfig,
+    pub debug_mode: bool,
+}
+
+impl AppConfig {
+    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
+        let config_content = fs::read_to_string(path)?;
+        let mut config: AppConfig = toml::from_str(&config_content)?;
+
+        config.apply_environment_overrides();
+        config.validate()?;
+
+        Ok(config)
+    }
+
+    fn apply_environment_overrides(&mut self) {
+        if let Ok(debug_env) = env::var("APP_DEBUG_MODE") {
+            if let Ok(debug_bool) = debug_env.parse::<bool>() {
+                self.debug_mode = debug_bool;
+            }
+        }
+
+        if let Ok(db_host) = env::var("DATABASE_HOST") {
+            self.database.host = db_host;
+        }
+
+        if let Ok(server_port) = env::var("SERVER_PORT") {
+            if let Ok(port) = server_port.parse::<u16>() {
+                self.server.port = port;
+            }
         }
     }
 
-    pub fn load_from_file<P: AsRef<Path>>(&mut self, path: P) -> Result<(), String> {
-        let content = fs::read_to_string(path)
-            .map_err(|e| format!("Failed to read config file: {}", e))?;
+    fn validate(&self) -> Result<(), String> {
+        if self.server.port == 0 {
+            return Err("Server port cannot be zero".to_string());
+        }
 
-        for line in content.lines() {
-            let trimmed = line.trim();
-            if trimmed.is_empty() || trimmed.starts_with('#') {
-                continue;
-            }
+        if self.database.port == 0 {
+            return Err("Database port cannot be zero".to_string());
+        }
 
-            let parts: Vec<&str> = trimmed.splitn(2, '=').collect();
-            if parts.len() != 2 {
-                return Err(format!("Invalid config line: {}", line));
-            }
-
-            let key = parts[0].trim().to_string();
-            let value = parts[1].trim().to_string();
-
-            if value.is_empty() {
-                return Err(format!("Empty value for key: {}", key));
-            }
-
-            self.settings.insert(key, value);
+        if self.server.max_connections == 0 {
+            return Err("Max connections must be greater than zero".to_string());
         }
 
         Ok(())
     }
 
-    pub fn get(&self, key: &str) -> Option<&String> {
-        self.settings.get(key).or_else(|| self.defaults.get(key))
+    pub fn database_url(&self) -> String {
+        format!(
+            "postgres://{}:{}@{}:{}/{}",
+            self.database.username,
+            self.database.password,
+            self.database.host,
+            self.database.port,
+            self.database.database_name
+        )
     }
 
-    pub fn get_with_default(&self, key: &str, default: &str) -> String {
-        self.get(key)
-            .map(|s| s.as_str())
-            .unwrap_or(default)
-            .to_string()
-    }
-
-    pub fn validate_required(&self, keys: &[&str]) -> Result<(), Vec<String>> {
-        let mut missing = Vec::new();
-
-        for key in keys {
-            if !self.settings.contains_key(*key) && !self.defaults.contains_key(*key) {
-                missing.push(key.to_string());
-            }
-        }
-
-        if missing.is_empty() {
-            Ok(())
-        } else {
-            Err(missing)
-        }
+    pub fn server_address(&self) -> String {
+        format!("{}:{}", self.server.address, self.server.port)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_config_loading() {
-        let mut config = Config::new();
-        let mut temp_file = NamedTempFile::new().unwrap();
+    fn test_config_parsing() {
+        let config_content = r#"
+            [database]
+            host = "localhost"
+            port = 5432
+            username = "admin"
+            password = "secret"
+            database_name = "mydb"
+
+            [server]
+            address = "0.0.0.0"
+            port = 8080
+            max_connections = 100
+
+            debug_mode = false
+        "#;
+
+        let temp_file = NamedTempFile::new().unwrap();
+        fs::write(temp_file.path(), config_content).unwrap();
+
+        let config = AppConfig::from_file(temp_file.path()).unwrap();
         
-        writeln!(temp_file, "host=localhost").unwrap();
-        writeln!(temp_file, "port=8080").unwrap();
-        writeln!(temp_file, "# This is a comment").unwrap();
+        assert_eq!(config.database.host, "localhost");
+        assert_eq!(config.server.port, 8080);
+        assert!(!config.debug_mode);
+    }
+
+    #[test]
+    fn test_environment_overrides() {
+        env::set_var("APP_DEBUG_MODE", "true");
+        env::set_var("DATABASE_HOST", "prod-db.example.com");
+
+        let config_content = r#"
+            [database]
+            host = "localhost"
+            port = 5432
+            username = "admin"
+            password = "secret"
+            database_name = "mydb"
+
+            [server]
+            address = "0.0.0.0"
+            port = 8080
+            max_connections = 100
+
+            debug_mode = false
+        "#;
+
+        let temp_file = NamedTempFile::new().unwrap();
+        fs::write(temp_file.path(), config_content).unwrap();
+
+        let config = AppConfig::from_file(temp_file.path()).unwrap();
         
-        config.load_from_file(temp_file.path()).unwrap();
-        
-        assert_eq!(config.get("host"), Some(&"localhost".to_string()));
-        assert_eq!(config.get("port"), Some(&"8080".to_string()));
-        assert_eq!(config.get("timeout"), Some(&"30".to_string())); // default
+        assert_eq!(config.database.host, "prod-db.example.com");
+        assert!(config.debug_mode);
+
+        env::remove_var("APP_DEBUG_MODE");
+        env::remove_var("DATABASE_HOST");
     }
 
     #[test]
     fn test_validation() {
-        let config = Config::new();
-        let result = config.validate_required(&["host", "port", "timeout"]);
-        assert!(result.is_ok());
-        
-        let result = config.validate_required(&["unknown_key"]);
+        let invalid_config = r#"
+            [database]
+            host = "localhost"
+            port = 0
+            username = "admin"
+            password = "secret"
+            database_name = "mydb"
+
+            [server]
+            address = "0.0.0.0"
+            port = 8080
+            max_connections = 100
+
+            debug_mode = false
+        "#;
+
+        let temp_file = NamedTempFile::new().unwrap();
+        fs::write(temp_file.path(), invalid_config).unwrap();
+
+        let result = AppConfig::from_file(temp_file.path());
         assert!(result.is_err());
     }
 }

@@ -1,90 +1,158 @@
+
+use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Nonce,
+};
+use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce as ChaChaNonce};
 use std::fs;
-use std::io::{self, Read, Write};
+use std::io::{Read, Write};
+use std::path::Path;
 
-const DEFAULT_KEY: u8 = 0xAA;
+#[derive(Debug)]
+pub enum EncryptionError {
+    IoError(std::io::Error),
+    CryptoError(String),
+}
 
-fn xor_cipher(data: &mut [u8], key: u8) {
-    for byte in data.iter_mut() {
-        *byte ^= key;
+impl From<std::io::Error> for EncryptionError {
+    fn from(err: std::io::Error) -> Self {
+        EncryptionError::IoError(err)
     }
 }
 
-fn encrypt_file(input_path: &str, output_path: &str, key: Option<u8>) -> io::Result<()> {
-    let key = key.unwrap_or(DEFAULT_KEY);
-    let mut content = fs::read(input_path)?;
-    
-    xor_cipher(&mut content, key);
-    
-    let mut file = fs::File::create(output_path)?;
-    file.write_all(&content)?;
-    
-    Ok(())
+pub struct FileEncryptor {
+    algorithm: EncryptionAlgorithm,
 }
 
-fn decrypt_file(input_path: &str, output_path: &str, key: Option<u8>) -> io::Result<()> {
-    encrypt_file(input_path, output_path, key)
+pub enum EncryptionAlgorithm {
+    Aes256Gcm,
+    ChaCha20Poly1305,
 }
 
-fn main() -> io::Result<()> {
-    let args: Vec<String> = std::env::args().collect();
-    
-    if args.len() < 4 {
-        eprintln!("Usage: {} <encrypt|decrypt> <input> <output> [key]", args[0]);
-        std::process::exit(1);
+impl FileEncryptor {
+    pub fn new(algorithm: EncryptionAlgorithm) -> Self {
+        FileEncryptor { algorithm }
     }
-    
-    let operation = &args[1];
-    let input = &args[2];
-    let output = &args[3];
-    let key = args.get(4).and_then(|k| k.parse::<u8>().ok());
-    
-    match operation.as_str() {
-        "encrypt" => encrypt_file(input, output, key),
-        "decrypt" => decrypt_file(input, output, key),
-        _ => {
-            eprintln!("Invalid operation. Use 'encrypt' or 'decrypt'");
-            std::process::exit(1);
-        }
-    }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fs;
-    
-    #[test]
-    fn test_xor_cipher() {
-        let mut data = vec![0x00, 0xFF, 0x55, 0xAA];
-        let original = data.clone();
-        let key = 0xAA;
-        
-        xor_cipher(&mut data, key);
-        assert_ne!(data, original);
-        
-        xor_cipher(&mut data, key);
-        assert_eq!(data, original);
-    }
-    
-    #[test]
-    fn test_file_encryption() -> io::Result<()> {
-        let test_content = b"Hello, World!";
-        let input_path = "test_input.txt";
-        let encrypted_path = "test_encrypted.txt";
-        let decrypted_path = "test_decrypted.txt";
-        
-        fs::write(input_path, test_content)?;
-        
-        encrypt_file(input_path, encrypted_path, Some(0xCC))?;
-        decrypt_file(encrypted_path, decrypted_path, Some(0xCC))?;
-        
-        let decrypted_content = fs::read(decrypted_path)?;
-        assert_eq!(decrypted_content, test_content);
-        
-        fs::remove_file(input_path)?;
-        fs::remove_file(encrypted_path)?;
-        fs::remove_file(decrypted_path)?;
-        
+    pub fn encrypt_file(&self, input_path: &Path, output_path: &Path, key: &[u8]) -> Result<(), EncryptionError> {
+        let mut file = fs::File::open(input_path)?;
+        let mut plaintext = Vec::new();
+        file.read_to_end(&mut plaintext)?;
+
+        let (ciphertext, nonce) = match self.algorithm {
+            EncryptionAlgorithm::Aes256Gcm => self.aes_encrypt(&plaintext, key)?,
+            EncryptionAlgorithm::ChaCha20Poly1305 => self.chacha_encrypt(&plaintext, key)?,
+        };
+
+        let mut output_file = fs::File::create(output_path)?;
+        output_file.write_all(&nonce)?;
+        output_file.write_all(&ciphertext)?;
+
         Ok(())
     }
+
+    pub fn decrypt_file(&self, input_path: &Path, output_path: &Path, key: &[u8]) -> Result<(), EncryptionError> {
+        let mut file = fs::File::open(input_path)?;
+        let mut data = Vec::new();
+        file.read_to_end(&mut data)?;
+
+        let (nonce, ciphertext) = match self.algorithm {
+            EncryptionAlgorithm::Aes256Gcm => {
+                let nonce_len = 12;
+                if data.len() < nonce_len {
+                    return Err(EncryptionError::CryptoError("Invalid encrypted data".to_string()));
+                }
+                (&data[..nonce_len], &data[nonce_len..])
+            }
+            EncryptionAlgorithm::ChaCha20Poly1305 => {
+                let nonce_len = 12;
+                if data.len() < nonce_len {
+                    return Err(EncryptionError::CryptoError("Invalid encrypted data".to_string()));
+                }
+                (&data[..nonce_len], &data[nonce_len..])
+            }
+        };
+
+        let plaintext = match self.algorithm {
+            EncryptionAlgorithm::Aes256Gcm => self.aes_decrypt(ciphertext, key, nonce)?,
+            EncryptionAlgorithm::ChaCha20Poly1305 => self.chacha_decrypt(ciphertext, key, nonce)?,
+        };
+
+        let mut output_file = fs::File::create(output_path)?;
+        output_file.write_all(&plaintext)?;
+
+        Ok(())
+    }
+
+    fn aes_encrypt(&self, plaintext: &[u8], key: &[u8]) -> Result<(Vec<u8>, Vec<u8>), EncryptionError> {
+        if key.len() != 32 {
+            return Err(EncryptionError::CryptoError("AES-256-GCM requires 32-byte key".to_string()));
+        }
+
+        let cipher = Aes256Gcm::new_from_slice(key)
+            .map_err(|e| EncryptionError::CryptoError(e.to_string()))?;
+        
+        let nonce_bytes: [u8; 12] = OsRng.gen();
+        let nonce = Nonce::from_slice(&nonce_bytes);
+
+        let ciphertext = cipher.encrypt(nonce, plaintext)
+            .map_err(|e| EncryptionError::CryptoError(e.to_string()))?;
+
+        Ok((ciphertext, nonce_bytes.to_vec()))
+    }
+
+    fn aes_decrypt(&self, ciphertext: &[u8], key: &[u8], nonce: &[u8]) -> Result<Vec<u8>, EncryptionError> {
+        if key.len() != 32 {
+            return Err(EncryptionError::CryptoError("AES-256-GCM requires 32-byte key".to_string()));
+        }
+
+        let cipher = Aes256Gcm::new_from_slice(key)
+            .map_err(|e| EncryptionError::CryptoError(e.to_string()))?;
+        
+        let nonce = Nonce::from_slice(nonce);
+
+        let plaintext = cipher.decrypt(nonce, ciphertext)
+            .map_err(|e| EncryptionError::CryptoError(e.to_string()))?;
+
+        Ok(plaintext)
+    }
+
+    fn chacha_encrypt(&self, plaintext: &[u8], key: &[u8]) -> Result<(Vec<u8>, Vec<u8>), EncryptionError> {
+        if key.len() != 32 {
+            return Err(EncryptionError::CryptoError("ChaCha20Poly1305 requires 32-byte key".to_string()));
+        }
+
+        let cipher = ChaCha20Poly1305::new_from_slice(key)
+            .map_err(|e| EncryptionError::CryptoError(e.to_string()))?;
+        
+        let nonce_bytes: [u8; 12] = OsRng.gen();
+        let nonce = ChaChaNonce::from_slice(&nonce_bytes);
+
+        let ciphertext = cipher.encrypt(nonce, plaintext)
+            .map_err(|e| EncryptionError::CryptoError(e.to_string()))?;
+
+        Ok((ciphertext, nonce_bytes.to_vec()))
+    }
+
+    fn chacha_decrypt(&self, ciphertext: &[u8], key: &[u8], nonce: &[u8]) -> Result<Vec<u8>, EncryptionError> {
+        if key.len() != 32 {
+            return Err(EncryptionError::CryptoError("ChaCha20Poly1305 requires 32-byte key".to_string()));
+        }
+
+        let cipher = ChaCha20Poly1305::new_from_slice(key)
+            .map_err(|e| EncryptionError::CryptoError(e.to_string()))?;
+        
+        let nonce = ChaChaNonce::from_slice(nonce);
+
+        let plaintext = cipher.decrypt(nonce, ciphertext)
+            .map_err(|e| EncryptionError::CryptoError(e.to_string()))?;
+
+        Ok(plaintext)
+    }
+}
+
+pub fn generate_random_key() -> [u8; 32] {
+    let mut key = [0u8; 32];
+    OsRng.fill_bytes(&mut key);
+    key
 }

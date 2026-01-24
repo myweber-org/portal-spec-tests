@@ -1,59 +1,33 @@
-use std::collections::HashMap;
+use std::collections::HashSet;
 
 pub struct DataCleaner {
-    threshold: f64,
+    entries: HashSet<String>,
 }
 
 impl DataCleaner {
-    pub fn new(threshold: f64) -> Self {
-        DataCleaner { threshold }
+    pub fn new() -> Self {
+        DataCleaner {
+            entries: HashSet::new(),
+        }
     }
 
-    pub fn remove_outliers_iqr(&self, data: &[f64]) -> Vec<f64> {
-        if data.len() < 4 {
-            return data.to_vec();
-        }
-
-        let mut sorted_data = data.to_vec();
-        sorted_data.sort_by(|a, b| a.partial_cmp(b).unwrap());
-
-        let q1_index = (sorted_data.len() as f64 * 0.25).floor() as usize;
-        let q3_index = (sorted_data.len() as f64 * 0.75).floor() as usize;
-
-        let q1 = sorted_data[q1_index];
-        let q3 = sorted_data[q3_index];
-        let iqr = q3 - q1;
-
-        let lower_bound = q1 - self.threshold * iqr;
-        let upper_bound = q3 + self.threshold * iqr;
-
-        data.iter()
-            .filter(|&&x| x >= lower_bound && x <= upper_bound)
-            .copied()
-            .collect()
+    pub fn add_entry(&mut self, input: &str) -> bool {
+        let normalized = input.trim().to_lowercase();
+        self.entries.insert(normalized)
     }
 
-    pub fn analyze_dataset(&self, data: &[f64]) -> HashMap<String, f64> {
-        let mut stats = HashMap::new();
-        
-        if data.is_empty() {
-            return stats;
-        }
+    pub fn get_unique_entries(&self) -> Vec<String> {
+        let mut result: Vec<String> = self.entries.iter().cloned().collect();
+        result.sort();
+        result
+    }
 
-        let sum: f64 = data.iter().sum();
-        let mean = sum / data.len() as f64;
-        
-        let variance: f64 = data.iter()
-            .map(|&x| (x - mean).powi(2))
-            .sum::<f64>() / data.len() as f64;
-        
-        let std_dev = variance.sqrt();
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
 
-        stats.insert("mean".to_string(), mean);
-        stats.insert("std_dev".to_string(), std_dev);
-        stats.insert("count".to_string(), data.len() as f64);
-        
-        stats
+    pub fn count(&self) -> usize {
+        self.entries.len()
     }
 }
 
@@ -62,22 +36,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_outlier_removal() {
-        let cleaner = DataCleaner::new(1.5);
-        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 100.0];
-        let cleaned = cleaner.remove_outliers_iqr(&data);
-        
-        assert_eq!(cleaned.len(), 5);
-        assert!(!cleaned.contains(&100.0));
+    fn test_add_and_retrieve() {
+        let mut cleaner = DataCleaner::new();
+        cleaner.add_entry("Apple");
+        cleaner.add_entry("apple ");
+        cleaner.add_entry("Banana");
+
+        assert_eq!(cleaner.count(), 2);
+        let entries = cleaner.get_unique_entries();
+        assert_eq!(entries, vec!["apple", "banana"]);
     }
 
     #[test]
-    fn test_statistics() {
-        let cleaner = DataCleaner::new(1.5);
-        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
-        let stats = cleaner.analyze_dataset(&data);
-        
-        assert_eq!(stats.get("mean").unwrap(), &3.0);
-        assert_eq!(stats.get("count").unwrap(), &5.0);
+    fn test_clear_function() {
+        let mut cleaner = DataCleaner::new();
+        cleaner.add_entry("Test");
+        cleaner.clear();
+        assert_eq!(cleaner.count(), 0);
     }
 }

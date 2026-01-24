@@ -1,278 +1,200 @@
-use std::collections::HashMap;
-use std::env;
+use serde::{Deserialize, Serialize};
 use std::fs;
+use std::path::Path;
 
-pub struct Config {
-    values: HashMap<String, String>,
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DatabaseConfig {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: String,
+    pub database: String,
+    pub pool_size: u32,
 }
 
-impl Config {
-    pub fn from_file(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
-        let content = fs::read_to_string(path)?;
-        let mut values = HashMap::new();
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ServerConfig {
+    pub address: String,
+    pub port: u16,
+    pub enable_https: bool,
+    pub cert_path: Option<String>,
+    pub key_path: Option<String>,
+}
 
-        for line in content.lines() {
-            let trimmed = line.trim();
-            if trimmed.is_empty() || trimmed.starts_with('#') {
-                continue;
-            }
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AppConfig {
+    pub database: DatabaseConfig,
+    pub server: ServerConfig,
+    pub log_level: String,
+    pub cache_ttl: u64,
+}
 
-            if let Some((key, value)) = trimmed.split_once('=') {
-                let processed_value = Self::process_value(value.trim());
-                values.insert(key.trim().to_string(), processed_value);
-            }
+impl Default for DatabaseConfig {
+    fn default() -> Self {
+        DatabaseConfig {
+            host: "localhost".to_string(),
+            port: 5432,
+            username: "postgres".to_string(),
+            password: "".to_string(),
+            database: "app_db".to_string(),
+            pool_size: 10,
         }
-
-        Ok(Config { values })
     }
+}
 
-    fn process_value(value: &str) -> String {
-        if value.starts_with('$') {
-            let var_name = &value[1..];
-            env::var(var_name).unwrap_or_else(|_| value.to_string())
-        } else {
-            value.to_string()
+impl Default for ServerConfig {
+    fn default() -> Self {
+        ServerConfig {
+            address: "0.0.0.0".to_string(),
+            port: 8080,
+            enable_https: false,
+            cert_path: None,
+            key_path: None,
         }
     }
-
-    pub fn get(&self, key: &str) -> Option<&String> {
-        self.values.get(key)
-    }
-
-    pub fn contains_key(&self, key: &str) -> bool {
-        self.values.contains_key(key)
-    }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
-
-    #[test]
-    fn test_basic_parsing() {
-        let mut file = NamedTempFile::new().unwrap();
-        writeln!(file, "HOST=localhost").unwrap();
-        writeln!(file, "PORT=8080").unwrap();
-        writeln!(file, "# This is a comment").unwrap();
-        writeln!(file, "").unwrap();
-        writeln!(file, "TIMEOUT=30").unwrap();
-
-        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
-        assert_eq!(config.get("HOST"), Some(&"localhost".to_string()));
-        assert_eq!(config.get("PORT"), Some(&"8080".to_string()));
-        assert_eq!(config.get("TIMEOUT"), Some(&"30".to_string()));
-        assert_eq!(config.get("MISSING"), None);
-    }
-
-    #[test]
-    fn test_env_substitution() {
-        env::set_var("DB_PASSWORD", "secret123");
-        let mut file = NamedTempFile::new().unwrap();
-        writeln!(file, "PASSWORD=$DB_PASSWORD").unwrap();
-        writeln!(file, "NORMAL=value").unwrap();
-
-        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
-        assert_eq!(config.get("PASSWORD"), Some(&"secret123".to_string()));
-        assert_eq!(config.get("NORMAL"), Some(&"value".to_string()));
-    }
-}
-use std::collections::HashMap;
-use std::env;
-use std::fs;
-
-pub struct Config {
-    values: HashMap<String, String>,
-}
-
-impl Config {
-    pub fn from_file(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
-        let content = fs::read_to_string(path)?;
-        let mut values = HashMap::new();
-
-        for line in content.lines() {
-            let trimmed = line.trim();
-            if trimmed.is_empty() || trimmed.starts_with('#') {
-                continue;
-            }
-
-            if let Some((key, value)) = trimmed.split_once('=') {
-                let processed_value = Self::process_value(value.trim());
-                values.insert(key.trim().to_string(), processed_value);
-            }
+impl Default for AppConfig {
+    fn default() -> Self {
+        AppConfig {
+            database: DatabaseConfig::default(),
+            server: ServerConfig::default(),
+            log_level: "info".to_string(),
+            cache_ttl: 300,
         }
-
-        Ok(Config { values })
-    }
-
-    fn process_value(value: &str) -> String {
-        let mut result = String::new();
-        let mut chars = value.chars().peekable();
-
-        while let Some(ch) = chars.next() {
-            if ch == '$' && chars.peek() == Some(&'{') {
-                chars.next(); // Skip '{'
-                let mut var_name = String::new();
-                while let Some(ch) = chars.next() {
-                    if ch == '}' {
-                        break;
-                    }
-                    var_name.push(ch);
-                }
-                if let Ok(env_value) = env::var(&var_name) {
-                    result.push_str(&env_value);
-                }
-            } else {
-                result.push(ch);
-            }
-        }
-
-        result
-    }
-
-    pub fn get(&self, key: &str) -> Option<&String> {
-        self.values.get(key)
-    }
-
-    pub fn contains_key(&self, key: &str) -> bool {
-        self.values.contains_key(key)
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
+#[derive(Debug)]
+pub enum ConfigError {
+    FileNotFound(String),
+    ParseError(String),
+    ValidationError(String),
+    IoError(std::io::Error),
+}
 
-    #[test]
-    fn test_basic_parsing() {
-        let mut file = NamedTempFile::new().unwrap();
-        writeln!(file, "HOST=localhost").unwrap();
-        writeln!(file, "PORT=8080").unwrap();
-        writeln!(file, "# This is a comment").unwrap();
-        writeln!(file, "").unwrap();
-        writeln!(file, "TIMEOUT=30").unwrap();
-
-        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
-        assert_eq!(config.get("HOST"), Some(&"localhost".to_string()));
-        assert_eq!(config.get("PORT"), Some(&"8080".to_string()));
-        assert_eq!(config.get("TIMEOUT"), Some(&"30".to_string()));
-        assert_eq!(config.get("MISSING"), None);
+impl From<std::io::Error> for ConfigError {
+    fn from(err: std::io::Error) -> Self {
+        ConfigError::IoError(err)
     }
+}
 
-    #[test]
-    fn test_env_substitution() {
-        env::set_var("APP_SECRET", "super-secret-value");
+impl AppConfig {
+    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, ConfigError> {
+        let path_ref = path.as_ref();
         
-        let mut file = NamedTempFile::new().unwrap();
-        writeln!(file, "SECRET=${{APP_SECRET}}").unwrap();
-        writeln!(file, "PATH=/home/user").unwrap();
+        if !path_ref.exists() {
+            return Err(ConfigError::FileNotFound(
+                path_ref.to_string_lossy().to_string()
+            ));
+        }
 
-        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
-        assert_eq!(config.get("SECRET"), Some(&"super-secret-value".to_string()));
-        assert_eq!(config.get("PATH"), Some(&"/home/user".to_string()));
+        let content = fs::read_to_string(path_ref)?;
+        
+        let mut config: AppConfig = toml::from_str(&content)
+            .map_err(|e| ConfigError::ParseError(e.to_string()))?;
+        
+        config.validate()?;
+        
+        Ok(config)
     }
-}use std::collections::HashMap;
-use std::env;
-use std::fs;
 
-pub struct Config {
-    values: HashMap<String, String>,
-}
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        if self.database.host.is_empty() {
+            return Err(ConfigError::ValidationError(
+                "Database host cannot be empty".to_string()
+            ));
+        }
 
-impl Config {
-    pub fn from_file(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
-        let content = fs::read_to_string(path)?;
-        let mut values = HashMap::new();
+        if self.database.port == 0 {
+            return Err(ConfigError::ValidationError(
+                "Database port cannot be zero".to_string()
+            ));
+        }
 
-        for line in content.lines() {
-            let trimmed = line.trim();
-            if trimmed.is_empty() || trimmed.starts_with('#') {
-                continue;
-            }
+        if self.database.pool_size == 0 {
+            return Err(ConfigError::ValidationError(
+                "Database pool size cannot be zero".to_string()
+            ));
+        }
 
-            if let Some((key, value)) = trimmed.split_once('=') {
-                let key = key.trim().to_string();
-                let processed_value = Self::process_value(value.trim());
-                values.insert(key, processed_value);
+        if self.server.port == 0 {
+            return Err(ConfigError::ValidationError(
+                "Server port cannot be zero".to_string()
+            ));
+        }
+
+        if self.server.enable_https {
+            if self.server.cert_path.is_none() || self.server.key_path.is_none() {
+                return Err(ConfigError::ValidationError(
+                    "HTTPS requires both certificate and key paths".to_string()
+                ));
             }
         }
 
-        Ok(Config { values })
+        let valid_log_levels = ["trace", "debug", "info", "warn", "error"];
+        if !valid_log_levels.contains(&self.log_level.as_str()) {
+            return Err(ConfigError::ValidationError(
+                format!("Invalid log level: {}", self.log_level)
+            ));
+        }
+
+        Ok(())
     }
 
-    fn process_value(value: &str) -> String {
-        let mut result = String::new();
-        let mut chars = value.chars().peekable();
+    pub fn merge_defaults(&mut self) {
+        let default = AppConfig::default();
         
-        while let Some(ch) = chars.next() {
-            if ch == '$' && chars.peek() == Some(&'{') {
-                chars.next(); // Skip '{'
-                let mut var_name = String::new();
-                
-                while let Some(ch) = chars.next() {
-                    if ch == '}' {
-                        break;
-                    }
-                    var_name.push(ch);
-                }
-                
-                if let Ok(env_value) = env::var(&var_name) {
-                    result.push_str(&env_value);
-                } else {
-                    result.push_str(&format!("${{{}}}", var_name));
-                }
-            } else {
-                result.push(ch);
-            }
+        if self.database.host.is_empty() {
+            self.database.host = default.database.host;
         }
         
-        result
+        if self.database.port == 0 {
+            self.database.port = default.database.port;
+        }
+        
+        if self.database.username.is_empty() {
+            self.database.username = default.database.username;
+        }
+        
+        if self.database.database.is_empty() {
+            self.database.database = default.database.database;
+        }
+        
+        if self.database.pool_size == 0 {
+            self.database.pool_size = default.database.pool_size;
+        }
+        
+        if self.server.address.is_empty() {
+            self.server.address = default.server.address;
+        }
+        
+        if self.server.port == 0 {
+            self.server.port = default.server.port;
+        }
+        
+        if self.log_level.is_empty() {
+            self.log_level = default.log_level;
+        }
+        
+        if self.cache_ttl == 0 {
+            self.cache_ttl = default.cache_ttl;
+        }
     }
 
-    pub fn get(&self, key: &str) -> Option<&String> {
-        self.values.get(key)
+    pub fn to_toml(&self) -> Result<String, ConfigError> {
+        toml::to_string_pretty(self)
+            .map_err(|e| ConfigError::ParseError(e.to_string()))
     }
 
-    pub fn get_or_default(&self, key: &str, default: &str) -> String {
-        self.values.get(key).map(|s| s.as_str()).unwrap_or(default).to_string()
+    pub fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), ConfigError> {
+        let toml_content = self.to_toml()?;
+        fs::write(path, toml_content)?;
+        Ok(())
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
-
-    #[test]
-    fn test_basic_parsing() {
-        let mut file = NamedTempFile::new().unwrap();
-        writeln!(file, "HOST=localhost").unwrap();
-        writeln!(file, "PORT=8080").unwrap();
-        writeln!(file, "# This is a comment").unwrap();
-        writeln!(file, "  TIMEOUT = 30  ").unwrap();
-
-        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
-        assert_eq!(config.get("HOST"), Some(&"localhost".to_string()));
-        assert_eq!(config.get("PORT"), Some(&"8080".to_string()));
-        assert_eq!(config.get("TIMEOUT"), Some(&"30".to_string()));
-        assert_eq!(config.get("MISSING"), None);
-    }
-
-    #[test]
-    fn test_env_substitution() {
-        env::set_var("APP_SECRET", "mysecret123");
-        
-        let mut file = NamedTempFile::new().unwrap();
-        writeln!(file, "SECRET=${{APP_SECRET}}").unwrap();
-        writeln!(file, "PATH=/home/${{USER}}/data").unwrap();
-        writeln!(file, "MISSING=${{NONEXISTENT}}").unwrap();
-
-        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
-        assert_eq!(config.get("SECRET"), Some(&"mysecret123".to_string()));
-        assert_eq!(config.get("MISSING"), Some(&"${NONEXISTENT}".to_string()));
-    }
+pub fn create_default_config<P: AsRef<Path>>(path: P) -> Result<(), ConfigError> {
+    let config = AppConfig::default();
+    config.save_to_file(path)
 }

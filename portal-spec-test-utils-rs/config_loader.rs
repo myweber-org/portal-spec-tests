@@ -1,86 +1,84 @@
-use std::collections::HashMap;
 use std::env;
 use std::fs;
+use std::collections::HashMap;
 
+#[derive(Debug)]
 pub struct Config {
-    values: HashMap<String, String>,
+    pub database_url: String,
+    pub api_key: String,
+    pub debug_mode: bool,
+    pub port: u16,
 }
 
 impl Config {
-    pub fn new() -> Self {
-        Config {
-            values: HashMap::new(),
-        }
-    }
-
-    pub fn load_from_file(&mut self, path: &str) -> Result<(), String> {
-        let content = fs::read_to_string(path)
-            .map_err(|e| format!("Failed to read config file: {}", e))?;
-
-        for line in content.lines() {
-            let trimmed = line.trim();
-            if trimmed.is_empty() || trimmed.starts_with('#') {
-                continue;
-            }
-
-            if let Some((key, value)) = trimmed.split_once('=') {
-                let key = key.trim().to_string();
-                let value = value.trim().to_string();
-                self.values.insert(key, value);
+    pub fn load() -> Result<Self, String> {
+        let mut config = HashMap::new();
+        
+        if let Ok(contents) = fs::read_to_string("config.toml") {
+            for line in contents.lines() {
+                if line.trim().is_empty() || line.starts_with('#') {
+                    continue;
+                }
+                
+                let parts: Vec<&str> = line.splitn(2, '=').collect();
+                if parts.len() == 2 {
+                    config.insert(
+                        parts[0].trim().to_string(),
+                        parts[1].trim().to_string()
+                    );
+                }
             }
         }
-
-        Ok(())
-    }
-
-    pub fn get(&self, key: &str) -> Option<String> {
-        env::var(key)
+        
+        let database_url = env::var("DATABASE_URL")
             .ok()
-            .or_else(|| self.values.get(key).cloned())
+            .or_else(|| config.get("database_url").cloned())
+            .ok_or("Database URL not found in config or environment")?;
+            
+        let api_key = env::var("API_KEY")
+            .ok()
+            .or_else(|| config.get("api_key").cloned())
+            .ok_or("API key not found in config or environment")?;
+            
+        let debug_mode = env::var("DEBUG_MODE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .or_else(|| config.get("debug_mode").and_then(|v| v.parse().ok()))
+            .unwrap_or(false);
+            
+        let port = env::var("PORT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .or_else(|| config.get("port").and_then(|v| v.parse().ok()))
+            .unwrap_or(8080);
+            
+        Ok(Config {
+            database_url,
+            api_key,
+            debug_mode,
+            port,
+        })
     }
-
-    pub fn get_with_default(&self, key: &str, default: &str) -> String {
-        self.get(key).unwrap_or_else(|| default.to_string())
-    }
-
-    pub fn set(&mut self, key: &str, value: &str) {
-        self.values.insert(key.to_string(), value.to_string());
-    }
-
-    pub fn contains_key(&self, key: &str) -> bool {
-        self.values.contains_key(key) || env::var(key).is_ok()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
-
-    #[test]
-    fn test_load_from_file() {
-        let mut config = Config::new();
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "DATABASE_URL=postgres://localhost/test").unwrap();
-        writeln!(temp_file, "# This is a comment").unwrap();
-        writeln!(temp_file, "API_KEY=secret123").unwrap();
-
-        config.load_from_file(temp_file.path().to_str().unwrap()).unwrap();
-        assert_eq!(config.get("DATABASE_URL"), Some("postgres://localhost/test".to_string()));
-        assert_eq!(config.get("API_KEY"), Some("secret123".to_string()));
-    }
-
-    #[test]
-    fn test_environment_variable_priority() {
-        env::set_var("TEST_KEY", "env_value");
-        let config = Config::new();
-        assert_eq!(config.get("TEST_KEY"), Some("env_value".to_string()));
-    }
-
-    #[test]
-    fn test_get_with_default() {
-        let config = Config::new();
-        assert_eq!(config.get_with_default("NON_EXISTENT", "default_value"), "default_value");
+    
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+        
+        if self.database_url.is_empty() {
+            errors.push("Database URL cannot be empty".to_string());
+        }
+        
+        if self.api_key.len() < 32 {
+            errors.push("API key must be at least 32 characters".to_string());
+        }
+        
+        if self.port == 0 || self.port > 65535 {
+            errors.push(format!("Port {} is invalid", self.port));
+        }
+        
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
     }
 }

@@ -349,3 +349,179 @@ mod tests {
         assert!(stats.contains_key("global_mean"));
     }
 }
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub category: String,
+}
+
+#[derive(Debug)]
+pub enum DataError {
+    InvalidId,
+    InvalidValue,
+    MissingField,
+    CategoryNotFound,
+}
+
+impl fmt::Display for DataError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DataError::InvalidId => write!(f, "ID must be greater than zero"),
+            DataError::InvalidValue => write!(f, "Value must be positive"),
+            DataError::MissingField => write!(f, "Required field is missing"),
+            DataError::CategoryNotFound => write!(f, "Category not found in registry"),
+        }
+    }
+}
+
+impl Error for DataError {}
+
+pub struct DataProcessor {
+    records: Vec<DataRecord>,
+    category_registry: HashMap<String, u32>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+            category_registry: HashMap::new(),
+        }
+    }
+
+    pub fn add_record(&mut self, record: DataRecord) -> Result<(), DataError> {
+        self.validate_record(&record)?;
+        
+        let category_count = self.category_registry
+            .entry(record.category.clone())
+            .or_insert(0);
+        *category_count += 1;
+        
+        self.records.push(record);
+        Ok(())
+    }
+
+    fn validate_record(&self, record: &DataRecord) -> Result<(), DataError> {
+        if record.id == 0 {
+            return Err(DataError::InvalidId);
+        }
+        
+        if record.value <= 0.0 {
+            return Err(DataError::InvalidValue);
+        }
+        
+        if record.name.is_empty() || record.category.is_empty() {
+            return Err(DataError::MissingField);
+        }
+        
+        Ok(())
+    }
+
+    pub fn get_records_by_category(&self, category: &str) -> Vec<&DataRecord> {
+        self.records
+            .iter()
+            .filter(|record| record.category == category)
+            .collect()
+    }
+
+    pub fn calculate_average_value(&self) -> Option<f64> {
+        if self.records.is_empty() {
+            return None;
+        }
+        
+        let total: f64 = self.records.iter().map(|r| r.value).sum();
+        Some(total / self.records.len() as f64)
+    }
+
+    pub fn transform_values<F>(&mut self, transform_fn: F) 
+    where
+        F: Fn(f64) -> f64,
+    {
+        for record in &mut self.records {
+            record.value = transform_fn(record.value);
+        }
+    }
+
+    pub fn get_category_stats(&self) -> HashMap<String, u32> {
+        self.category_registry.clone()
+    }
+
+    pub fn find_max_value_record(&self) -> Option<&DataRecord> {
+        self.records.iter().max_by(|a, b| {
+            a.value.partial_cmp(&b.value).unwrap()
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_add_valid_record() {
+        let mut processor = DataProcessor::new();
+        let record = DataRecord {
+            id: 1,
+            name: String::from("Test"),
+            value: 100.0,
+            category: String::from("A"),
+        };
+        
+        assert!(processor.add_record(record).is_ok());
+        assert_eq!(processor.records.len(), 1);
+    }
+
+    #[test]
+    fn test_invalid_record() {
+        let mut processor = DataProcessor::new();
+        let record = DataRecord {
+            id: 0,
+            name: String::from("Test"),
+            value: 100.0,
+            category: String::from("A"),
+        };
+        
+        assert!(processor.add_record(record).is_err());
+    }
+
+    #[test]
+    fn test_category_stats() {
+        let mut processor = DataProcessor::new();
+        
+        let records = vec![
+            DataRecord { id: 1, name: String::from("R1"), value: 10.0, category: String::from("A") },
+            DataRecord { id: 2, name: String::from("R2"), value: 20.0, category: String::from("A") },
+            DataRecord { id: 3, name: String::from("R3"), value: 30.0, category: String::from("B") },
+        ];
+        
+        for record in records {
+            processor.add_record(record).unwrap();
+        }
+        
+        let stats = processor.get_category_stats();
+        assert_eq!(stats.get("A"), Some(&2));
+        assert_eq!(stats.get("B"), Some(&1));
+    }
+
+    #[test]
+    fn test_value_transformation() {
+        let mut processor = DataProcessor::new();
+        let record = DataRecord {
+            id: 1,
+            name: String::from("Test"),
+            value: 100.0,
+            category: String::from("A"),
+        };
+        
+        processor.add_record(record).unwrap();
+        processor.transform_values(|v| v * 2.0);
+        
+        assert_eq!(processor.records[0].value, 200.0);
+    }
+}

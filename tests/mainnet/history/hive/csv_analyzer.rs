@@ -1,78 +1,134 @@
 
+use std::collections::HashMap;
 use std::error::Error;
 use std::fs::File;
-use std::path::Path;
+use std::io::{BufRead, BufReader};
 
 #[derive(Debug)]
 pub struct CsvStats {
     pub row_count: usize,
     pub column_count: usize,
-    pub headers: Vec<String>,
-    pub numeric_columns: Vec<String>,
+    pub column_types: HashMap<String, String>,
+    pub missing_values: usize,
+    pub unique_values: HashMap<String, usize>,
 }
 
-pub fn analyze_csv<P: AsRef<Path>>(file_path: P) -> Result<CsvStats, Box<dyn Error>> {
+impl CsvStats {
+    pub fn new() -> Self {
+        CsvStats {
+            row_count: 0,
+            column_count: 0,
+            column_types: HashMap::new(),
+            missing_values: 0,
+            unique_values: HashMap::new(),
+        }
+    }
+}
+
+pub fn analyze_csv(file_path: &str) -> Result<CsvStats, Box<dyn Error>> {
     let file = File::open(file_path)?;
-    let mut rdr = csv::Reader::from_reader(file);
-    
-    let headers: Vec<String> = rdr.headers()?.iter().map(|s| s.to_string()).collect();
-    let column_count = headers.len();
-    
-    let mut row_count = 0;
-    let mut numeric_column_indices = Vec::new();
-    
-    for result in rdr.records() {
-        let record = result?;
-        row_count += 1;
+    let reader = BufReader::new(file);
+    let mut stats = CsvStats::new();
+    let mut headers: Vec<String> = Vec::new();
+    let mut data_types: HashMap<String, Vec<String>> = HashMap::new();
+
+    for (index, line) in reader.lines().enumerate() {
+        let line = line?;
         
-        if row_count == 1 {
-            for (i, field) in record.iter().enumerate() {
-                if field.parse::<f64>().is_ok() {
-                    numeric_column_indices.push(i);
-                }
+        if index == 0 {
+            headers = line.split(',').map(|s| s.trim().to_string()).collect();
+            stats.column_count = headers.len();
+            for header in &headers {
+                data_types.insert(header.clone(), Vec::new());
+            }
+            continue;
+        }
+
+        stats.row_count += 1;
+        let values: Vec<&str> = line.split(',').map(|s| s.trim()).collect();
+
+        for (i, value) in values.iter().enumerate() {
+            if i >= headers.len() {
+                break;
+            }
+
+            let header = &headers[i];
+            
+            if value.is_empty() {
+                stats.missing_values += 1;
+                continue;
+            }
+
+            if let Some(type_list) = data_types.get_mut(header) {
+                type_list.push(value.to_string());
+            }
+
+            let value_key = format!("{}_{}", header, value);
+            *stats.unique_values.entry(value_key).or_insert(0) += 1;
+        }
+    }
+
+    for (header, values) in data_types {
+        let inferred_type = infer_data_type(&values);
+        stats.column_types.insert(header, inferred_type);
+    }
+
+    Ok(stats)
+}
+
+fn infer_data_type(values: &[String]) -> String {
+    if values.is_empty() {
+        return "unknown".to_string();
+    }
+
+    let mut is_numeric = true;
+    let mut is_integer = true;
+    let mut has_decimal = false;
+
+    for value in values {
+        if value.parse::<i64>().is_err() {
+            is_integer = false;
+            if value.parse::<f64>().is_err() {
+                is_numeric = false;
+                break;
+            } else {
+                has_decimal = true;
             }
         }
     }
-    
-    let numeric_columns: Vec<String> = numeric_column_indices
-        .iter()
-        .map(|&idx| headers[idx].clone())
-        .collect();
-    
-    Ok(CsvStats {
-        row_count,
-        column_count,
-        headers,
-        numeric_columns,
-    })
+
+    if is_numeric {
+        if is_integer && !has_decimal {
+            "integer".to_string()
+        } else {
+            "float".to_string()
+        }
+    } else {
+        "string".to_string()
+    }
 }
 
-pub fn filter_csv<P: AsRef<Path>>(
-    input_path: P,
-    output_path: P,
-    predicate: impl Fn(&csv::StringRecord) -> bool,
-) -> Result<usize, Box<dyn Error>> {
-    let input_file = File::open(input_path)?;
-    let mut rdr = csv::Reader::from_reader(input_file);
+pub fn print_stats(stats: &CsvStats) {
+    println!("CSV Analysis Results:");
+    println!("Rows: {}", stats.row_count);
+    println!("Columns: {}", stats.column_count);
+    println!("Missing Values: {}", stats.missing_values);
     
-    let output_file = File::create(output_path)?;
-    let mut wtr = csv::Writer::from_writer(output_file);
-    
-    let headers = rdr.headers()?.clone();
-    wtr.write_record(&headers)?;
-    
-    let mut filtered_count = 0;
-    
-    for result in rdr.records() {
-        let record = result?;
-        if predicate(&record) {
-            wtr.write_record(&record)?;
-            filtered_count += 1;
-        }
+    println!("\nColumn Types:");
+    for (column, data_type) in &stats.column_types {
+        println!("  {}: {}", column, data_type);
     }
     
-    wtr.flush()?;
-    Ok(filtered_count)
+    println!("\nUnique Value Counts (sample):");
+    let mut sample: Vec<(&String, &usize)> = stats.unique_values.iter().take(5).collect();
+    sample.sort_by(|a, b| b.1.cmp(a.1));
+    
+    for (key, count) in sample {
+        let parts: Vec<&str> = key.split('_').collect();
+        if parts.len() >= 2 {
+            println!("  {}: {} occurrences", parts[1], count);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -80,32 +136,24 @@ mod tests {
     use super::*;
     use std::io::Write;
     use tempfile::NamedTempFile;
-    
+
     #[test]
     fn test_analyze_csv() {
         let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "name,age,salary\nAlice,30,50000\nBob,25,45000").unwrap();
+        writeln!(temp_file, "id,name,age,salary").unwrap();
+        writeln!(temp_file, "1,John,25,50000.50").unwrap();
+        writeln!(temp_file, "2,Jane,30,").unwrap();
+        writeln!(temp_file, "3,Bob,35,75000").unwrap();
+
+        let stats = analyze_csv(temp_file.path().to_str().unwrap()).unwrap();
         
-        let stats = analyze_csv(temp_file.path()).unwrap();
-        assert_eq!(stats.row_count, 2);
-        assert_eq!(stats.column_count, 3);
-        assert_eq!(stats.headers, vec!["name", "age", "salary"]);
-        assert_eq!(stats.numeric_columns, vec!["age", "salary"]);
-    }
-    
-    #[test]
-    fn test_filter_csv() {
-        let mut input_file = NamedTempFile::new().unwrap();
-        writeln!(input_file, "name,age,salary\nAlice,30,50000\nBob,25,45000\nCharlie,35,60000").unwrap();
+        assert_eq!(stats.row_count, 3);
+        assert_eq!(stats.column_count, 4);
+        assert_eq!(stats.missing_values, 1);
         
-        let output_file = NamedTempFile::new().unwrap();
-        
-        let filtered = filter_csv(
-            input_file.path(),
-            output_file.path(),
-            |record| record.get(1).and_then(|age| age.parse::<i32>().ok()).map_or(false, |age| age > 30)
-        ).unwrap();
-        
-        assert_eq!(filtered, 1);
+        assert_eq!(stats.column_types.get("id").unwrap(), "integer");
+        assert_eq!(stats.column_types.get("name").unwrap(), "string");
+        assert_eq!(stats.column_types.get("age").unwrap(), "integer");
+        assert_eq!(stats.column_types.get("salary").unwrap(), "float");
     }
 }

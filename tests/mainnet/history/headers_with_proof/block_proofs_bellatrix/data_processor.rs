@@ -182,3 +182,191 @@ mod tests {
         assert_eq!(stats.2, 2);
     }
 }
+use csv::{ReaderBuilder, WriterBuilder};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+use std::path::Path;
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub category: String,
+    pub active: bool,
+}
+
+impl DataRecord {
+    pub fn is_valid(&self) -> bool {
+        !self.name.is_empty() && self.value >= 0.0 && !self.category.is_empty()
+    }
+}
+
+pub struct DataProcessor {
+    records: Vec<DataRecord>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn Error>> {
+        let file = File::open(path)?;
+        let mut reader = ReaderBuilder::new()
+            .has_headers(true)
+            .from_reader(file);
+
+        for result in reader.deserialize() {
+            let record: DataRecord = result?;
+            self.records.push(record);
+        }
+
+        Ok(())
+    }
+
+    pub fn save_to_csv<P: AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn Error>> {
+        let file = File::create(path)?;
+        let mut writer = WriterBuilder::new()
+            .has_headers(true)
+            .from_writer(file);
+
+        for record in &self.records {
+            writer.serialize(record)?;
+        }
+
+        writer.flush()?;
+        Ok(())
+    }
+
+    pub fn filter_valid(&self) -> Vec<DataRecord> {
+        self.records
+            .iter()
+            .filter(|record| record.is_valid())
+            .cloned()
+            .collect()
+    }
+
+    pub fn filter_by_category(&self, category: &str) -> Vec<DataRecord> {
+        self.records
+            .iter()
+            .filter(|record| record.category == category)
+            .cloned()
+            .collect()
+    }
+
+    pub fn calculate_average(&self) -> f64 {
+        if self.records.is_empty() {
+            return 0.0;
+        }
+
+        let sum: f64 = self.records.iter().map(|record| record.value).sum();
+        sum / self.records.len() as f64
+    }
+
+    pub fn add_record(&mut self, record: DataRecord) {
+        self.records.push(record);
+    }
+
+    pub fn clear(&mut self) {
+        self.records.clear();
+    }
+
+    pub fn count(&self) -> usize {
+        self.records.len()
+    }
+
+    pub fn get_records(&self) -> &[DataRecord] {
+        &self.records
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_record_validation() {
+        let valid_record = DataRecord {
+            id: 1,
+            name: "Test".to_string(),
+            value: 10.5,
+            category: "A".to_string(),
+            active: true,
+        };
+        assert!(valid_record.is_valid());
+
+        let invalid_record = DataRecord {
+            id: 2,
+            name: "".to_string(),
+            value: -5.0,
+            category: "".to_string(),
+            active: false,
+        };
+        assert!(!invalid_record.is_valid());
+    }
+
+    #[test]
+    fn test_data_processor() {
+        let mut processor = DataProcessor::new();
+        
+        let record = DataRecord {
+            id: 1,
+            name: "Test".to_string(),
+            value: 100.0,
+            category: "CategoryA".to_string(),
+            active: true,
+        };
+        
+        processor.add_record(record);
+        assert_eq!(processor.count(), 1);
+        assert_eq!(processor.calculate_average(), 100.0);
+        
+        let filtered = processor.filter_by_category("CategoryA");
+        assert_eq!(filtered.len(), 1);
+        
+        processor.clear();
+        assert_eq!(processor.count(), 0);
+    }
+
+    #[test]
+    fn test_csv_operations() -> Result<(), Box<dyn Error>> {
+        let mut processor = DataProcessor::new();
+        
+        let test_records = vec![
+            DataRecord {
+                id: 1,
+                name: "Item1".to_string(),
+                value: 10.5,
+                category: "TypeA".to_string(),
+                active: true,
+            },
+            DataRecord {
+                id: 2,
+                name: "Item2".to_string(),
+                value: 20.0,
+                category: "TypeB".to_string(),
+                active: false,
+            },
+        ];
+        
+        for record in test_records {
+            processor.add_record(record);
+        }
+        
+        let temp_file = NamedTempFile::new()?;
+        let path = temp_file.path();
+        
+        processor.save_to_csv(path)?;
+        
+        let mut new_processor = DataProcessor::new();
+        new_processor.load_from_csv(path)?;
+        
+        assert_eq!(new_processor.count(), 2);
+        Ok(())
+    }
+}

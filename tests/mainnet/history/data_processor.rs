@@ -1,227 +1,89 @@
-
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use thiserror::Error;
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct DataRecord {
-    pub id: u32,
-    pub name: String,
-    pub value: f64,
-    pub metadata: HashMap<String, String>,
-}
-
-#[derive(Debug, Error)]
-pub enum ProcessingError {
-    #[error("Invalid data value: {0}")]
-    InvalidValue(String),
-    #[error("Missing required field: {0}")]
-    MissingField(String),
-    #[error("Data validation failed: {0}")]
-    ValidationFailed(String),
-}
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
 
 pub struct DataProcessor {
-    threshold: f64,
+    data: Vec<f64>,
 }
 
 impl DataProcessor {
-    pub fn new(threshold: f64) -> Self {
-        DataProcessor { threshold }
+    pub fn new() -> Self {
+        DataProcessor { data: Vec::new() }
     }
 
-    pub fn validate_record(&self, record: &DataRecord) -> Result<(), ProcessingError> {
-        if record.name.is_empty() {
-            return Err(ProcessingError::MissingField("name".to_string()));
-        }
+    pub fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
 
-        if record.value < 0.0 {
-            return Err(ProcessingError::InvalidValue(format!(
-                "Negative value: {}",
-                record.value
-            )));
-        }
-
-        if record.value > self.threshold {
-            return Err(ProcessingError::ValidationFailed(format!(
-                "Value {} exceeds threshold {}",
-                record.value, self.threshold
-            )));
+        for line in reader.lines() {
+            let line = line?;
+            if let Ok(value) = line.trim().parse::<f64>() {
+                self.data.push(value);
+            }
         }
 
         Ok(())
     }
 
-    pub fn transform_record(&self, record: &DataRecord) -> DataRecord {
-        let mut transformed = DataRecord {
-            id: record.id,
-            name: record.name.to_uppercase(),
-            value: record.value * 2.0,
-            metadata: record.metadata.clone(),
-        };
-
-        transformed
-            .metadata
-            .insert("processed".to_string(), "true".to_string());
-        transformed
-            .metadata
-            .insert("original_value".to_string(), record.value.to_string());
-
-        transformed
-    }
-
-    pub fn process_records(
-        &self,
-        records: Vec<DataRecord>,
-    ) -> Result<Vec<DataRecord>, ProcessingError> {
-        let mut processed_records = Vec::with_capacity(records.len());
-
-        for record in records {
-            self.validate_record(&record)?;
-            let transformed = self.transform_record(&record);
-            processed_records.push(transformed);
+    pub fn calculate_mean(&self) -> Option<f64> {
+        if self.data.is_empty() {
+            return None;
         }
 
-        Ok(processed_records)
+        let sum: f64 = self.data.iter().sum();
+        Some(sum / self.data.len() as f64)
+    }
+
+    pub fn calculate_standard_deviation(&self) -> Option<f64> {
+        if self.data.len() < 2 {
+            return None;
+        }
+
+        let mean = self.calculate_mean()?;
+        let variance: f64 = self.data
+            .iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>() / (self.data.len() - 1) as f64;
+
+        Some(variance.sqrt())
+    }
+
+    pub fn find_extremes(&self) -> Option<(f64, f64)> {
+        if self.data.is_empty() {
+            return None;
+        }
+
+        let min = self.data.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+        let max = self.data.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+        Some((min, max))
+    }
+
+    pub fn data_count(&self) -> usize {
+        self.data.len()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_validation_success() {
-        let processor = DataProcessor::new(100.0);
-        let record = DataRecord {
-            id: 1,
-            name: "test".to_string(),
-            value: 50.0,
-            metadata: HashMap::new(),
-        };
-
-        assert!(processor.validate_record(&record).is_ok());
-    }
-
-    #[test]
-    fn test_validation_failure() {
-        let processor = DataProcessor::new(100.0);
-        let record = DataRecord {
-            id: 1,
-            name: "".to_string(),
-            value: 150.0,
-            metadata: HashMap::new(),
-        };
-
-        assert!(processor.validate_record(&record).is_err());
-    }
-
-    #[test]
-    fn test_transform_record() {
-        let processor = DataProcessor::new(100.0);
-        let mut metadata = HashMap::new();
-        metadata.insert("source".to_string(), "test".to_string());
-
-        let record = DataRecord {
-            id: 1,
-            name: "example".to_string(),
-            value: 25.5,
-            metadata,
-        };
-
-        let transformed = processor.transform_record(&record);
-        assert_eq!(transformed.name, "EXAMPLE");
-        assert_eq!(transformed.value, 51.0);
-        assert_eq!(transformed.metadata.get("processed"), Some(&"true".to_string()));
-    }
-}use csv::{ReaderBuilder, WriterBuilder};
-use serde::{Deserialize, Serialize};
-use std::error::Error;
-use std::fs::File;
-
-#[derive(Debug, Deserialize, Serialize)]
-struct Record {
-    id: u32,
-    name: String,
-    value: f64,
-    active: bool,
-}
-
-fn process_data(input_path: &str, output_path: &str, min_value: f64) -> Result<(), Box<dyn Error>> {
-    let input_file = File::open(input_path)?;
-    let mut reader = ReaderBuilder::new()
-        .has_headers(true)
-        .from_reader(input_file);
-
-    let output_file = File::create(output_path)?;
-    let mut writer = WriterBuilder::new()
-        .has_headers(true)
-        .from_writer(output_file);
-
-    for result in reader.deserialize() {
-        let record: Record = result?;
+    fn test_data_processing() {
+        let mut processor = DataProcessor::new();
         
-        if record.value >= min_value && record.active {
-            writer.serialize(&record)?;
-        }
-    }
-
-    writer.flush()?;
-    Ok(())
-}
-
-fn calculate_statistics(records: &[Record]) -> (f64, f64, f64) {
-    let count = records.len() as f64;
-    if count == 0.0 {
-        return (0.0, 0.0, 0.0);
-    }
-
-    let sum: f64 = records.iter().map(|r| r.value).sum();
-    let mean = sum / count;
-    
-    let variance: f64 = records.iter()
-        .map(|r| (r.value - mean).powi(2))
-        .sum::<f64>() / count;
-    
-    let std_dev = variance.sqrt();
-    
-    (sum, mean, std_dev)
-}
-
-fn filter_records(records: Vec<Record>, predicate: impl Fn(&Record) -> bool) -> Vec<Record> {
-    records.into_iter()
-        .filter(predicate)
-        .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_calculate_statistics() {
-        let records = vec![
-            Record { id: 1, name: "Test1".to_string(), value: 10.0, active: true },
-            Record { id: 2, name: "Test2".to_string(), value: 20.0, active: true },
-            Record { id: 3, name: "Test3".to_string(), value: 30.0, active: false },
-        ];
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "10.5\n15.2\n12.8\n18.3\n14.1").unwrap();
         
-        let (sum, mean, std_dev) = calculate_statistics(&records);
-        assert_eq!(sum, 60.0);
-        assert_eq!(mean, 20.0);
-        assert!((std_dev - 8.164965).abs() < 0.0001);
-    }
-
-    #[test]
-    fn test_filter_records() {
-        let records = vec![
-            Record { id: 1, name: "A".to_string(), value: 5.0, active: true },
-            Record { id: 2, name: "B".to_string(), value: 15.0, active: false },
-            Record { id: 3, name: "C".to_string(), value: 25.0, active: true },
-        ];
+        processor.load_from_csv(temp_file.path().to_str().unwrap()).unwrap();
         
-        let filtered = filter_records(records, |r| r.active && r.value > 10.0);
-        assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].id, 3);
+        assert_eq!(processor.data_count(), 5);
+        assert!(processor.calculate_mean().unwrap() - 14.18 < 0.01);
+        assert!(processor.calculate_standard_deviation().unwrap() - 2.89 < 0.01);
+        
+        let (min, max) = processor.find_extremes().unwrap();
+        assert_eq!(min, 10.5);
+        assert_eq!(max, 18.3);
     }
 }

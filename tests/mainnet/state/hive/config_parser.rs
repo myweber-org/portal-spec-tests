@@ -363,4 +363,164 @@ impl Config {
             .unwrap_or(default)
             .to_string()
     }
+}use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
+
+#[derive(Debug, Clone)]
+pub struct Config {
+    pub database_url: String,
+    pub max_connections: u32,
+    pub timeout_seconds: u64,
+    pub features: Vec<String>,
+    pub metadata: HashMap<String, String>,
+}
+
+impl Config {
+    pub fn new() -> Self {
+        Config {
+            database_url: String::from("postgresql://localhost:5432"),
+            max_connections: 10,
+            timeout_seconds: 30,
+            features: vec![],
+            metadata: HashMap::new(),
+        }
+    }
+
+    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, String> {
+        let content = fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read config file: {}", e))?;
+
+        let mut config = Config::new();
+        let mut current_section = String::new();
+
+        for (line_num, line) in content.lines().enumerate() {
+            let trimmed = line.trim();
+            
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+
+            if trimmed.starts_with('[') && trimmed.ends_with(']') {
+                current_section = trimmed[1..trimmed.len()-1].to_string();
+                continue;
+            }
+
+            if let Some(equal_pos) = trimmed.find('=') {
+                let key = trimmed[..equal_pos].trim().to_string();
+                let value = trimmed[equal_pos+1..].trim().to_string();
+
+                match (current_section.as_str(), key.as_str()) {
+                    ("database", "url") => config.database_url = value,
+                    ("database", "max_connections") => {
+                        config.max_connections = value.parse()
+                            .map_err(|_| format!("Line {}: Invalid integer for max_connections", line_num + 1))?
+                    }
+                    ("network", "timeout") => {
+                        config.timeout_seconds = value.parse()
+                            .map_err(|_| format!("Line {}: Invalid integer for timeout", line_num + 1))?
+                    }
+                    ("features", _) => config.features.push(value),
+                    ("metadata", _) => {
+                        config.metadata.insert(key, value);
+                    }
+                    _ => return Err(format!("Line {}: Unknown configuration key '{}' in section '{}'", 
+                        line_num + 1, key, current_section)),
+                }
+            } else {
+                return Err(format!("Line {}: Invalid configuration line", line_num + 1));
+            }
+        }
+
+        Ok(config)
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.database_url.is_empty() {
+            return Err("Database URL cannot be empty".to_string());
+        }
+
+        if self.max_connections == 0 {
+            return Err("Max connections must be greater than 0".to_string());
+        }
+
+        if self.timeout_seconds > 3600 {
+            return Err("Timeout cannot exceed 3600 seconds".to_string());
+        }
+
+        Ok(())
+    }
+
+    pub fn get_feature_status(&self, feature: &str) -> bool {
+        self.features.iter().any(|f| f == feature)
+    }
+
+    pub fn get_metadata(&self, key: &str) -> Option<&String> {
+        self.metadata.get(key)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_default_config() {
+        let config = Config::new();
+        assert_eq!(config.database_url, "postgresql://localhost:5432");
+        assert_eq!(config.max_connections, 10);
+        assert_eq!(config.timeout_seconds, 30);
+        assert!(config.features.is_empty());
+    }
+
+    #[test]
+    fn test_config_from_file() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "[database]").unwrap();
+        writeln!(file, "url = postgresql://remote:5432").unwrap();
+        writeln!(file, "max_connections = 20").unwrap();
+        writeln!(file, "[network]").unwrap();
+        writeln!(file, "timeout = 60").unwrap();
+        writeln!(file, "[features]").unwrap();
+        writeln!(file, "logging").unwrap();
+        writeln!(file, "caching").unwrap();
+        writeln!(file, "[metadata]").unwrap();
+        writeln!(file, "version = 1.0.0").unwrap();
+
+        let config = Config::from_file(file.path()).unwrap();
+        assert_eq!(config.database_url, "postgresql://remote:5432");
+        assert_eq!(config.max_connections, 20);
+        assert_eq!(config.timeout_seconds, 60);
+        assert_eq!(config.features, vec!["logging", "caching"]);
+        assert_eq!(config.get_metadata("version"), Some(&"1.0.0".to_string()));
+    }
+
+    #[test]
+    fn test_validation() {
+        let mut config = Config::new();
+        assert!(config.validate().is_ok());
+
+        config.database_url = String::new();
+        assert!(config.validate().is_err());
+
+        config.database_url = "postgresql://localhost:5432".to_string();
+        config.max_connections = 0;
+        assert!(config.validate().is_err());
+
+        config.max_connections = 10;
+        config.timeout_seconds = 4000;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_feature_check() {
+        let mut config = Config::new();
+        config.features = vec!["logging".to_string(), "metrics".to_string()];
+        
+        assert!(config.get_feature_status("logging"));
+        assert!(config.get_feature_status("metrics"));
+        assert!(!config.get_feature_status("debug"));
+    }
 }

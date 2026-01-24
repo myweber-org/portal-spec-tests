@@ -751,4 +751,148 @@ mod tests {
         let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
         assert_eq!(config.get("KEY"), Some(&"secret123".to_string()));
     }
+}use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::Path;
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DatabaseConfig {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: String,
+    pub database: String,
+    pub pool_size: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ServerConfig {
+    pub address: String,
+    pub port: u16,
+    pub enable_https: bool,
+    pub cert_path: Option<String>,
+    pub key_path: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct LoggingConfig {
+    pub level: String,
+    pub file_path: String,
+    pub max_files: usize,
+    pub max_file_size: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AppConfig {
+    pub database: DatabaseConfig,
+    pub server: ServerConfig,
+    pub logging: LoggingConfig,
+    pub debug_mode: bool,
+    pub feature_flags: Vec<String>,
+}
+
+impl Default for DatabaseConfig {
+    fn default() -> Self {
+        DatabaseConfig {
+            host: "localhost".to_string(),
+            port: 5432,
+            username: "postgres".to_string(),
+            password: "".to_string(),
+            database: "app_db".to_string(),
+            pool_size: 10,
+        }
+    }
+}
+
+impl Default for ServerConfig {
+    fn default() -> Self {
+        ServerConfig {
+            address: "0.0.0.0".to_string(),
+            port: 8080,
+            enable_https: false,
+            cert_path: None,
+            key_path: None,
+        }
+    }
+}
+
+impl Default for LoggingConfig {
+    fn default() -> Self {
+        LoggingConfig {
+            level: "info".to_string(),
+            file_path: "logs/app.log".to_string(),
+            max_files: 5,
+            max_file_size: 10_485_760,
+        }
+    }
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        AppConfig {
+            database: DatabaseConfig::default(),
+            server: ServerConfig::default(),
+            logging: LoggingConfig::default(),
+            debug_mode: false,
+            feature_flags: vec![],
+        }
+    }
+}
+
+impl AppConfig {
+    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
+        let config_str = fs::read_to_string(path)?;
+        let config: AppConfig = toml::from_str(&config_str)?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    pub fn from_file_or_default<P: AsRef<Path>>(path: P) -> Self {
+        match Self::from_file(path) {
+            Ok(config) => config,
+            Err(e) => {
+                eprintln!("Failed to load config file: {}. Using defaults.", e);
+                AppConfig::default()
+            }
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), Box<dyn std::error::Error>> {
+        if self.server.port == 0 {
+            return Err("Server port cannot be 0".into());
+        }
+
+        if self.database.pool_size == 0 {
+            return Err("Database pool size cannot be 0".into());
+        }
+
+        if self.server.enable_https {
+            if self.server.cert_path.is_none() || self.server.key_path.is_none() {
+                return Err("HTTPS requires both certificate and key paths".into());
+            }
+        }
+
+        let valid_log_levels = ["error", "warn", "info", "debug", "trace"];
+        if !valid_log_levels.contains(&self.logging.level.as_str()) {
+            return Err(format!("Invalid log level: {}", self.logging.level).into());
+        }
+
+        Ok(())
+    }
+
+    pub fn to_toml(&self) -> Result<String, Box<dyn std::error::Error>> {
+        let toml_str = toml::to_string_pretty(self)?;
+        Ok(toml_str)
+    }
+
+    pub fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn std::error::Error>> {
+        let toml_str = self.to_toml()?;
+        fs::write(path, toml_str)?;
+        Ok(())
+    }
+
+    pub fn generate_default_config<P: AsRef<Path>>(path: P) -> Result<(), Box<dyn std::error::Error>> {
+        let default_config = AppConfig::default();
+        default_config.save_to_file(path)
+    }
 }

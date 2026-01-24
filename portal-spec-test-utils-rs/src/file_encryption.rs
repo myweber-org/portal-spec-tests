@@ -1,174 +1,63 @@
 
 use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
+use pbkdf2::pbkdf2_hmac;
 use rand::RngCore;
-use std::fs;
-use std::io::{Read, Write};
+use sha2::Sha256;
+use std::error::Error;
 
 type Aes256CbcEnc = cbc::Encryptor<aes::Aes256>;
 type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
 
-pub struct FileEncryptor {
-    key: [u8; 32],
-    iv: [u8; 16],
+const SALT_LEN: usize = 16;
+const IV_LEN: usize = 16;
+const KEY_LEN: usize = 32;
+const PBKDF2_ITERATIONS: u32 = 100_000;
+
+pub struct EncryptedData {
+    pub salt: [u8; SALT_LEN],
+    pub iv: [u8; IV_LEN],
+    pub ciphertext: Vec<u8>,
 }
 
-impl FileEncryptor {
-    pub fn new() -> Self {
-        let mut key = [0u8; 32];
-        let mut iv = [0u8; 16];
-        rand::thread_rng().fill_bytes(&mut key);
-        rand::thread_rng().fill_bytes(&mut iv);
-        Self { key, iv }
-    }
-
-    pub fn encrypt_file(&self, input_path: &str, output_path: &str) -> Result<(), String> {
-        let mut file = fs::File::open(input_path)
-            .map_err(|e| format!("Failed to open input file: {}", e))?;
-        
-        let mut plaintext = Vec::new();
-        file.read_to_end(&mut plaintext)
-            .map_err(|e| format!("Failed to read input file: {}", e))?;
-
-        let ciphertext = Aes256CbcEnc::new(&self.key.into(), &self.iv.into())
-            .encrypt_padded_vec_mut::<Pkcs7>(&plaintext);
-
-        let mut output_file = fs::File::create(output_path)
-            .map_err(|e| format!("Failed to create output file: {}", e))?;
-        
-        output_file.write_all(&ciphertext)
-            .map_err(|e| format!("Failed to write encrypted data: {}", e))?;
-
-        Ok(())
-    }
-
-    pub fn decrypt_file(&self, input_path: &str, output_path: &str) -> Result<(), String> {
-        let mut file = fs::File::open(input_path)
-            .map_err(|e| format!("Failed to open encrypted file: {}", e))?;
-        
-        let mut ciphertext = Vec::new();
-        file.read_to_end(&mut ciphertext)
-            .map_err(|e| format!("Failed to read encrypted file: {}", e))?;
-
-        let plaintext = Aes256CbcDec::new(&self.key.into(), &self.iv.into())
-            .decrypt_padded_vec_mut::<Pkcs7>(&ciphertext)
-            .map_err(|e| format!("Decryption failed: {}", e))?;
-
-        let mut output_file = fs::File::create(output_path)
-            .map_err(|e| format!("Failed to create output file: {}", e))?;
-        
-        output_file.write_all(&plaintext)
-            .map_err(|e| format!("Failed to write decrypted data: {}", e))?;
-
-        Ok(())
-    }
-
-    pub fn save_key_iv(&self, path: &str) -> Result<(), String> {
-        let mut file = fs::File::create(path)
-            .map_err(|e| format!("Failed to create key file: {}", e))?;
-        
-        file.write_all(&self.key)
-            .map_err(|e| format!("Failed to write key: {}", e))?;
-        file.write_all(&self.iv)
-            .map_err(|e| format!("Failed to write IV: {}", e))?;
-
-        Ok(())
-    }
-
-    pub fn load_key_iv(path: &str) -> Result<Self, String> {
-        let mut file = fs::File::open(path)
-            .map_err(|e| format!("Failed to open key file: {}", e))?;
-        
-        let mut data = [0u8; 48];
-        file.read_exact(&mut data)
-            .map_err(|e| format!("Failed to read key file: {}", e))?;
-
-        let mut key = [0u8; 32];
-        let mut iv = [0u8; 16];
-        key.copy_from_slice(&data[0..32]);
-        iv.copy_from_slice(&data[32..48]);
-
-        Ok(Self { key, iv })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::NamedTempFile;
-
-    #[test]
-    fn test_encryption_decryption() {
-        let encryptor = FileEncryptor::new();
-        
-        let plaintext = b"Hello, this is a secret message!";
-        let input_file = NamedTempFile::new().unwrap();
-        let encrypted_file = NamedTempFile::new().unwrap();
-        let decrypted_file = NamedTempFile::new().unwrap();
-
-        fs::write(input_file.path(), plaintext).unwrap();
-
-        encryptor.encrypt_file(
-            input_file.path().to_str().unwrap(),
-            encrypted_file.path().to_str().unwrap()
-        ).unwrap();
-
-        encryptor.decrypt_file(
-            encrypted_file.path().to_str().unwrap(),
-            decrypted_file.path().to_str().unwrap()
-        ).unwrap();
-
-        let decrypted_data = fs::read(decrypted_file.path()).unwrap();
-        assert_eq!(plaintext.to_vec(), decrypted_data);
-    }
-}
-use aes_gcm::{
-    aead::{Aead, KeyInit, OsRng},
-    Aes256Gcm, Key, Nonce
-};
-use std::error::Error;
-
-pub struct FileEncryptor {
-    cipher: Aes256Gcm,
-}
-
-impl FileEncryptor {
-    pub fn new() -> Self {
-        let key = Key::<Aes256Gcm>::generate(&mut OsRng);
-        Self {
-            cipher: Aes256Gcm::new(&key),
-        }
-    }
-
-    pub fn encrypt_data(&self, plaintext: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
-        let nonce = Nonce::generate(&mut OsRng);
-        let ciphertext = self.cipher.encrypt(&nonce, plaintext)?;
-        
-        let mut result = Vec::with_capacity(nonce.len() + ciphertext.len());
-        result.extend_from_slice(nonce.as_slice());
-        result.extend_from_slice(&ciphertext);
-        
-        Ok(result)
-    }
-
-    pub fn decrypt_data(&self, encrypted_data: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
-        if encrypted_data.len() < 12 {
-            return Err("Invalid encrypted data".into());
-        }
-        
-        let nonce = Nonce::from_slice(&encrypted_data[..12]);
-        let ciphertext = &encrypted_data[12..];
-        
-        let plaintext = self.cipher.decrypt(nonce, ciphertext)?;
-        Ok(plaintext)
-    }
-}
-
-pub fn process_file_encryption(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
-    let encryptor = FileEncryptor::new();
-    let data = std::fs::read(input_path)?;
+pub fn encrypt_file_data(plaintext: &[u8], password: &str) -> Result<EncryptedData, Box<dyn Error>> {
+    let mut salt = [0u8; SALT_LEN];
+    let mut iv = [0u8; IV_LEN];
     
-    let encrypted = encryptor.encrypt_data(&data)?;
-    std::fs::write(output_path, encrypted)?;
+    rand::thread_rng().fill_bytes(&mut salt);
+    rand::thread_rng().fill_bytes(&mut iv);
     
+    let mut key = [0u8; KEY_LEN];
+    pbkdf2_hmac::<Sha256>(password.as_bytes(), &salt, PBKDF2_ITERATIONS, &mut key);
+    
+    let ciphertext = Aes256CbcEnc::new(&key.into(), &iv.into())
+        .encrypt_padded_vec_mut::<Pkcs7>(plaintext);
+    
+    Ok(EncryptedData {
+        salt,
+        iv,
+        ciphertext,
+    })
+}
+
+pub fn decrypt_file_data(encrypted: &EncryptedData, password: &str) -> Result<Vec<u8>, Box<dyn Error>> {
+    let mut key = [0u8; KEY_LEN];
+    pbkdf2_hmac::<Sha256>(password.as_bytes(), &encrypted.salt, PBKDF2_ITERATIONS, &mut key);
+    
+    let plaintext = Aes256CbcDec::new(&key.into(), &encrypted.iv.into())
+        .decrypt_padded_vec_mut::<Pkcs7>(&encrypted.ciphertext)?;
+    
+    Ok(plaintext)
+}
+
+pub fn encrypt_to_file(data: &[u8], password: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
+    let encrypted = encrypt_file_data(data, password)?;
+    let encoded = bincode::serialize(&encrypted)?;
+    std::fs::write(output_path, encoded)?;
     Ok(())
+}
+
+pub fn decrypt_from_file(password: &str, input_path: &str) -> Result<Vec<u8>, Box<dyn Error>> {
+    let encoded = std::fs::read(input_path)?;
+    let encrypted: EncryptedData = bincode::deserialize(&encoded)?;
+    decrypt_file_data(&encrypted, password)
 }

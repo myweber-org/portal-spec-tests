@@ -100,4 +100,159 @@ fn assess_password_strength(password: &str) -> String {
         5..=6 => "Strong",
         _ => "Very Strong",
     }.to_string()
+}use rand::Rng;
+use std::io;
+
+const DEFAULT_LENGTH: usize = 16;
+
+#[derive(Debug, Clone)]
+pub struct PasswordGenerator {
+    length: usize,
+    use_uppercase: bool,
+    use_lowercase: bool,
+    use_digits: bool,
+    use_special: bool,
+}
+
+impl Default for PasswordGenerator {
+    fn default() -> Self {
+        Self {
+            length: DEFAULT_LENGTH,
+            use_uppercase: true,
+            use_lowercase: true,
+            use_digits: true,
+            use_special: true,
+        }
+    }
+}
+
+impl PasswordGenerator {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn length(mut self, length: usize) -> Self {
+        self.length = length;
+        self
+    }
+
+    pub fn uppercase(mut self, enable: bool) -> Self {
+        self.use_uppercase = enable;
+        self
+    }
+
+    pub fn lowercase(mut self, enable: bool) -> Self {
+        self.use_lowercase = enable;
+        self
+    }
+
+    pub fn digits(mut self, enable: bool) -> Self {
+        self.use_digits = enable;
+        self
+    }
+
+    pub fn special(mut self, enable: bool) -> Self {
+        self.use_special = enable;
+        self
+    }
+
+    pub fn generate(&self) -> Result<String, &'static str> {
+        if self.length == 0 {
+            return Err("Password length must be greater than 0");
+        }
+
+        if !self.use_uppercase && !self.use_lowercase && !self.use_digits && !self.use_special {
+            return Err("At least one character set must be enabled");
+        }
+
+        let mut character_pool = Vec::new();
+        
+        if self.use_uppercase {
+            character_pool.extend(b'A'..=b'Z');
+        }
+        if self.use_lowercase {
+            character_pool.extend(b'a'..=b'z');
+        }
+        if self.use_digits {
+            character_pool.extend(b'0'..=b'9');
+        }
+        if self.use_special {
+            character_pool.extend(b"!@#$%^&*()-_=+[]{}|;:,.<>?");
+        }
+
+        if character_pool.is_empty() {
+            return Err("Character pool is empty");
+        }
+
+        let mut rng = rand::thread_rng();
+        let password: String = (0..self.length)
+            .map(|_| {
+                let idx = rng.gen_range(0..character_pool.len());
+                character_pool[idx] as char
+            })
+            .collect();
+
+        Ok(password)
+    }
+}
+
+fn main() -> io::Result<()> {
+    println!("Secure Password Generator");
+    println!("=========================");
+
+    let generator = PasswordGenerator::new()
+        .length(20)
+        .uppercase(true)
+        .lowercase(true)
+        .digits(true)
+        .special(true);
+
+    match generator.generate() {
+        Ok(password) => {
+            println!("Generated password: {}", password);
+            println!("Password length: {}", password.len());
+        }
+        Err(e) => {
+            eprintln!("Error generating password: {}", e);
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_generator() {
+        let generator = PasswordGenerator::new();
+        let password = generator.generate().unwrap();
+        assert_eq!(password.len(), DEFAULT_LENGTH);
+    }
+
+    #[test]
+    fn test_custom_length() {
+        let generator = PasswordGenerator::new().length(32);
+        let password = generator.generate().unwrap();
+        assert_eq!(password.len(), 32);
+    }
+
+    #[test]
+    fn test_no_character_sets() {
+        let generator = PasswordGenerator::new()
+            .uppercase(false)
+            .lowercase(false)
+            .digits(false)
+            .special(false);
+        let result = generator.generate();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_zero_length() {
+        let generator = PasswordGenerator::new().length(0);
+        let result = generator.generate();
+        assert!(result.is_err());
+    }
 }

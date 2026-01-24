@@ -1,180 +1,84 @@
-use serde::Deserialize;
+use std::collections::HashMap;
 use std::env;
 use std::fs;
-use std::path::Path;
 
-#[derive(Debug, Deserialize)]
-pub struct DatabaseConfig {
-    pub host: String,
-    pub port: u16,
-    pub username: String,
-    pub password: String,
-    pub database_name: String,
+pub struct Config {
+    values: HashMap<String, String>,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct ServerConfig {
-    pub address: String,
-    pub port: u16,
-    pub max_connections: u32,
-}
+impl Config {
+    pub fn from_file(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let content = fs::read_to_string(path)?;
+        let mut values = HashMap::new();
 
-#[derive(Debug, Deserialize)]
-pub struct AppConfig {
-    pub database: DatabaseConfig,
-    pub server: ServerConfig,
-    pub debug_mode: bool,
-}
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
 
-impl AppConfig {
-    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
-        let config_content = fs::read_to_string(path)?;
-        let mut config: AppConfig = toml::from_str(&config_content)?;
-
-        config.apply_environment_overrides();
-        config.validate()?;
-
-        Ok(config)
-    }
-
-    fn apply_environment_overrides(&mut self) {
-        if let Ok(debug_env) = env::var("APP_DEBUG_MODE") {
-            if let Ok(debug_bool) = debug_env.parse::<bool>() {
-                self.debug_mode = debug_bool;
+            if let Some((key, value)) = trimmed.split_once('=') {
+                let key = key.trim().to_string();
+                let processed_value = Self::process_value(value.trim());
+                values.insert(key, processed_value);
             }
         }
 
-        if let Ok(db_host) = env::var("DATABASE_HOST") {
-            self.database.host = db_host;
-        }
+        Ok(Config { values })
+    }
 
-        if let Ok(server_port) = env::var("SERVER_PORT") {
-            if let Ok(port) = server_port.parse::<u16>() {
-                self.server.port = port;
-            }
+    fn process_value(value: &str) -> String {
+        if value.starts_with('$') {
+            let var_name = &value[1..];
+            env::var(var_name).unwrap_or_else(|_| value.to_string())
+        } else {
+            value.to_string()
         }
     }
 
-    fn validate(&self) -> Result<(), String> {
-        if self.server.port == 0 {
-            return Err("Server port cannot be zero".to_string());
-        }
-
-        if self.database.port == 0 {
-            return Err("Database port cannot be zero".to_string());
-        }
-
-        if self.server.max_connections == 0 {
-            return Err("Max connections must be greater than zero".to_string());
-        }
-
-        Ok(())
+    pub fn get(&self, key: &str) -> Option<&String> {
+        self.values.get(key)
     }
 
-    pub fn database_url(&self) -> String {
-        format!(
-            "postgres://{}:{}@{}:{}/{}",
-            self.database.username,
-            self.database.password,
-            self.database.host,
-            self.database.port,
-            self.database.database_name
-        )
-    }
-
-    pub fn server_address(&self) -> String {
-        format!("{}:{}", self.server.address, self.server.port)
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.values.contains_key(key)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_config_parsing() {
-        let config_content = r#"
-            [database]
-            host = "localhost"
-            port = 5432
-            username = "admin"
-            password = "secret"
-            database_name = "mydb"
+    fn test_basic_parsing() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "DATABASE_HOST=localhost").unwrap();
+        writeln!(file, "DATABASE_PORT=5432").unwrap();
+        writeln!(file, "# This is a comment").unwrap();
+        writeln!(file, "").unwrap();
+        writeln!(file, "API_KEY=secret123").unwrap();
 
-            [server]
-            address = "0.0.0.0"
-            port = 8080
-            max_connections = 100
-
-            debug_mode = false
-        "#;
-
-        let temp_file = NamedTempFile::new().unwrap();
-        fs::write(temp_file.path(), config_content).unwrap();
-
-        let config = AppConfig::from_file(temp_file.path()).unwrap();
-        
-        assert_eq!(config.database.host, "localhost");
-        assert_eq!(config.server.port, 8080);
-        assert!(!config.debug_mode);
+        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.get("DATABASE_HOST"), Some(&"localhost".to_string()));
+        assert_eq!(config.get("DATABASE_PORT"), Some(&"5432".to_string()));
+        assert_eq!(config.get("API_KEY"), Some(&"secret123".to_string()));
+        assert_eq!(config.get("NONEXISTENT"), None);
     }
 
     #[test]
-    fn test_environment_overrides() {
-        env::set_var("APP_DEBUG_MODE", "true");
-        env::set_var("DATABASE_HOST", "prod-db.example.com");
-
-        let config_content = r#"
-            [database]
-            host = "localhost"
-            port = 5432
-            username = "admin"
-            password = "secret"
-            database_name = "mydb"
-
-            [server]
-            address = "0.0.0.0"
-            port = 8080
-            max_connections = 100
-
-            debug_mode = false
-        "#;
-
-        let temp_file = NamedTempFile::new().unwrap();
-        fs::write(temp_file.path(), config_content).unwrap();
-
-        let config = AppConfig::from_file(temp_file.path()).unwrap();
+    fn test_env_substitution() {
+        env::set_var("DB_PASSWORD", "secure_pass");
         
-        assert_eq!(config.database.host, "prod-db.example.com");
-        assert!(config.debug_mode);
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "PASSWORD=$DB_PASSWORD").unwrap();
+        writeln!(file, "NORMAL_VALUE=static").unwrap();
 
-        env::remove_var("APP_DEBUG_MODE");
-        env::remove_var("DATABASE_HOST");
-    }
-
-    #[test]
-    fn test_validation() {
-        let invalid_config = r#"
-            [database]
-            host = "localhost"
-            port = 0
-            username = "admin"
-            password = "secret"
-            database_name = "mydb"
-
-            [server]
-            address = "0.0.0.0"
-            port = 8080
-            max_connections = 100
-
-            debug_mode = false
-        "#;
-
-        let temp_file = NamedTempFile::new().unwrap();
-        fs::write(temp_file.path(), invalid_config).unwrap();
-
-        let result = AppConfig::from_file(temp_file.path());
-        assert!(result.is_err());
+        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.get("PASSWORD"), Some(&"secure_pass".to_string()));
+        assert_eq!(config.get("NORMAL_VALUE"), Some(&"static".to_string()));
+        
+        env::remove_var("DB_PASSWORD");
     }
 }

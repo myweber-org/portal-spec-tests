@@ -172,4 +172,154 @@ mod tests {
         assert_eq!(parser.get("port"), Some(&"3000".to_string()));
         assert_eq!(parser.get("url"), Some(&"http://127.0.0.1:3000/api".to_string()));
     }
+}use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
+
+#[derive(Debug, Clone)]
+pub struct Config {
+    pub settings: HashMap<String, String>,
+    pub numeric_values: HashMap<String, f64>,
+    pub flags: HashMap<String, bool>,
+}
+
+impl Config {
+    pub fn new() -> Self {
+        Config {
+            settings: HashMap::new(),
+            numeric_values: HashMap::new(),
+            flags: HashMap::new(),
+        }
+    }
+
+    pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self, String> {
+        let content = fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read config file: {}", e))?;
+
+        let mut config = Config::new();
+        let mut current_section = String::new();
+
+        for (line_num, line) in content.lines().enumerate() {
+            let trimmed = line.trim();
+            
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+
+            if trimmed.starts_with('[') && trimmed.ends_with(']') {
+                current_section = trimmed[1..trimmed.len()-1].to_string();
+                continue;
+            }
+
+            let parts: Vec<&str> = trimmed.splitn(2, '=').collect();
+            if parts.len() != 2 {
+                return Err(format!("Invalid config format at line {}", line_num + 1));
+            }
+
+            let key = parts[0].trim().to_string();
+            let value = parts[1].trim().to_string();
+
+            match current_section.as_str() {
+                "settings" => {
+                    config.settings.insert(key, value);
+                }
+                "numeric" => {
+                    let num_value = value.parse::<f64>()
+                        .map_err(|_| format!("Invalid numeric value at line {}", line_num + 1))?;
+                    config.numeric_values.insert(key, num_value);
+                }
+                "flags" => {
+                    let flag_value = match value.to_lowercase().as_str() {
+                        "true" | "yes" | "1" => true,
+                        "false" | "no" | "0" => false,
+                        _ => return Err(format!("Invalid boolean value at line {}", line_num + 1)),
+                    };
+                    config.flags.insert(key, flag_value);
+                }
+                _ => {
+                    config.settings.insert(key, value);
+                }
+            }
+        }
+
+        Ok(config)
+    }
+
+    pub fn get_setting(&self, key: &str) -> Option<&String> {
+        self.settings.get(key)
+    }
+
+    pub fn get_numeric(&self, key: &str) -> Option<f64> {
+        self.numeric_values.get(key).copied()
+    }
+
+    pub fn get_flag(&self, key: &str) -> Option<bool> {
+        self.flags.get(key).copied()
+    }
+
+    pub fn get_setting_with_default(&self, key: &str, default: &str) -> String {
+        self.settings.get(key)
+            .map(|s| s.clone())
+            .unwrap_or_else(|| default.to_string())
+    }
+
+    pub fn get_numeric_with_default(&self, key: &str, default: f64) -> f64 {
+        self.numeric_values.get(key)
+            .copied()
+            .unwrap_or(default)
+    }
+
+    pub fn get_flag_with_default(&self, key: &str, default: bool) -> bool {
+        self.flags.get(key)
+            .copied()
+            .unwrap_or(default)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_config_loading() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        let config_content = r#"
+# Sample configuration
+[settings]
+app_name = MyApplication
+log_level = INFO
+
+[numeric]
+timeout = 30.5
+retry_count = 3
+
+[flags]
+enable_cache = true
+debug_mode = false
+"#;
+        write!(temp_file, "{}", config_content).unwrap();
+        
+        let config = Config::load_from_file(temp_file.path()).unwrap();
+        
+        assert_eq!(config.get_setting("app_name"), Some(&"MyApplication".to_string()));
+        assert_eq!(config.get_numeric("timeout"), Some(30.5));
+        assert_eq!(config.get_flag("enable_cache"), Some(true));
+        assert_eq!(config.get_flag("debug_mode"), Some(false));
+        
+        assert_eq!(config.get_setting_with_default("missing", "default"), "default");
+        assert_eq!(config.get_numeric_with_default("missing", 42.0), 42.0);
+        assert_eq!(config.get_flag_with_default("missing", true), true);
+    }
+
+    #[test]
+    fn test_invalid_config() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        let config_content = "invalid_line_without_equals";
+        write!(temp_file, "{}", config_content).unwrap();
+        
+        let result = Config::load_from_file(temp_file.path());
+        assert!(result.is_err());
+    }
 }

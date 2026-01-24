@@ -523,4 +523,89 @@ mod tests {
         assert!(config.get_feature_status("metrics"));
         assert!(!config.get_feature_status("debug"));
     }
+}use std::fs;
+use std::collections::HashMap;
+
+#[derive(Debug)]
+pub struct Config {
+    pub settings: HashMap<String, String>,
+}
+
+impl Config {
+    pub fn from_file(path: &str) -> Result<Self, String> {
+        let content = fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read config file: {}", e))?;
+
+        let mut settings = HashMap::new();
+        
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+            
+            let parts: Vec<&str> = trimmed.splitn(2, '=').collect();
+            if parts.len() != 2 {
+                return Err(format!("Invalid config line: {}", line));
+            }
+            
+            let key = parts[0].trim().to_string();
+            let value = parts[1].trim().to_string();
+            
+            if key.is_empty() {
+                return Err(format!("Empty key in line: {}", line));
+            }
+            
+            settings.insert(key, value);
+        }
+        
+        if settings.is_empty() {
+            return Err("Config file is empty or contains no valid entries".to_string());
+        }
+        
+        Ok(Config { settings })
+    }
+    
+    pub fn get(&self, key: &str) -> Option<&String> {
+        self.settings.get(key)
+    }
+    
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.settings.contains_key(key)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+    
+    #[test]
+    fn test_valid_config() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "host=localhost\nport=8080\n# This is a comment\n\ndebug=true").unwrap();
+        
+        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.get("host"), Some(&"localhost".to_string()));
+        assert_eq!(config.get("port"), Some(&"8080".to_string()));
+        assert_eq!(config.get("debug"), Some(&"true".to_string()));
+        assert_eq!(config.contains_key("missing"), false);
+    }
+    
+    #[test]
+    fn test_invalid_config() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "=value").unwrap();
+        
+        let result = Config::from_file(file.path().to_str().unwrap());
+        assert!(result.is_err());
+    }
+    
+    #[test]
+    fn test_empty_config() {
+        let file = NamedTempFile::new().unwrap();
+        let result = Config::from_file(file.path().to_str().unwrap());
+        assert!(result.is_err());
+    }
 }

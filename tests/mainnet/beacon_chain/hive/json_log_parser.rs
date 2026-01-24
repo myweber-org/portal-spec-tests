@@ -1,90 +1,127 @@
-use chrono::{DateTime, Utc};
-use serde::Deserialize;
+use serde_json::Value;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
-
-#[derive(Debug, Deserialize)]
-struct LogEntry {
-    timestamp: String,
-    level: String,
-    message: String,
-    #[serde(flatten)]
-    extra: HashMap<String, serde_json::Value>,
-}
+use std::path::Path;
 
 #[derive(Debug)]
-struct LogFilter {
-    min_level: Option<String>,
-    start_time: Option<DateTime<Utc>>,
-    end_time: Option<DateTime<Utc>>,
-    keyword: Option<String>,
+pub struct LogEntry {
+    pub timestamp: String,
+    pub level: String,
+    pub message: String,
+    pub fields: HashMap<String, Value>,
 }
 
-impl LogFilter {
-    fn matches(&self, entry: &LogEntry) -> bool {
-        if let Some(min_level) = &self.min_level {
-            let levels = vec!["trace", "debug", "info", "warn", "error"];
-            let entry_idx = levels.iter().position(|&l| l == entry.level.to_lowercase());
-            let min_idx = levels.iter().position(|&l| l == min_level.to_lowercase());
-            
-            match (entry_idx, min_idx) {
-                (Some(e), Some(m)) if e < m => return false,
-                _ => (),
+pub struct LogParser {
+    entries: Vec<LogEntry>,
+}
+
+impl LogParser {
+    pub fn new() -> Self {
+        LogParser {
+            entries: Vec::new(),
+        }
+    }
+
+    pub fn load_from_file<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn std::error::Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+
+        for line in reader.lines() {
+            let line = line?;
+            if let Ok(entry) = self.parse_line(&line) {
+                self.entries.push(entry);
             }
         }
 
-        if let (Some(start), Some(end)) = (&self.start_time, &self.end_time) {
-            if let Ok(entry_time) = DateTime::parse_from_rfc3339(&entry.timestamp) {
-                let entry_utc = entry_time.with_timezone(&Utc);
-                if entry_utc < *start || entry_utc > *end {
-                    return false;
+        Ok(())
+    }
+
+    fn parse_line(&self, line: &str) -> Result<LogEntry, Box<dyn std::error::Error>> {
+        let json_value: Value = serde_json::from_str(line)?;
+
+        let timestamp = json_value["timestamp"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+
+        let level = json_value["level"]
+            .as_str()
+            .unwrap_or("INFO")
+            .to_string();
+
+        let message = json_value["message"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+
+        let mut fields = HashMap::new();
+        if let Some(obj) = json_value.as_object() {
+            for (key, value) in obj {
+                if key != "timestamp" && key != "level" && key != "message" {
+                    fields.insert(key.clone(), value.clone());
                 }
             }
         }
 
-        if let Some(keyword) = &self.keyword {
-            if !entry.message.contains(keyword) {
-                return false;
-            }
-        }
+        Ok(LogEntry {
+            timestamp,
+            level,
+            message,
+            fields,
+        })
+    }
 
-        true
+    pub fn filter_by_level(&self, level: &str) -> Vec<&LogEntry> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.level.eq_ignore_ascii_case(level))
+            .collect()
+    }
+
+    pub fn count_by_level(&self) -> HashMap<String, usize> {
+        let mut counts = HashMap::new();
+        for entry in &self.entries {
+            *counts.entry(entry.level.clone()).or_insert(0) += 1;
+        }
+        counts
+    }
+
+    pub fn search_messages(&self, keyword: &str) -> Vec<&LogEntry> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.message.contains(keyword))
+            .collect()
+    }
+
+    pub fn get_entries(&self) -> &[LogEntry] {
+        &self.entries
+    }
+
+    pub fn clear(&mut self) {
+        self.entries.clear();
     }
 }
 
-fn parse_log_file(path: &str, filter: &LogFilter) -> Result<Vec<LogEntry>, Box<dyn std::error::Error>> {
-    let file = File::open(path)?;
-    let reader = BufReader::new(file);
-    let mut entries = Vec::new();
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    for line in reader.lines() {
-        let line = line?;
-        if let Ok(entry) = serde_json::from_str::<LogEntry>(&line) {
-            if filter.matches(&entry) {
-                entries.push(entry);
-            }
-        }
+    #[test]
+    fn test_parser_creation() {
+        let parser = LogParser::new();
+        assert_eq!(parser.get_entries().len(), 0);
     }
 
-    Ok(entries)
-}
-
-fn main() {
-    let filter = LogFilter {
-        min_level: Some("info".to_string()),
-        start_time: Some(Utc::now() - chrono::Duration::hours(24)),
-        end_time: Some(Utc::now()),
-        keyword: Some("connection".to_string()),
-    };
-
-    match parse_log_file("application.log", &filter) {
-        Ok(entries) => {
-            println!("Found {} matching log entries:", entries.len());
-            for entry in entries.iter().take(5) {
-                println!("{:?}", entry);
-            }
-        }
-        Err(e) => eprintln!("Error parsing log file: {}", e),
+    #[test]
+    fn test_line_parsing() {
+        let parser = LogParser::new();
+        let json_line = r#"{"timestamp":"2024-01-15T10:30:00Z","level":"ERROR","message":"Database connection failed","error_code":500}"#;
+        
+        let entry = parser.parse_line(json_line).unwrap();
+        assert_eq!(entry.timestamp, "2024-01-15T10:30:00Z");
+        assert_eq!(entry.level, "ERROR");
+        assert_eq!(entry.message, "Database connection failed");
+        assert_eq!(entry.fields.get("error_code").unwrap().as_u64().unwrap(), 500);
     }
 }

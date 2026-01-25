@@ -8,88 +8,95 @@ struct Record {
     id: u32,
     name: String,
     value: f64,
-    active: bool,
+    category: String,
 }
 
-impl Record {
-    fn is_valid(&self) -> bool {
-        !self.name.is_empty() && self.value >= 0.0
-    }
+struct DataProcessor {
+    records: Vec<Record>,
 }
 
-pub fn process_csv(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
-    let input_file = File::open(input_path)?;
-    let mut reader = ReaderBuilder::new()
-        .has_headers(true)
-        .from_reader(input_file);
-
-    let output_file = File::create(output_path)?;
-    let mut writer = WriterBuilder::new()
-        .has_headers(true)
-        .from_writer(output_file);
-
-    let mut valid_count = 0;
-    let mut invalid_count = 0;
-
-    for result in reader.deserialize() {
-        let record: Record = result?;
-        
-        if record.is_valid() {
-            writer.serialize(&record)?;
-            valid_count += 1;
-        } else {
-            invalid_count += 1;
+impl DataProcessor {
+    fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
         }
     }
 
-    println!("Processed {} records", valid_count + invalid_count);
-    println!("Valid records: {}", valid_count);
-    println!("Invalid records: {}", invalid_count);
-
-    Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
-
-    #[test]
-    fn test_valid_record() {
-        let record = Record {
-            id: 1,
-            name: "Test".to_string(),
-            value: 42.5,
-            active: true,
-        };
-        assert!(record.is_valid());
-    }
-
-    #[test]
-    fn test_invalid_record() {
-        let record = Record {
-            id: 2,
-            name: "".to_string(),
-            value: -10.0,
-            active: false,
-        };
-        assert!(!record.is_valid());
-    }
-
-    #[test]
-    fn test_csv_processing() -> Result<(), Box<dyn Error>> {
-        let mut input_file = NamedTempFile::new()?;
-        writeln!(input_file, "id,name,value,active")?;
-        writeln!(input_file, "1,Alice,100.5,true")?;
-        writeln!(input_file, "2,Bob,-50.0,false")?;
-        writeln!(input_file, "3,,75.0,true")?;
-
-        let output_file = NamedTempFile::new()?;
+    fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let mut rdr = ReaderBuilder::new().has_headers(true).from_reader(file);
         
-        process_csv(input_file.path().to_str().unwrap(), 
-                   output_file.path().to_str().unwrap())?;
-
+        for result in rdr.deserialize() {
+            let record: Record = result?;
+            self.records.push(record);
+        }
+        
         Ok(())
     }
+
+    fn filter_by_category(&self, category: &str) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|record| record.category == category)
+            .collect()
+    }
+
+    fn calculate_average(&self) -> f64 {
+        if self.records.is_empty() {
+            return 0.0;
+        }
+        
+        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        sum / self.records.len() as f64
+    }
+
+    fn save_filtered_to_csv(&self, category: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
+        let filtered = self.filter_by_category(category);
+        let file = File::create(output_path)?;
+        let mut wtr = WriterBuilder::new().has_headers(true).from_writer(file);
+        
+        for record in filtered {
+            wtr.serialize(record)?;
+        }
+        
+        wtr.flush()?;
+        Ok(())
+    }
+
+    fn add_record(&mut self, id: u32, name: String, value: f64, category: String) {
+        self.records.push(Record {
+            id,
+            name,
+            value,
+            category,
+        });
+    }
+
+    fn remove_record_by_id(&mut self, id: u32) -> bool {
+        let initial_len = self.records.len();
+        self.records.retain(|record| record.id != id);
+        self.records.len() != initial_len
+    }
+}
+
+fn process_data_sample() -> Result<(), Box<dyn Error>> {
+    let mut processor = DataProcessor::new();
+    
+    processor.add_record(1, "Item A".to_string(), 10.5, "Alpha".to_string());
+    processor.add_record(2, "Item B".to_string(), 20.3, "Beta".to_string());
+    processor.add_record(3, "Item C".to_string(), 15.7, "Alpha".to_string());
+    
+    println!("Average value: {:.2}", processor.calculate_average());
+    
+    let alpha_items = processor.filter_by_category("Alpha");
+    println!("Alpha category items: {}", alpha_items.len());
+    
+    for item in alpha_items {
+        println!("ID: {}, Name: {}, Value: {}", item.id, item.name, item.value);
+    }
+    
+    processor.remove_record_by_id(2);
+    println!("Records after removal: {}", processor.records.len());
+    
+    Ok(())
 }

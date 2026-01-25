@@ -290,3 +290,96 @@ mod tests {
         assert!(result.is_err());
     }
 }
+use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
+use pbkdf2::pbkdf2_hmac;
+use rand::RngCore;
+use sha2::Sha256;
+use std::fs;
+use std::io::{self, Read, Write};
+
+type Aes256CbcEnc = cbc::Encryptor<aes::Aes256>;
+type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
+
+const SALT_LENGTH: usize = 16;
+const IV_LENGTH: usize = 16;
+const KEY_ITERATIONS: u32 = 100_000;
+const KEY_LENGTH: usize = 32;
+
+pub fn encrypt_file(input_path: &str, output_path: &str, password: &str) -> io::Result<()> {
+    let mut input_file = fs::File::open(input_path)?;
+    let mut plaintext = Vec::new();
+    input_file.read_to_end(&mut plaintext)?;
+
+    let mut salt = [0u8; SALT_LENGTH];
+    let mut iv = [0u8; IV_LENGTH];
+    rand::thread_rng().fill_bytes(&mut salt);
+    rand::thread_rng().fill_bytes(&mut iv);
+
+    let mut key = [0u8; KEY_LENGTH];
+    pbkdf2_hmac::<Sha256>(password.as_bytes(), &salt, KEY_ITERATIONS, &mut key);
+
+    let ciphertext = Aes256CbcEnc::new(&key.into(), &iv.into())
+        .encrypt_padded_vec_mut::<Pkcs7>(&plaintext);
+
+    let mut output_file = fs::File::create(output_path)?;
+    output_file.write_all(&salt)?;
+    output_file.write_all(&iv)?;
+    output_file.write_all(&ciphertext)?;
+
+    Ok(())
+}
+
+pub fn decrypt_file(input_path: &str, output_path: &str, password: &str) -> io::Result<()> {
+    let mut input_file = fs::File::open(input_path)?;
+    let mut encrypted_data = Vec::new();
+    input_file.read_to_end(&mut encrypted_data)?;
+
+    if encrypted_data.len() < SALT_LENGTH + IV_LENGTH {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "File too short to contain salt and IV",
+        ));
+    }
+
+    let (salt, rest) = encrypted_data.split_at(SALT_LENGTH);
+    let (iv, ciphertext) = rest.split_at(IV_LENGTH);
+
+    let mut key = [0u8; KEY_LENGTH];
+    pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, KEY_ITERATIONS, &mut key);
+
+    let plaintext = Aes256CbcDec::new(&key.into(), iv.into())
+        .decrypt_padded_vec_mut::<Pkcs7>(ciphertext)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+    let mut output_file = fs::File::create(output_path)?;
+    output_file.write_all(&plaintext)?;
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn test_encryption_roundtrip() {
+        let test_data = b"Secret data that needs protection";
+        let password = "strong_password_123";
+        let plain_path = "test_plain.bin";
+        let encrypted_path = "test_encrypted.bin";
+        let decrypted_path = "test_decrypted.bin";
+
+        fs::write(plain_path, test_data).unwrap();
+        
+        encrypt_file(plain_path, encrypted_path, password).unwrap();
+        decrypt_file(encrypted_path, decrypted_path, password).unwrap();
+        
+        let decrypted_data = fs::read(decrypted_path).unwrap();
+        assert_eq!(test_data.to_vec(), decrypted_data);
+
+        fs::remove_file(plain_path).ok();
+        fs::remove_file(encrypted_path).ok();
+        fs::remove_file(decrypted_path).ok();
+    }
+}

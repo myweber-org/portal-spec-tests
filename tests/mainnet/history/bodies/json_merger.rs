@@ -124,4 +124,42 @@ mod tests {
 
         assert_eq!(merged, expected);
     }
+}use std::collections::HashMap;
+use std::fs::{self, File};
+use std::io::{BufReader, Read};
+use std::path::Path;
+
+type JsonValue = serde_json::Value;
+
+pub fn merge_json_files(file_paths: &[impl AsRef<Path>]) -> Result<JsonValue, Box<dyn std::error::Error>> {
+    let mut merged_map = HashMap::new();
+
+    for path in file_paths {
+        let file = File::open(path.as_ref())?;
+        let mut reader = BufReader::new(file);
+        let mut contents = String::new();
+        reader.read_to_string(&mut contents)?;
+
+        let json_value: JsonValue = serde_json::from_str(&contents)?;
+
+        if let JsonValue::Object(map) = json_value {
+            for (key, value) in map {
+                merged_map.insert(key, value);
+            }
+        } else {
+            return Err("Each JSON file must contain a JSON object".into());
+        }
+    }
+
+    Ok(JsonValue::Object(serde_json::Map::from_iter(merged_map)))
+}
+
+pub fn merge_and_write(
+    input_paths: &[impl AsRef<Path>],
+    output_path: impl AsRef<Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let merged = merge_json_files(input_paths)?;
+    let json_string = serde_json::to_string_pretty(&merged)?;
+    fs::write(output_path, json_string)?;
+    Ok(())
 }

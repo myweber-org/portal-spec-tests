@@ -156,3 +156,100 @@ mod tests {
         assert!(filtered.contains_key("high"));
     }
 }
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug)]
+pub enum DataError {
+    InvalidFormat,
+    OutOfRange,
+    ConversionFailed,
+}
+
+impl fmt::Display for DataError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DataError::InvalidFormat => write!(f, "Data format is invalid"),
+            DataError::OutOfRange => write!(f, "Value is out of acceptable range"),
+            DataError::ConversionFailed => write!(f, "Failed to convert data type"),
+        }
+    }
+}
+
+impl Error for DataError {}
+
+pub struct DataProcessor {
+    threshold: f64,
+}
+
+impl DataProcessor {
+    pub fn new(threshold: f64) -> Result<Self, DataError> {
+        if threshold <= 0.0 || threshold > 100.0 {
+            return Err(DataError::OutOfRange);
+        }
+        Ok(Self { threshold })
+    }
+
+    pub fn process_value(&self, raw_value: &str) -> Result<f64, DataError> {
+        let parsed = raw_value.parse::<f64>().map_err(|_| DataError::InvalidFormat)?;
+        
+        if parsed < 0.0 {
+            return Err(DataError::OutOfRange);
+        }
+
+        let processed = (parsed * 100.0) / self.threshold;
+        
+        if processed.is_nan() || processed.is_infinite() {
+            return Err(DataError::ConversionFailed);
+        }
+
+        Ok(processed)
+    }
+
+    pub fn normalize_data(&self, values: &[f64]) -> Vec<f64> {
+        if values.is_empty() {
+            return Vec::new();
+        }
+
+        let max_value = values.iter().fold(f64::MIN, |a, &b| a.max(b));
+        
+        values.iter()
+            .map(|&v| v / max_value)
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_processor_creation() {
+        let processor = DataProcessor::new(50.0);
+        assert!(processor.is_ok());
+    }
+
+    #[test]
+    fn test_invalid_threshold() {
+        let processor = DataProcessor::new(0.0);
+        assert!(processor.is_err());
+    }
+
+    #[test]
+    fn test_process_valid_value() {
+        let processor = DataProcessor::new(50.0).unwrap();
+        let result = processor.process_value("25.5");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 51.0);
+    }
+
+    #[test]
+    fn test_normalize_data() {
+        let processor = DataProcessor::new(10.0).unwrap();
+        let data = vec![2.0, 4.0, 6.0, 8.0];
+        let normalized = processor.normalize_data(&data);
+        
+        assert_eq!(normalized.len(), 4);
+        assert_eq!(normalized[3], 1.0);
+    }
+}

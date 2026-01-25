@@ -96,4 +96,148 @@ mod tests {
         let decrypted_data = fs::read(decrypted_file.path()).unwrap();
         assert_eq!(test_data.to_vec(), decrypted_data);
     }
+}use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Nonce,
+};
+use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce as ChaChaNonce};
+use std::error::Error;
+
+pub struct EncryptionResult {
+    pub ciphertext: Vec<u8>,
+    pub nonce: Vec<u8>,
+}
+
+pub trait Encryptor {
+    fn encrypt(&self, plaintext: &[u8]) -> Result<EncryptionResult, Box<dyn Error>>;
+    fn decrypt(&self, ciphertext: &[u8], nonce: &[u8]) -> Result<Vec<u8>, Box<dyn Error>>;
+}
+
+pub struct AesGcmEncryptor {
+    key: [u8; 32],
+}
+
+impl AesGcmEncryptor {
+    pub fn new() -> Self {
+        let mut key = [0u8; 32];
+        OsRng.fill_bytes(&mut key);
+        Self { key }
+    }
+
+    pub fn from_key(key: [u8; 32]) -> Self {
+        Self { key }
+    }
+}
+
+impl Encryptor for AesGcmEncryptor {
+    fn encrypt(&self, plaintext: &[u8]) -> Result<EncryptionResult, Box<dyn Error>> {
+        let cipher = Aes256Gcm::new_from_slice(&self.key)?;
+        let nonce_bytes: [u8; 12] = OsRng.gen();
+        let nonce = Nonce::from_slice(&nonce_bytes);
+
+        let ciphertext = cipher.encrypt(nonce, plaintext)?;
+
+        Ok(EncryptionResult {
+            ciphertext,
+            nonce: nonce_bytes.to_vec(),
+        })
+    }
+
+    fn decrypt(&self, ciphertext: &[u8], nonce: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+        let cipher = Aes256Gcm::new_from_slice(&self.key)?;
+        let nonce = Nonce::from_slice(nonce);
+        let plaintext = cipher.decrypt(nonce, ciphertext)?;
+        Ok(plaintext)
+    }
+}
+
+pub struct ChaChaEncryptor {
+    key: [u8; 32],
+}
+
+impl ChaChaEncryptor {
+    pub fn new() -> Self {
+        let mut key = [0u8; 32];
+        OsRng.fill_bytes(&mut key);
+        Self { key }
+    }
+
+    pub fn from_key(key: [u8; 32]) -> Self {
+        Self { key }
+    }
+}
+
+impl Encryptor for ChaChaEncryptor {
+    fn encrypt(&self, plaintext: &[u8]) -> Result<EncryptionResult, Box<dyn Error>> {
+        let key = Key::from_slice(&self.key);
+        let cipher = ChaCha20Poly1305::new(key);
+        let nonce_bytes: [u8; 12] = OsRng.gen();
+        let nonce = ChaChaNonce::from_slice(&nonce_bytes);
+
+        let ciphertext = cipher.encrypt(nonce, plaintext)?;
+
+        Ok(EncryptionResult {
+            ciphertext,
+            nonce: nonce_bytes.to_vec(),
+        })
+    }
+
+    fn decrypt(&self, ciphertext: &[u8], nonce: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+        let key = Key::from_slice(&self.key);
+        let cipher = ChaCha20Poly1305::new(key);
+        let nonce = ChaChaNonce::from_slice(nonce);
+        let plaintext = cipher.decrypt(nonce, ciphertext)?;
+        Ok(plaintext)
+    }
+}
+
+pub fn generate_random_bytes(size: usize) -> Vec<u8> {
+    let mut bytes = vec![0u8; size];
+    OsRng.fill_bytes(&mut bytes);
+    bytes
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_aes_gcm_encryption() {
+        let encryptor = AesGcmEncryptor::new();
+        let plaintext = b"Secret message for AES-GCM";
+        
+        let result = encryptor.encrypt(plaintext).unwrap();
+        let decrypted = encryptor.decrypt(&result.ciphertext, &result.nonce).unwrap();
+        
+        assert_eq!(plaintext.to_vec(), decrypted);
+    }
+
+    #[test]
+    fn test_chacha_encryption() {
+        let encryptor = ChaChaEncryptor::new();
+        let plaintext = b"Secret message for ChaCha20-Poly1305";
+        
+        let result = encryptor.encrypt(plaintext).unwrap();
+        let decrypted = encryptor.decrypt(&result.ciphertext, &result.nonce).unwrap();
+        
+        assert_eq!(plaintext.to_vec(), decrypted);
+    }
+
+    #[test]
+    fn test_key_reuse() {
+        let key = [42u8; 32];
+        let aes_encryptor = AesGcmEncryptor::from_key(key);
+        let chacha_encryptor = ChaChaEncryptor::from_key(key);
+        
+        let plaintext = b"Same key, different algorithms";
+        
+        let aes_result = aes_encryptor.encrypt(plaintext).unwrap();
+        let chacha_result = chacha_encryptor.encrypt(plaintext).unwrap();
+        
+        let aes_decrypted = aes_encryptor.decrypt(&aes_result.ciphertext, &aes_result.nonce).unwrap();
+        let chacha_decrypted = chacha_encryptor.decrypt(&chacha_result.ciphertext, &chacha_result.nonce).unwrap();
+        
+        assert_eq!(plaintext.to_vec(), aes_decrypted);
+        assert_eq!(plaintext.to_vec(), chacha_decrypted);
+    }
 }

@@ -108,3 +108,163 @@ mod tests {
         assert_eq!(transformed.timestamp, 4600);
     }
 }
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    id: u32,
+    name: String,
+    value: f64,
+    metadata: HashMap<String, String>,
+}
+
+#[derive(Debug)]
+pub enum DataError {
+    InvalidId,
+    InvalidValue,
+    MissingField,
+    ValidationFailed(String),
+}
+
+impl fmt::Display for DataError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DataError::InvalidId => write!(f, "Invalid record ID"),
+            DataError::InvalidValue => write!(f, "Invalid numeric value"),
+            DataError::MissingField => write!(f, "Required field is missing"),
+            DataError::ValidationFailed(msg) => write!(f, "Validation failed: {}", msg),
+        }
+    }
+}
+
+impl Error for DataError {}
+
+impl DataRecord {
+    pub fn new(id: u32, name: String, value: f64) -> Result<Self, DataError> {
+        if id == 0 {
+            return Err(DataError::InvalidId);
+        }
+        
+        if !value.is_finite() || value < 0.0 {
+            return Err(DataError::InvalidValue);
+        }
+        
+        if name.trim().is_empty() {
+            return Err(DataError::MissingField);
+        }
+        
+        Ok(DataRecord {
+            id,
+            name: name.trim().to_string(),
+            value,
+            metadata: HashMap::new(),
+        })
+    }
+    
+    pub fn add_metadata(&mut self, key: String, value: String) {
+        self.metadata.insert(key, value);
+    }
+    
+    pub fn get_metadata(&self, key: &str) -> Option<&String> {
+        self.metadata.get(key)
+    }
+    
+    pub fn transform_value<F>(&mut self, transformer: F) 
+    where
+        F: Fn(f64) -> f64,
+    {
+        self.value = transformer(self.value);
+    }
+    
+    pub fn validate(&self) -> Result<(), DataError> {
+        if self.id == 0 {
+            return Err(DataError::InvalidId);
+        }
+        
+        if !self.value.is_finite() {
+            return Err(DataError::InvalidValue);
+        }
+        
+        if self.name.is_empty() {
+            return Err(DataError::MissingField);
+        }
+        
+        Ok(())
+    }
+    
+    pub fn to_json(&self) -> String {
+        let metadata_json: Vec<String> = self.metadata
+            .iter()
+            .map(|(k, v)| format!("\"{}\": \"{}\"", k, v))
+            .collect();
+        
+        format!(
+            "{{\"id\": {}, \"name\": \"{}\", \"value\": {}, \"metadata\": {{{}}}}}",
+            self.id,
+            self.name,
+            self.value,
+            metadata_json.join(", ")
+        )
+    }
+}
+
+pub fn process_records(records: &mut [DataRecord]) -> Result<Vec<String>, DataError> {
+    let mut results = Vec::new();
+    
+    for record in records.iter_mut() {
+        record.validate()?;
+        
+        record.transform_value(|v| v * 1.1);
+        
+        if let Some(metadata) = record.get_metadata("category") {
+            if metadata == "premium" {
+                record.transform_value(|v| v * 1.2);
+            }
+        }
+        
+        results.push(record.to_json());
+    }
+    
+    Ok(results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_valid_record_creation() {
+        let record = DataRecord::new(1, "Test Record".to_string(), 100.0);
+        assert!(record.is_ok());
+        
+        let record = record.unwrap();
+        assert_eq!(record.id, 1);
+        assert_eq!(record.name, "Test Record");
+        assert_eq!(record.value, 100.0);
+    }
+    
+    #[test]
+    fn test_invalid_id() {
+        let record = DataRecord::new(0, "Test".to_string(), 100.0);
+        assert!(matches!(record, Err(DataError::InvalidId)));
+    }
+    
+    #[test]
+    fn test_metadata_operations() {
+        let mut record = DataRecord::new(1, "Test".to_string(), 50.0).unwrap();
+        record.add_metadata("category".to_string(), "standard".to_string());
+        
+        assert_eq!(record.get_metadata("category"), Some(&"standard".to_string()));
+        assert_eq!(record.get_metadata("nonexistent"), None);
+    }
+    
+    #[test]
+    fn test_value_transformation() {
+        let mut record = DataRecord::new(1, "Test".to_string(), 100.0).unwrap();
+        record.transform_value(|v| v * 2.0);
+        
+        assert_eq!(record.value, 200.0);
+    }
+}

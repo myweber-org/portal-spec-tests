@@ -613,3 +613,193 @@ mod tests {
         assert_eq!(filtered.len(), 2);
     }
 }
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub metadata: HashMap<String, String>,
+}
+
+#[derive(Debug)]
+pub enum ProcessingError {
+    InvalidData(String),
+    ValidationFailed(String),
+    TransformationError(String),
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProcessingError::InvalidData(msg) => write!(f, "Invalid data: {}", msg),
+            ProcessingError::ValidationFailed(msg) => write!(f, "Validation failed: {}", msg),
+            ProcessingError::TransformationError(msg) => write!(f, "Transformation error: {}", msg),
+        }
+    }
+}
+
+impl Error for ProcessingError {}
+
+pub struct DataProcessor {
+    validation_rules: Vec<Box<dyn Fn(&DataRecord) -> Result<(), ProcessingError>>>,
+    transformation_rules: Vec<Box<dyn Fn(DataRecord) -> Result<DataRecord, ProcessingError>>>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            validation_rules: Vec::new(),
+            transformation_rules: Vec::new(),
+        }
+    }
+
+    pub fn add_validation_rule<F>(&mut self, rule: F)
+    where
+        F: Fn(&DataRecord) -> Result<(), ProcessingError> + 'static,
+    {
+        self.validation_rules.push(Box::new(rule));
+    }
+
+    pub fn add_transformation_rule<F>(&mut self, rule: F)
+    where
+        F: Fn(DataRecord) -> Result<DataRecord, ProcessingError> + 'static,
+    {
+        self.transformation_rules.push(Box::new(rule));
+    }
+
+    pub fn process_record(&self, mut record: DataRecord) -> Result<DataRecord, ProcessingError> {
+        for validation_rule in &self.validation_rules {
+            validation_rule(&record)?;
+        }
+
+        for transformation_rule in &self.transformation_rules {
+            record = transformation_rule(record)?;
+        }
+
+        Ok(record)
+    }
+
+    pub fn process_batch(&self, records: Vec<DataRecord>) -> Result<Vec<DataRecord>, ProcessingError> {
+        let mut processed_records = Vec::with_capacity(records.len());
+        
+        for record in records {
+            match self.process_record(record) {
+                Ok(processed) => processed_records.push(processed),
+                Err(e) => return Err(e),
+            }
+        }
+        
+        Ok(processed_records)
+    }
+}
+
+impl Default for DataProcessor {
+    fn default() -> Self {
+        let mut processor = DataProcessor::new();
+        
+        processor.add_validation_rule(|record| {
+            if record.name.is_empty() {
+                Err(ProcessingError::ValidationFailed("Name cannot be empty".to_string()))
+            } else {
+                Ok(())
+            }
+        });
+
+        processor.add_validation_rule(|record| {
+            if record.value < 0.0 {
+                Err(ProcessingError::ValidationFailed("Value must be non-negative".to_string()))
+            } else {
+                Ok(())
+            }
+        });
+
+        processor.add_transformation_rule(|mut record| {
+            record.name = record.name.trim().to_string();
+            if record.name.is_empty() {
+                return Err(ProcessingError::TransformationError("Name became empty after trimming".to_string()));
+            }
+            Ok(record)
+        });
+
+        processor.add_transformation_rule(|mut record| {
+            record.value = (record.value * 100.0).round() / 100.0;
+            Ok(record)
+        });
+
+        processor
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_data_processing() {
+        let processor = DataProcessor::default();
+        
+        let mut metadata = HashMap::new();
+        metadata.insert("category".to_string(), "test".to_string());
+        
+        let record = DataRecord {
+            id: 1,
+            name: "  Test Record  ".to_string(),
+            value: 123.456,
+            metadata,
+        };
+
+        let result = processor.process_record(record);
+        assert!(result.is_ok());
+        
+        let processed = result.unwrap();
+        assert_eq!(processed.name, "Test Record");
+        assert_eq!(processed.value, 123.46);
+    }
+
+    #[test]
+    fn test_validation_failure() {
+        let processor = DataProcessor::default();
+        
+        let record = DataRecord {
+            id: 2,
+            name: "".to_string(),
+            value: 50.0,
+            metadata: HashMap::new(),
+        };
+
+        let result = processor.process_record(record);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_batch_processing() {
+        let processor = DataProcessor::default();
+        
+        let records = vec![
+            DataRecord {
+                id: 1,
+                name: "First".to_string(),
+                value: 10.123,
+                metadata: HashMap::new(),
+            },
+            DataRecord {
+                id: 2,
+                name: "Second".to_string(),
+                value: 20.456,
+                metadata: HashMap::new(),
+            },
+        ];
+
+        let result = processor.process_batch(records);
+        assert!(result.is_ok());
+        
+        let processed = result.unwrap();
+        assert_eq!(processed.len(), 2);
+        assert_eq!(processed[0].value, 10.12);
+        assert_eq!(processed[1].value, 20.46);
+    }
+}

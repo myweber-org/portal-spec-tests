@@ -255,3 +255,169 @@ mod tests {
         assert!(filtered.iter().all(|r| r.category == "A"));
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub timestamp: String,
+    pub value: f64,
+    pub category: String,
+}
+
+impl DataRecord {
+    pub fn new(id: u32, timestamp: String, value: f64, category: String) -> Self {
+        Self {
+            id,
+            timestamp,
+            value,
+            category,
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.id == 0 {
+            return Err("ID cannot be zero".to_string());
+        }
+        if self.value < 0.0 {
+            return Err("Value cannot be negative".to_string());
+        }
+        if self.category.is_empty() {
+            return Err("Category cannot be empty".to_string());
+        }
+        Ok(())
+    }
+}
+
+pub struct DataProcessor {
+    records: Vec<DataRecord>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        Self {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<usize, Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut count = 0;
+
+        for (line_num, line) in reader.lines().enumerate() {
+            let line = line?;
+            if line_num == 0 {
+                continue;
+            }
+
+            let parts: Vec<&str> = line.split(',').collect();
+            if parts.len() != 4 {
+                continue;
+            }
+
+            let id = parts[0].parse::<u32>()?;
+            let timestamp = parts[1].to_string();
+            let value = parts[2].parse::<f64>()?;
+            let category = parts[3].to_string();
+
+            let record = DataRecord::new(id, timestamp, value, category);
+            if let Err(e) = record.validate() {
+                eprintln!("Validation error on line {}: {}", line_num + 1, e);
+                continue;
+            }
+
+            self.records.push(record);
+            count += 1;
+        }
+
+        Ok(count)
+    }
+
+    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
+        self.records
+            .iter()
+            .filter(|record| record.category == category)
+            .collect()
+    }
+
+    pub fn calculate_average(&self) -> Option<f64> {
+        if self.records.is_empty() {
+            return None;
+        }
+
+        let sum: f64 = self.records.iter().map(|record| record.value).sum();
+        Some(sum / self.records.len() as f64)
+    }
+
+    pub fn get_records(&self) -> &[DataRecord] {
+        &self.records
+    }
+
+    pub fn clear(&mut self) {
+        self.records.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_record_validation() {
+        let valid_record = DataRecord::new(1, "2024-01-01".to_string(), 100.0, "A".to_string());
+        assert!(valid_record.validate().is_ok());
+
+        let invalid_record = DataRecord::new(0, "2024-01-01".to_string(), 100.0, "A".to_string());
+        assert!(invalid_record.validate().is_err());
+    }
+
+    #[test]
+    fn test_data_processor() {
+        let mut processor = DataProcessor::new();
+        assert_eq!(processor.get_records().len(), 0);
+        assert_eq!(processor.calculate_average(), None);
+
+        processor.records.push(DataRecord::new(
+            1,
+            "2024-01-01".to_string(),
+            10.0,
+            "test".to_string(),
+        ));
+        processor.records.push(DataRecord::new(
+            2,
+            "2024-01-02".to_string(),
+            20.0,
+            "test".to_string(),
+        ));
+
+        assert_eq!(processor.get_records().len(), 2);
+        assert_eq!(processor.calculate_average(), Some(15.0));
+        assert_eq!(processor.filter_by_category("test").len(), 2);
+        assert_eq!(processor.filter_by_category("other").len(), 0);
+    }
+
+    #[test]
+    fn test_csv_loading() -> Result<(), Box<dyn Error>> {
+        let mut file = NamedTempFile::new()?;
+        writeln!(file, "id,timestamp,value,category")?;
+        writeln!(file, "1,2024-01-01,100.0,A")?;
+        writeln!(file, "2,2024-01-02,200.0,B")?;
+        writeln!(file, "3,2024-01-03,300.0,A")?;
+
+        let mut processor = DataProcessor::new();
+        let count = processor.load_from_csv(file.path())?;
+        
+        assert_eq!(count, 3);
+        assert_eq!(processor.get_records().len(), 3);
+        assert_eq!(processor.filter_by_category("A").len(), 2);
+        assert_eq!(processor.filter_by_category("B").len(), 1);
+        
+        Ok(())
+    }
+}

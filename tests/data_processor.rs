@@ -3,61 +3,77 @@ use std::error::Error;
 use std::fmt;
 
 #[derive(Debug)]
-pub enum DataError {
-    InvalidFormat,
-    OutOfRange,
-    ConversionFailed,
+pub struct DataError {
+    message: String,
 }
 
 impl fmt::Display for DataError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            DataError::InvalidFormat => write!(f, "Data format is invalid"),
-            DataError::OutOfRange => write!(f, "Value is out of acceptable range"),
-            DataError::ConversionFailed => write!(f, "Failed to convert data type"),
-        }
+        write!(f, "Data processing error: {}", self.message)
     }
 }
 
 impl Error for DataError {}
 
+impl DataError {
+    pub fn new(msg: &str) -> Self {
+        DataError {
+            message: msg.to_string(),
+        }
+    }
+}
+
 pub struct DataProcessor {
-    threshold: f64,
-    scale_factor: f64,
+    validation_rules: Vec<Box<dyn Fn(&str) -> Result<(), DataError>>>,
 }
 
 impl DataProcessor {
-    pub fn new(threshold: f64, scale_factor: f64) -> Result<Self, DataError> {
-        if threshold <= 0.0 {
-            return Err(DataError::OutOfRange);
+    pub fn new() -> Self {
+        DataProcessor {
+            validation_rules: Vec::new(),
         }
-        if scale_factor <= 0.0 || scale_factor > 100.0 {
-            return Err(DataError::OutOfRange);
-        }
-        Ok(Self {
-            threshold,
-            scale_factor,
-        })
     }
 
-    pub fn process_value(&self, raw_value: &str) -> Result<f64, DataError> {
-        let parsed = raw_value
-            .parse::<f64>()
-            .map_err(|_| DataError::ConversionFailed)?;
-
-        if parsed.abs() > self.threshold {
-            return Err(DataError::OutOfRange);
-        }
-
-        let processed = parsed * self.scale_factor;
-        Ok(processed)
+    pub fn add_validation_rule<F>(&mut self, rule: F)
+    where
+        F: Fn(&str) -> Result<(), DataError> + 'static,
+    {
+        self.validation_rules.push(Box::new(rule));
     }
 
-    pub fn batch_process(&self, values: &[&str]) -> Vec<Result<f64, DataError>> {
-        values
-            .iter()
-            .map(|&v| self.process_value(v))
-            .collect()
+    pub fn process(&self, input: &str) -> Result<String, DataError> {
+        for rule in &self.validation_rules {
+            rule(input)?;
+        }
+
+        let transformed = Self::transform_data(input);
+        Ok(transformed)
+    }
+
+    fn transform_data(input: &str) -> String {
+        input
+            .chars()
+            .filter(|c| c.is_alphanumeric() || c.is_whitespace())
+            .collect::<String>()
+            .to_uppercase()
+    }
+}
+
+pub fn validate_length(input: &str) -> Result<(), DataError> {
+    if input.len() < 5 {
+        Err(DataError::new("Input must be at least 5 characters"))
+    } else if input.len() > 100 {
+        Err(DataError::new("Input must not exceed 100 characters"))
+    } else {
+        Ok(())
+    }
+}
+
+pub fn validate_alphanumeric(input: &str) -> Result<(), DataError> {
+    if input.chars().all(|c| c.is_alphanumeric() || c.is_whitespace()) {
+        Ok(())
+    } else {
+        Err(DataError::new("Input must contain only alphanumeric characters and spaces"))
     }
 }
 
@@ -66,21 +82,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_valid_processing() {
-        let processor = DataProcessor::new(100.0, 2.0).unwrap();
-        let result = processor.process_value("25.5").unwrap();
-        assert_eq!(result, 51.0);
+    fn test_data_processor() {
+        let mut processor = DataProcessor::new();
+        processor.add_validation_rule(validate_length);
+        processor.add_validation_rule(validate_alphanumeric);
+
+        let result = processor.process("Hello World 123");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "HELLO WORLD 123");
+
+        let result = processor.process("Hi");
+        assert!(result.is_err());
+
+        let result = processor.process("Invalid@Symbol");
+        assert!(result.is_err());
     }
 
     #[test]
-    fn test_invalid_input() {
-        let processor = DataProcessor::new(100.0, 2.0).unwrap();
-        assert!(processor.process_value("invalid").is_err());
-    }
-
-    #[test]
-    fn test_out_of_range() {
-        let processor = DataProcessor::new(50.0, 2.0).unwrap();
-        assert!(processor.process_value("60.0").is_err());
+    fn test_validation_functions() {
+        assert!(validate_length("ValidInput").is_ok());
+        assert!(validate_length("Short").is_err());
+        
+        assert!(validate_alphanumeric("Alpha123").is_ok());
+        assert!(validate_alphanumeric("Invalid!").is_err());
     }
 }

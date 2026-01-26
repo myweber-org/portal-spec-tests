@@ -1,93 +1,57 @@
 
-use std::fs;
-use std::io::{self, Read, Write};
-use std::path::Path;
+use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce,
+};
+use std::error::Error;
 
-const DEFAULT_KEY: u8 = 0xAA;
-
-fn xor_cipher(data: &mut [u8], key: u8) {
-    for byte in data.iter_mut() {
-        *byte ^= key;
-    }
+pub fn encrypt_file(data: &[u8], key: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+    let nonce = Nonce::generate(&mut OsRng);
+    
+    let ciphertext = cipher
+        .encrypt(&nonce, data)
+        .map_err(|e| format!("Encryption failed: {}", e))?;
+    
+    let mut result = Vec::with_capacity(nonce.len() + ciphertext.len());
+    result.extend_from_slice(nonce.as_slice());
+    result.extend_from_slice(&ciphertext);
+    
+    Ok(result)
 }
 
-fn process_file(input_path: &Path, output_path: &Path, key: u8) -> io::Result<()> {
-    let mut file = fs::File::open(input_path)?;
-    let mut buffer = Vec::new();
-    file.read_to_end(&mut buffer)?;
-    
-    xor_cipher(&mut buffer, key);
-    
-    let mut output_file = fs::File::create(output_path)?;
-    output_file.write_all(&buffer)?;
-    
-    Ok(())
-}
-
-fn main() -> io::Result<()> {
-    let args: Vec<String> = std::env::args().collect();
-    
-    if args.len() != 4 {
-        eprintln!("Usage: {} <input> <output> <key>", args[0]);
-        eprintln!("Example: {} secret.txt encrypted.txt 170", args[0]);
-        std::process::exit(1);
+pub fn decrypt_file(encrypted_data: &[u8], key: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+    if encrypted_data.len() < 12 {
+        return Err("Invalid encrypted data length".into());
     }
     
-    let input_path = Path::new(&args[1]);
-    let output_path = Path::new(&args[2]);
-    let key = args[3].parse::<u8>().unwrap_or(DEFAULT_KEY);
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+    let (nonce_slice, ciphertext) = encrypted_data.split_at(12);
+    let nonce = Nonce::from_slice(nonce_slice);
     
-    if !input_path.exists() {
-        eprintln!("Error: Input file does not exist");
-        std::process::exit(1);
-    }
+    let plaintext = cipher
+        .decrypt(nonce, ciphertext)
+        .map_err(|e| format!("Decryption failed: {}", e))?;
     
-    match process_file(input_path, output_path, key) {
-        Ok(_) => println!("File processed successfully"),
-        Err(e) => eprintln!("Error: {}", e),
-    }
-    
-    Ok(())
+    Ok(plaintext)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
-    
+    use rand::RngCore;
+
     #[test]
-    fn test_xor_cipher() {
-        let mut data = vec![0x00, 0xFF, 0x55, 0xAA];
-        let original = data.clone();
-        let key = 0xAA;
+    fn test_encryption_roundtrip() {
+        let mut key = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut key);
         
-        xor_cipher(&mut data, key);
-        assert_ne!(data, original);
+        let original_data = b"Secret file content that needs protection";
         
-        xor_cipher(&mut data, key);
-        assert_eq!(data, original);
-    }
-    
-    #[test]
-    fn test_file_processing() -> io::Result<()> {
-        let test_data = b"Hello, World!";
-        let input_path = Path::new("test_input.txt");
-        let output_path = Path::new("test_output.txt");
+        let encrypted = encrypt_file(original_data, &key).unwrap();
+        let decrypted = decrypt_file(&encrypted, &key).unwrap();
         
-        fs::write(input_path, test_data)?;
-        
-        process_file(input_path, output_path, DEFAULT_KEY)?;
-        
-        let encrypted = fs::read(output_path)?;
-        assert_ne!(encrypted, test_data);
-        
-        let mut decrypted = encrypted.clone();
-        xor_cipher(&mut decrypted, DEFAULT_KEY);
-        assert_eq!(decrypted, test_data);
-        
-        fs::remove_file(input_path)?;
-        fs::remove_file(output_path)?;
-        
-        Ok(())
+        assert_eq!(original_data.to_vec(), decrypted);
+        assert_ne!(original_data, encrypted.as_slice());
     }
 }

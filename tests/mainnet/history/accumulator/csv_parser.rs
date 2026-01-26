@@ -31,40 +31,48 @@ impl CsvParser {
         let file = File::open(path)?;
         let reader = BufReader::new(file);
         let mut records = Vec::new();
-        let mut lines = reader.lines();
 
-        if self.has_header {
-            let _ = lines.next();
-        }
+        for (line_num, line) in reader.lines().enumerate() {
+            let line = line?;
+            
+            if line_num == 0 && self.has_header {
+                continue;
+            }
 
-        for line_result in lines {
-            let line = line_result?;
-            let record: Vec<String> = line
+            if line.trim().is_empty() {
+                continue;
+            }
+
+            let fields: Vec<String> = line
                 .split(self.delimiter)
                 .map(|s| s.trim().to_string())
                 .collect();
             
-            if !record.is_empty() {
-                records.push(record);
-            }
+            records.push(fields);
         }
 
         Ok(records)
     }
 
     pub fn parse_string(&self, content: &str) -> Vec<Vec<String>> {
-        let lines: Vec<&str> = content.lines().collect();
-        let start_index = if self.has_header { 1 } else { 0 };
-        
-        lines[start_index..]
-            .iter()
-            .map(|line| {
+        content
+            .lines()
+            .enumerate()
+            .filter(|(line_num, line)| {
+                !(line.trim().is_empty() || (*line_num == 0 && self.has_header))
+            })
+            .map(|(_, line)| {
                 line.split(self.delimiter)
                     .map(|s| s.trim().to_string())
                     .collect()
             })
-            .filter(|record: &Vec<String>| !record.is_empty())
             .collect()
+    }
+}
+
+impl Default for CsvParser {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

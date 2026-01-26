@@ -281,4 +281,279 @@ mod tests {
         let config = Config::new();
         assert_eq!(config.get_with_default("MISSING", "default_value"), "default_value");
     }
+}use std::collections::HashMap;
+use std::fs;
+use toml::Value;
+
+#[derive(Debug, Clone)]
+pub struct Config {
+    pub database: DatabaseConfig,
+    pub server: ServerConfig,
+    pub features: FeatureFlags,
+}
+
+#[derive(Debug, Clone)]
+pub struct DatabaseConfig {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: String,
+    pub database_name: String,
+    pub pool_size: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct ServerConfig {
+    pub host: String,
+    pub port: u16,
+    pub max_connections: u32,
+    pub timeout_seconds: u64,
+    pub enable_compression: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct FeatureFlags {
+    pub enable_logging: bool,
+    pub enable_metrics: bool,
+    pub cache_enabled: bool,
+    pub cache_ttl: u64,
+}
+
+impl Config {
+    pub fn from_file(path: &str) -> Result<Self, String> {
+        let content = fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read config file: {}", e))?;
+        
+        let parsed: Value = content.parse()
+            .map_err(|e| format!("Failed to parse TOML: {}", e))?;
+        
+        Self::from_toml_value(&parsed)
+    }
+    
+    fn from_toml_value(value: &Value) -> Result<Self, String> {
+        let database = Self::parse_database_config(value)?;
+        let server = Self::parse_server_config(value)?;
+        let features = Self::parse_feature_flags(value)?;
+        
+        Ok(Config {
+            database,
+            server,
+            features,
+        })
+    }
+    
+    fn parse_database_config(value: &Value) -> Result<DatabaseConfig, String> {
+        let db_table = value.get("database")
+            .ok_or("Missing 'database' section")?
+            .as_table()
+            .ok_or("'database' section must be a table")?;
+        
+        Ok(DatabaseConfig {
+            host: Self::get_string(db_table, "host")?,
+            port: Self::get_u16(db_table, "port")?,
+            username: Self::get_string(db_table, "username")?,
+            password: Self::get_string(db_table, "password")?,
+            database_name: Self::get_string(db_table, "database_name")?,
+            pool_size: Self::get_u32(db_table, "pool_size")?,
+        })
+    }
+    
+    fn parse_server_config(value: &Value) -> Result<ServerConfig, String> {
+        let server_table = value.get("server")
+            .ok_or("Missing 'server' section")?
+            .as_table()
+            .ok_or("'server' section must be a table")?;
+        
+        Ok(ServerConfig {
+            host: Self::get_string(server_table, "host")?,
+            port: Self::get_u16(server_table, "port")?,
+            max_connections: Self::get_u32(server_table, "max_connections")?,
+            timeout_seconds: Self::get_u64(server_table, "timeout_seconds")?,
+            enable_compression: Self::get_bool(server_table, "enable_compression")?,
+        })
+    }
+    
+    fn parse_feature_flags(value: &Value) -> Result<FeatureFlags, String> {
+        let features_table = value.get("features")
+            .ok_or("Missing 'features' section")?
+            .as_table()
+            .ok_or("'features' section must be a table")?;
+        
+        Ok(FeatureFlags {
+            enable_logging: Self::get_bool(features_table, "enable_logging")?,
+            enable_metrics: Self::get_bool(features_table, "enable_metrics")?,
+            cache_enabled: Self::get_bool(features_table, "cache_enabled")?,
+            cache_ttl: Self::get_u64(features_table, "cache_ttl")?,
+        })
+    }
+    
+    fn get_string(table: &toml::map::Map<String, Value>, key: &str) -> Result<String, String> {
+        table.get(key)
+            .ok_or(format!("Missing '{}'", key))?
+            .as_str()
+            .map(|s| s.to_string())
+            .ok_or(format!("'{}' must be a string", key))
+    }
+    
+    fn get_u16(table: &toml::map::Map<String, Value>, key: &str) -> Result<u16, String> {
+        table.get(key)
+            .ok_or(format!("Missing '{}'", key))?
+            .as_integer()
+            .and_then(|i| i.try_into().ok())
+            .ok_or(format!("'{}' must be a valid u16", key))
+    }
+    
+    fn get_u32(table: &toml::map::Map<String, Value>, key: &str) -> Result<u32, String> {
+        table.get(key)
+            .ok_or(format!("Missing '{}'", key))?
+            .as_integer()
+            .and_then(|i| i.try_into().ok())
+            .ok_or(format!("'{}' must be a valid u32", key))
+    }
+    
+    fn get_u64(table: &toml::map::Map<String, Value>, key: &str) -> Result<u64, String> {
+        table.get(key)
+            .ok_or(format!("Missing '{}'", key))?
+            .as_integer()
+            .and_then(|i| i.try_into().ok())
+            .ok_or(format!("'{}' must be a valid u64", key))
+    }
+    
+    fn get_bool(table: &toml::map::Map<String, Value>, key: &str) -> Result<bool, String> {
+        table.get(key)
+            .ok_or(format!("Missing '{}'", key))?
+            .as_bool()
+            .ok_or(format!("'{}' must be a boolean", key))
+    }
+    
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+        
+        if self.database.port == 0 {
+            errors.push("Database port cannot be 0".to_string());
+        }
+        
+        if self.server.port == 0 {
+            errors.push("Server port cannot be 0".to_string());
+        }
+        
+        if self.database.pool_size == 0 {
+            errors.push("Database pool size must be greater than 0".to_string());
+        }
+        
+        if self.server.max_connections == 0 {
+            errors.push("Server max connections must be greater than 0".to_string());
+        }
+        
+        if self.features.cache_enabled && self.features.cache_ttl == 0 {
+            errors.push("Cache TTL must be greater than 0 when cache is enabled".to_string());
+        }
+        
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+    
+    pub fn to_hashmap(&self) -> HashMap<String, String> {
+        let mut map = HashMap::new();
+        
+        map.insert("database.host".to_string(), self.database.host.clone());
+        map.insert("database.port".to_string(), self.database.port.to_string());
+        map.insert("database.username".to_string(), self.database.username.clone());
+        map.insert("database.database_name".to_string(), self.database.database_name.clone());
+        map.insert("database.pool_size".to_string(), self.database.pool_size.to_string());
+        
+        map.insert("server.host".to_string(), self.server.host.clone());
+        map.insert("server.port".to_string(), self.server.port.to_string());
+        map.insert("server.max_connections".to_string(), self.server.max_connections.to_string());
+        map.insert("server.timeout_seconds".to_string(), self.server.timeout_seconds.to_string());
+        map.insert("server.enable_compression".to_string(), self.server.enable_compression.to_string());
+        
+        map.insert("features.enable_logging".to_string(), self.features.enable_logging.to_string());
+        map.insert("features.enable_metrics".to_string(), self.features.enable_metrics.to_string());
+        map.insert("features.cache_enabled".to_string(), self.features.cache_enabled.to_string());
+        map.insert("features.cache_ttl".to_string(), self.features.cache_ttl.to_string());
+        
+        map
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_config_parsing() {
+        let toml_content = r#"
+            [database]
+            host = "localhost"
+            port = 5432
+            username = "admin"
+            password = "secret"
+            database_name = "app_db"
+            pool_size = 10
+            
+            [server]
+            host = "0.0.0.0"
+            port = 8080
+            max_connections = 100
+            timeout_seconds = 30
+            enable_compression = true
+            
+            [features]
+            enable_logging = true
+            enable_metrics = false
+            cache_enabled = true
+            cache_ttl = 300
+        "#;
+        
+        let parsed: Value = toml_content.parse().unwrap();
+        let config = Config::from_toml_value(&parsed).unwrap();
+        
+        assert_eq!(config.database.host, "localhost");
+        assert_eq!(config.database.port, 5432);
+        assert_eq!(config.server.port, 8080);
+        assert_eq!(config.features.cache_ttl, 300);
+        
+        let validation_result = config.validate();
+        assert!(validation_result.is_ok());
+    }
+    
+    #[test]
+    fn test_config_validation_failure() {
+        let toml_content = r#"
+            [database]
+            host = "localhost"
+            port = 0
+            username = "admin"
+            password = "secret"
+            database_name = "app_db"
+            pool_size = 0
+            
+            [server]
+            host = "0.0.0.0"
+            port = 8080
+            max_connections = 0
+            timeout_seconds = 30
+            enable_compression = true
+            
+            [features]
+            enable_logging = true
+            enable_metrics = false
+            cache_enabled = true
+            cache_ttl = 0
+        "#;
+        
+        let parsed: Value = toml_content.parse().unwrap();
+        let config = Config::from_toml_value(&parsed).unwrap();
+        
+        let validation_result = config.validate();
+        assert!(validation_result.is_err());
+        
+        if let Err(errors) = validation_result {
+            assert!(errors.len() >= 4);
+        }
+    }
 }

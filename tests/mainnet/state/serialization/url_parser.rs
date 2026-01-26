@@ -63,4 +63,73 @@ mod tests {
         assert!(valid_parser.is_valid_url());
         assert!(!invalid_parser.is_valid_url());
     }
+}use std::collections::HashMap;
+
+#[derive(Debug, PartialEq)]
+pub enum ParseError {
+    InvalidFormat,
+    EmptyQuery,
+}
+
+pub fn parse_query_string(query: &str) -> Result<HashMap<String, String>, ParseError> {
+    if query.is_empty() {
+        return Err(ParseError::EmptyQuery);
+    }
+
+    let mut params = HashMap::new();
+    
+    for pair in query.split('&') {
+        let mut parts = pair.splitn(2, '=');
+        
+        match (parts.next(), parts.next()) {
+            (Some(key), Some(value)) => {
+                if key.is_empty() {
+                    return Err(ParseError::InvalidFormat);
+                }
+                params.insert(key.to_string(), value.to_string());
+            }
+            _ => return Err(ParseError::InvalidFormat),
+        }
+    }
+
+    Ok(params)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_valid_query() {
+        let query = "name=john&age=25&city=new+york";
+        let result = parse_query_string(query).unwrap();
+        
+        let mut expected = HashMap::new();
+        expected.insert("name".to_string(), "john".to_string());
+        expected.insert("age".to_string(), "25".to_string());
+        expected.insert("city".to_string(), "new+york".to_string());
+        
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_parse_empty_query() {
+        let query = "";
+        let result = parse_query_string(query);
+        assert_eq!(result, Err(ParseError::EmptyQuery));
+    }
+
+    #[test]
+    fn test_parse_invalid_format() {
+        let query = "name=john&age";
+        let result = parse_query_string(query);
+        assert_eq!(result, Err(ParseError::InvalidFormat));
+    }
+
+    #[test]
+    fn test_parse_with_empty_key() {
+        let query = "=value&key=test";
+        let result = parse_query_string(query);
+        assert_eq!(result, Err(ParseError::InvalidFormat));
+    }
 }

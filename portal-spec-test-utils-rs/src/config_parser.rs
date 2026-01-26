@@ -197,4 +197,112 @@ impl AppConfig {
 pub fn create_default_config<P: AsRef<Path>>(path: P) -> Result<(), ConfigError> {
     let config = AppConfig::default();
     config.save_to_file(path)
+}use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
+
+#[derive(Debug, Clone)]
+pub struct Config {
+    pub settings: HashMap<String, String>,
+    pub defaults: HashMap<String, String>,
+}
+
+impl Config {
+    pub fn new() -> Self {
+        Config {
+            settings: HashMap::new(),
+            defaults: HashMap::new(),
+        }
+    }
+
+    pub fn load_from_file<P: AsRef<Path>>(&mut self, path: P) -> Result<(), String> {
+        let content = fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read config file: {}", e))?;
+
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+
+            let parts: Vec<&str> = trimmed.splitn(2, '=').collect();
+            if parts.len() == 2 {
+                let key = parts[0].trim().to_string();
+                let value = parts[1].trim().to_string();
+                self.settings.insert(key, value);
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn set_default(&mut self, key: &str, value: &str) {
+        self.defaults.insert(key.to_string(), value.to_string());
+    }
+
+    pub fn get(&self, key: &str) -> Option<&String> {
+        self.settings
+            .get(key)
+            .or_else(|| self.defaults.get(key))
+    }
+
+    pub fn get_or_default(&self, key: &str, default: &str) -> String {
+        self.get(key)
+            .map(|s| s.as_str())
+            .unwrap_or(default)
+            .to_string()
+    }
+
+    pub fn validate_required(&self, keys: &[&str]) -> Result<(), Vec<String>> {
+        let mut missing = Vec::new();
+        
+        for key in keys {
+            if !self.settings.contains_key(*key) && !self.defaults.contains_key(*key) {
+                missing.push(format!("Required key '{}' is missing", key));
+            }
+        }
+
+        if missing.is_empty() {
+            Ok(())
+        } else {
+            Err(missing)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_config_loading() {
+        let mut config = Config::new();
+        config.set_default("timeout", "30");
+        
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "host=localhost\nport=8080\n# comment\n\n").unwrap();
+        
+        assert!(config.load_from_file(temp_file.path()).is_ok());
+        assert_eq!(config.get("host"), Some(&"localhost".to_string()));
+        assert_eq!(config.get("port"), Some(&"8080".to_string()));
+        assert_eq!(config.get("timeout"), Some(&"30".to_string()));
+    }
+
+    #[test]
+    fn test_validation() {
+        let mut config = Config::new();
+        config.set_default("timeout", "30");
+        
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "host=localhost").unwrap();
+        
+        config.load_from_file(temp_file.path()).unwrap();
+        
+        let result = config.validate_required(&["host", "port", "timeout"]);
+        assert!(result.is_err());
+        let errors = result.unwrap_err();
+        assert!(errors.iter().any(|e| e.contains("port")));
+    }
 }

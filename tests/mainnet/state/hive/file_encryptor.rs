@@ -1,45 +1,75 @@
+
 use std::fs;
 use std::io::{self, Read, Write};
+use std::path::Path;
 
-const DEFAULT_KEY: u8 = 0x55;
+const DEFAULT_KEY: u8 = 0xAA;
 
-fn xor_cipher(data: &mut [u8], key: u8) {
-    for byte in data.iter_mut() {
-        *byte ^= key;
-    }
-}
-
-fn process_file(input_path: &str, output_path: &str, key: u8) -> io::Result<()> {
-    let mut file = fs::File::open(input_path)?;
-    let mut buffer = Vec::new();
-    file.read_to_end(&mut buffer)?;
+pub fn encrypt_file(input_path: &str, output_path: &str, key: Option<u8>) -> io::Result<()> {
+    let encryption_key = key.unwrap_or(DEFAULT_KEY);
+    let data = fs::read(input_path)?;
     
-    xor_cipher(&mut buffer, key);
+    let encrypted_data: Vec<u8> = data.iter()
+        .map(|byte| byte ^ encryption_key)
+        .collect();
     
-    let mut output_file = fs::File::create(output_path)?;
-    output_file.write_all(&buffer)?;
-    
+    fs::write(output_path, encrypted_data)?;
     Ok(())
 }
 
-fn main() -> io::Result<()> {
-    let args: Vec<String> = std::env::args().collect();
+pub fn decrypt_file(input_path: &str, output_path: &str, key: Option<u8>) -> io::Result<()> {
+    encrypt_file(input_path, output_path, key)
+}
+
+pub fn process_stream<R: Read, W: Write>(mut reader: R, mut writer: W, key: u8) -> io::Result<()> {
+    let mut buffer = [0; 1024];
     
-    if args.len() < 3 {
-        eprintln!("Usage: {} <input_file> <output_file> [key]", args[0]);
-        std::process::exit(1);
+    loop {
+        let bytes_read = reader.read(&mut buffer)?;
+        if bytes_read == 0 {
+            break;
+        }
+        
+        for byte in buffer.iter_mut().take(bytes_read) {
+            *byte ^= key;
+        }
+        
+        writer.write_all(&buffer[..bytes_read])?;
     }
     
-    let input_path = &args[1];
-    let output_path = &args[2];
-    let key = if args.len() > 3 {
-        args[3].parse().unwrap_or(DEFAULT_KEY)
-    } else {
-        DEFAULT_KEY
-    };
-    
-    process_file(input_path, output_path, key)?;
-    println!("File processed successfully with key: 0x{:02x}", key);
-    
+    writer.flush()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_encryption_decryption() {
+        let original_data = b"Hello, World!";
+        let key = 0x55;
+        
+        let input_file = NamedTempFile::new().unwrap();
+        let encrypted_file = NamedTempFile::new().unwrap();
+        let decrypted_file = NamedTempFile::new().unwrap();
+        
+        fs::write(input_file.path(), original_data).unwrap();
+        
+        encrypt_file(
+            input_file.path().to_str().unwrap(),
+            encrypted_file.path().to_str().unwrap(),
+            Some(key)
+        ).unwrap();
+        
+        decrypt_file(
+            encrypted_file.path().to_str().unwrap(),
+            decrypted_file.path().to_str().unwrap(),
+            Some(key)
+        ).unwrap();
+        
+        let decrypted_data = fs::read(decrypted_file.path()).unwrap();
+        assert_eq!(original_data.to_vec(), decrypted_data);
+    }
 }

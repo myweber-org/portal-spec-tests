@@ -80,4 +80,103 @@ mod tests {
         assert_eq!(stats.get("WARN"), Some(&1));
         assert_eq!(stats.get("ERROR"), Some(&1));
     }
+}use std::collections::HashMap;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use regex::Regex;
+
+#[derive(Debug)]
+pub struct LogEntry {
+    timestamp: String,
+    level: String,
+    message: String,
+    metadata: HashMap<String, String>,
+}
+
+pub struct LogAnalyzer {
+    entries: Vec<LogEntry>,
+    error_count: usize,
+    warning_count: usize,
+}
+
+impl LogAnalyzer {
+    pub fn new() -> Self {
+        LogAnalyzer {
+            entries: Vec::new(),
+            error_count: 0,
+            warning_count: 0,
+        }
+    }
+
+    pub fn parse_file(&mut self, filepath: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let file = File::open(filepath)?;
+        let reader = BufReader::new(file);
+        let log_pattern = Regex::new(r"\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\] (\w+): (.+)")?;
+
+        for line in reader.lines() {
+            let line = line?;
+            if let Some(captures) = log_pattern.captures(&line) {
+                let timestamp = captures[1].to_string();
+                let level = captures[2].to_string();
+                let message = captures[3].to_string();
+
+                match level.as_str() {
+                    "ERROR" => self.error_count += 1,
+                    "WARNING" => self.warning_count += 1,
+                    _ => {}
+                }
+
+                let entry = LogEntry {
+                    timestamp,
+                    level,
+                    message,
+                    metadata: HashMap::new(),
+                };
+                self.entries.push(entry);
+            }
+        }
+        Ok(())
+    }
+
+    pub fn generate_report(&self) -> String {
+        let total_entries = self.entries.len();
+        let mut report = String::new();
+        report.push_str(&format!("Total log entries: {}\n", total_entries));
+        report.push_str(&format!("Error count: {}\n", self.error_count));
+        report.push_str(&format!("Warning count: {}\n", self.warning_count));
+        
+        if total_entries > 0 {
+            let error_percentage = (self.error_count as f64 / total_entries as f64) * 100.0;
+            report.push_str(&format!("Error percentage: {:.2}%\n", error_percentage));
+        }
+        
+        report
+    }
+
+    pub fn filter_by_level(&self, level: &str) -> Vec<&LogEntry> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.level == level)
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_analyzer_initialization() {
+        let analyzer = LogAnalyzer::new();
+        assert_eq!(analyzer.entries.len(), 0);
+        assert_eq!(analyzer.error_count, 0);
+        assert_eq!(analyzer.warning_count, 0);
+    }
+
+    #[test]
+    fn test_report_generation() {
+        let analyzer = LogAnalyzer::new();
+        let report = analyzer.generate_report();
+        assert!(report.contains("Total log entries: 0"));
+    }
 }

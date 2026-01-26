@@ -127,3 +127,108 @@ mod tests {
         );
     }
 }
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug)]
+pub enum ParseError {
+    MalformedUrl,
+    InvalidEncoding,
+}
+
+impl fmt::Display for ParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ParseError::MalformedUrl => write!(f, "URL format is invalid"),
+            ParseError::InvalidEncoding => write!(f, "URL contains invalid percent encoding"),
+        }
+    }
+}
+
+impl Error for ParseError {}
+
+pub fn parse_query_params(url: &str) -> Result<HashMap<String, String>, ParseError> {
+    let query_start = url.find('?').ok_or(ParseError::MalformedUrl)?;
+    let query_str = &url[query_start + 1..];
+    
+    let mut params = HashMap::new();
+    
+    for pair in query_str.split('&') {
+        if pair.is_empty() {
+            continue;
+        }
+        
+        let mut parts = pair.splitn(2, '=');
+        let key = parts.next().unwrap();
+        let value = parts.next().unwrap_or("");
+        
+        let decoded_key = percent_decode(key).map_err(|_| ParseError::InvalidEncoding)?;
+        let decoded_value = percent_decode(value).map_err(|_| ParseError::InvalidEncoding)?;
+        
+        params.insert(decoded_key, decoded_value);
+    }
+    
+    Ok(params)
+}
+
+fn percent_decode(input: &str) -> Result<String, ()> {
+    let mut decoded = String::new();
+    let mut chars = input.chars().peekable();
+    
+    while let Some(c) = chars.next() {
+        if c == '%' {
+            let hex1 = chars.next().ok_or(())?.to_digit(16).ok_or(())?;
+            let hex2 = chars.next().ok_or(())?.to_digit(16).ok_or(())?;
+            let byte = (hex1 << 4 | hex2) as u8;
+            decoded.push(byte as char);
+        } else if c == '+' {
+            decoded.push(' ');
+        } else {
+            decoded.push(c);
+        }
+    }
+    
+    Ok(decoded)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_basic_parsing() {
+        let url = "https://example.com/search?q=rust&lang=en&page=1";
+        let params = parse_query_params(url).unwrap();
+        
+        assert_eq!(params.get("q"), Some(&"rust".to_string()));
+        assert_eq!(params.get("lang"), Some(&"en".to_string()));
+        assert_eq!(params.get("page"), Some(&"1".to_string()));
+    }
+    
+    #[test]
+    fn test_encoded_values() {
+        let url = "https://example.com/?name=John%20Doe&city=New%20York";
+        let params = parse_query_params(url).unwrap();
+        
+        assert_eq!(params.get("name"), Some(&"John Doe".to_string()));
+        assert_eq!(params.get("city"), Some(&"New York".to_string()));
+    }
+    
+    #[test]
+    fn test_empty_value() {
+        let url = "https://example.com/?flag&empty=";
+        let params = parse_query_params(url).unwrap();
+        
+        assert_eq!(params.get("flag"), Some(&"".to_string()));
+        assert_eq!(params.get("empty"), Some(&"".to_string()));
+    }
+    
+    #[test]
+    fn test_invalid_url() {
+        let url = "https://example.com/search";
+        let result = parse_query_params(url);
+        
+        assert!(matches!(result, Err(ParseError::MalformedUrl)));
+    }
+}

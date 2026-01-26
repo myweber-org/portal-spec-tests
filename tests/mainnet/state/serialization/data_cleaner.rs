@@ -1,44 +1,81 @@
-use csv::{Reader, Writer};
-use serde::{Deserialize, Serialize};
-use std::error::Error;
-use std::fs::File;
-use std::path::Path;
+use std::collections::HashSet;
+use std::hash::Hash;
 
-#[derive(Debug, Deserialize, Serialize)]
-struct Record {
-    id: u32,
-    name: String,
-    value: f64,
-    category: String,
+pub struct DataCleaner<T> {
+    data: Vec<T>,
 }
 
-fn clean_csv_data(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
-    let input_file = File::open(Path::new(input_path))?;
-    let mut reader = Reader::from_reader(input_file);
-    
-    let output_file = File::create(Path::new(output_path))?;
-    let mut writer = Writer::from_writer(output_file);
-    
-    for result in reader.deserialize() {
-        let mut record: Record = result?;
-        
-        record.name = record.name.trim().to_string();
-        record.category = record.category.to_uppercase();
-        
-        if record.value < 0.0 {
-            record.value = 0.0;
-        }
-        
-        writer.serialize(&record)?;
+impl<T> DataCleaner<T>
+where
+    T: Clone + Eq + Hash,
+{
+    pub fn new(data: Vec<T>) -> Self {
+        DataCleaner { data }
     }
-    
-    writer.flush()?;
-    Ok(())
+
+    pub fn deduplicate(&mut self) -> &mut Self {
+        let mut seen = HashSet::new();
+        self.data.retain(|item| seen.insert(item.clone()));
+        self
+    }
+
+    pub fn normalize<F>(&mut self, normalizer: F) -> &mut Self
+    where
+        F: Fn(&T) -> T,
+    {
+        for item in &mut self.data {
+            *item = normalizer(item);
+        }
+        self
+    }
+
+    pub fn filter<F>(&mut self, predicate: F) -> &mut Self
+    where
+        F: Fn(&T) -> bool,
+    {
+        self.data.retain(|item| predicate(item));
+        self
+    }
+
+    pub fn get_data(&self) -> Vec<T> {
+        self.data.clone()
+    }
+
+    pub fn count(&self) -> usize {
+        self.data.len()
+    }
 }
 
-fn main() {
-    match clean_csv_data("input.csv", "cleaned_output.csv") {
-        Ok(()) => println!("Data cleaning completed successfully"),
-        Err(e) => eprintln!("Error during data cleaning: {}", e),
+pub fn process_strings(strings: Vec<String>) -> Vec<String> {
+    let mut cleaner = DataCleaner::new(strings);
+    cleaner
+        .deduplicate()
+        .normalize(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty())
+        .get_data()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_deduplication() {
+        let data = vec![1, 2, 2, 3, 3, 3];
+        let mut cleaner = DataCleaner::new(data);
+        cleaner.deduplicate();
+        assert_eq!(cleaner.count(), 3);
+    }
+
+    #[test]
+    fn test_string_processing() {
+        let strings = vec![
+            "  HELLO  ".to_string(),
+            "hello".to_string(),
+            "  ".to_string(),
+            "WORLD".to_string(),
+        ];
+        let result = process_strings(strings);
+        assert_eq!(result, vec!["hello", "world"]);
     }
 }

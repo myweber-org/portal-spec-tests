@@ -11,7 +11,8 @@ pub struct LogParser {
 impl LogParser {
     pub fn new() -> Self {
         let pattern = r"ERROR|FATAL|CRITICAL|FAILED";
-        let error_pattern = Regex::new(pattern).unwrap();
+        let error_pattern = Regex::new(pattern).expect("Invalid regex pattern");
+        
         LogParser { error_pattern }
     }
 
@@ -20,42 +21,27 @@ impl LogParser {
         let reader = BufReader::new(file);
         let mut errors = Vec::new();
 
-        for line in reader.lines() {
+        for (line_num, line) in reader.lines().enumerate() {
             let line = line?;
             if self.error_pattern.is_match(&line) {
-                errors.push(line);
+                errors.push(format!("Line {}: {}", line_num + 1, line));
             }
         }
 
         Ok(errors)
     }
 
-    pub fn extract_timestamps(&self, log_lines: &[String]) -> Vec<String> {
-        let timestamp_pattern = Regex::new(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}").unwrap();
-        let mut timestamps = Vec::new();
-
-        for line in log_lines {
-            if let Some(captures) = timestamp_pattern.find(line) {
-                timestamps.push(captures.as_str().to_string());
+    pub fn find_errors(&self, log_content: &str) -> Vec<String> {
+        let mut errors = Vec::new();
+        
+        for (line_num, line) in log_content.lines().enumerate() {
+            if self.error_pattern.is_match(line) {
+                errors.push(format!("Line {}: {}", line_num + 1, line));
             }
         }
 
-        timestamps
+        errors
     }
-}
-
-pub fn analyze_error_frequency(errors: &[String]) -> std::collections::HashMap<String, usize> {
-    let mut frequency = std::collections::HashMap::new();
-    let error_type_pattern = Regex::new(r"ERROR: (\w+)").unwrap();
-
-    for error in errors {
-        if let Some(captures) = error_type_pattern.captures(error) {
-            let error_type = captures.get(1).unwrap().as_str().to_string();
-            *frequency.entry(error_type).or_insert(0) += 1;
-        }
-    }
-
-    frequency
 }
 
 #[cfg(test)]
@@ -65,35 +51,20 @@ mod tests {
     #[test]
     fn test_error_detection() {
         let parser = LogParser::new();
-        let test_logs = vec![
-            "2023-10-01 12:00:00 INFO: System started".to_string(),
-            "2023-10-01 12:05:00 ERROR: Database connection failed".to_string(),
-            "2023-10-01 12:10:00 WARNING: High memory usage".to_string(),
-            "2023-10-01 12:15:00 FATAL: System crash detected".to_string(),
-        ];
-
-        let errors = parser.parse_file("test.log").unwrap_or(test_logs);
-        let filtered_errors: Vec<String> = errors
-            .iter()
-            .filter(|line| parser.error_pattern.is_match(line))
-            .cloned()
-            .collect();
-
-        assert_eq!(filtered_errors.len(), 2);
-        assert!(filtered_errors[0].contains("ERROR"));
-        assert!(filtered_errors[1].contains("FATAL"));
+        let log_data = "INFO: Application started\nERROR: Database connection failed\nWARN: High memory usage\nFATAL: System crash";
+        
+        let errors = parser.find_errors(log_data);
+        assert_eq!(errors.len(), 2);
+        assert!(errors[0].contains("ERROR: Database connection failed"));
+        assert!(errors[1].contains("FATAL: System crash"));
     }
 
     #[test]
-    fn test_timestamp_extraction() {
+    fn test_no_errors() {
         let parser = LogParser::new();
-        let test_lines = vec![
-            "2023-10-01 12:05:00 ERROR: Something went wrong".to_string(),
-            "2023-10-01 12:10:00 INFO: Operation completed".to_string(),
-        ];
-
-        let timestamps = parser.extract_timestamps(&test_lines);
-        assert_eq!(timestamps.len(), 2);
-        assert_eq!(timestamps[0], "2023-10-01 12:05:00");
+        let log_data = "INFO: Application started\nDEBUG: Processing request\nWARN: Cache miss";
+        
+        let errors = parser.find_errors(log_data);
+        assert!(errors.is_empty());
     }
 }

@@ -1,58 +1,53 @@
+
 use std::collections::HashSet;
-use std::hash::Hash;
 
-pub struct DataCleaner<T> {
-    data: Vec<T>,
+pub struct DataCleaner {
+    pub remove_duplicates: bool,
+    pub validate_emails: bool,
 }
 
-impl<T> DataCleaner<T>
-where
-    T: Clone + Eq + Hash,
-{
-    pub fn new(data: Vec<T>) -> Self {
-        DataCleaner { data }
-    }
-
-    pub fn deduplicate(&mut self) -> &mut Self {
-        let mut seen = HashSet::new();
-        self.data.retain(|item| seen.insert(item.clone()));
-        self
-    }
-
-    pub fn normalize<F>(&mut self, normalizer: F) -> &mut Self
-    where
-        F: Fn(&T) -> T,
-    {
-        for item in &mut self.data {
-            *item = normalizer(item);
+impl DataCleaner {
+    pub fn new() -> Self {
+        DataCleaner {
+            remove_duplicates: true,
+            validate_emails: false,
         }
-        self
     }
 
-    pub fn filter<F>(&mut self, predicate: F) -> &mut Self
-    where
-        F: Fn(&T) -> bool,
-    {
-        self.data.retain(|item| predicate(item));
-        self
+    pub fn deduplicate_strings(&self, input: Vec<String>) -> Vec<String> {
+        if !self.remove_duplicates {
+            return input;
+        }
+
+        let mut seen = HashSet::new();
+        input
+            .into_iter()
+            .filter(|item| seen.insert(item.clone()))
+            .collect()
     }
 
-    pub fn get_data(&self) -> Vec<T> {
-        self.data.clone()
+    pub fn clean_email_list(&self, emails: Vec<String>) -> Vec<String> {
+        let mut cleaned = self.deduplicate_strings(emails);
+
+        if self.validate_emails {
+            cleaned.retain(|email| self.is_valid_email(email));
+        }
+
+        cleaned.sort();
+        cleaned
     }
 
-    pub fn count(&self) -> usize {
-        self.data.len()
-    }
-}
+    fn is_valid_email(&self, email: &str) -> bool {
+        let parts: Vec<&str> = email.split('@').collect();
+        if parts.len() != 2 {
+            return false;
+        }
 
-pub fn process_strings(strings: Vec<String>) -> Vec<String> {
-    let mut cleaner = DataCleaner::new(strings);
-    cleaner
-        .deduplicate()
-        .normalize(|s| s.trim().to_lowercase())
-        .filter(|s| !s.is_empty())
-        .get_data()
+        let domain_parts: Vec<&str> = parts[1].split('.').collect();
+        domain_parts.len() >= 2
+            && !parts[0].is_empty()
+            && !domain_parts.iter().any(|part| part.is_empty())
+    }
 }
 
 #[cfg(test)]
@@ -61,21 +56,32 @@ mod tests {
 
     #[test]
     fn test_deduplication() {
-        let data = vec![1, 2, 2, 3, 3, 3];
-        let mut cleaner = DataCleaner::new(data);
-        cleaner.deduplicate();
-        assert_eq!(cleaner.count(), 3);
+        let cleaner = DataCleaner::new();
+        let input = vec![
+            "test@example.com".to_string(),
+            "test@example.com".to_string(),
+            "unique@domain.com".to_string(),
+        ];
+
+        let result = cleaner.deduplicate_strings(input);
+        assert_eq!(result.len(), 2);
+        assert!(result.contains(&"test@example.com".to_string()));
+        assert!(result.contains(&"unique@domain.com".to_string()));
     }
 
     #[test]
-    fn test_string_processing() {
-        let strings = vec![
-            "  HELLO  ".to_string(),
-            "hello".to_string(),
-            "  ".to_string(),
-            "WORLD".to_string(),
+    fn test_email_validation() {
+        let mut cleaner = DataCleaner::new();
+        cleaner.validate_emails = true;
+
+        let emails = vec![
+            "valid@example.com".to_string(),
+            "invalid-email".to_string(),
+            "another@valid.org".to_string(),
+            "@missinglocal.com".to_string(),
         ];
-        let result = process_strings(strings);
-        assert_eq!(result, vec!["hello", "world"]);
+
+        let result = cleaner.clean_email_list(emails);
+        assert_eq!(result, vec!["another@valid.org", "valid@example.com"]);
     }
 }

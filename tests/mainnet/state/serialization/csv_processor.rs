@@ -138,4 +138,76 @@ mod tests {
         
         Ok(())
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufReader, BufWriter};
+use csv::{ReaderBuilder, WriterBuilder};
+
+pub fn filter_and_transform_csv(
+    input_path: &str,
+    output_path: &str,
+    filter_column: &str,
+    filter_value: &str,
+    transform_column: &str,
+) -> Result<(), Box<dyn Error>> {
+    let input_file = File::open(input_path)?;
+    let reader = BufReader::new(input_file);
+    let mut csv_reader = ReaderBuilder::new().has_headers(true).from_reader(reader);
+
+    let output_file = File::create(output_path)?;
+    let writer = BufWriter::new(output_file);
+    let mut csv_writer = WriterBuilder::new().from_writer(writer);
+
+    let headers = csv_reader.headers()?.clone();
+    csv_writer.write_record(&headers)?;
+
+    for result in csv_reader.records() {
+        let record = result?;
+        
+        if let Some(value) = record.headers().iter().position(|h| h == filter_column) {
+            if record.get(value) == Some(filter_value) {
+                let mut transformed_record = record.clone();
+                
+                if let Some(pos) = record.headers().iter().position(|h| h == transform_column) {
+                    if let Some(cell_value) = transformed_record.get(pos) {
+                        let transformed_value = cell_value.to_uppercase();
+                        transformed_record[pos] = transformed_value.as_str();
+                    }
+                }
+                
+                csv_writer.write_record(&transformed_record)?;
+            }
+        }
+    }
+
+    csv_writer.flush()?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_filter_and_transform() {
+        let mut input_file = NamedTempFile::new().unwrap();
+        writeln!(input_file, "name,status,department").unwrap();
+        writeln!(input_file, "Alice,active,engineering").unwrap();
+        writeln!(input_file, "Bob,inactive,sales").unwrap();
+        writeln!(input_file, "Carol,active,marketing").unwrap();
+
+        let output_file = NamedTempFile::new().unwrap();
+
+        let result = filter_and_transform_csv(
+            input_file.path().to_str().unwrap(),
+            output_file.path().to_str().unwrap(),
+            "status",
+            "active",
+            "department",
+        );
+
+        assert!(result.is_ok());
+    }
 }

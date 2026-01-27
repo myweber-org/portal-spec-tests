@@ -266,3 +266,192 @@ mod tests {
         assert_eq!(names, vec!["John", "Jane"]);
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+pub struct CsvProcessor {
+    delimiter: char,
+    has_headers: bool,
+}
+
+impl CsvProcessor {
+    pub fn new(delimiter: char, has_headers: bool) -> Self {
+        CsvProcessor {
+            delimiter,
+            has_headers,
+        }
+    }
+
+    pub fn validate_file<P: AsRef<Path>>(&self, file_path: P) -> Result<usize, Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        let mut line_count = 0;
+        let mut column_count: Option<usize> = None;
+
+        for (index, line) in reader.lines().enumerate() {
+            let line = line?;
+            let columns: Vec<&str> = line.split(self.delimiter).collect();
+            
+            if index == 0 && self.has_headers {
+                column_count = Some(columns.len());
+                continue;
+            }
+
+            if let Some(expected) = column_count {
+                if columns.len() != expected {
+                    return Err(format!(
+                        "Line {} has {} columns, expected {}",
+                        index + 1,
+                        columns.len(),
+                        expected
+                    ).into());
+                }
+            } else {
+                column_count = Some(columns.len());
+            }
+
+            line_count += 1;
+        }
+
+        Ok(line_count)
+    }
+
+    pub fn transform_column<P: AsRef<Path>>(
+        &self,
+        file_path: P,
+        column_index: usize,
+        transform_fn: fn(&str) -> String,
+    ) -> Result<Vec<String>, Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        let mut results = Vec::new();
+
+        for (index, line) in reader.lines().enumerate() {
+            let line = line?;
+            
+            if index == 0 && self.has_headers {
+                continue;
+            }
+
+            let columns: Vec<&str> = line.split(self.delimiter).collect();
+            
+            if column_index >= columns.len() {
+                return Err(format!(
+                    "Column index {} out of bounds on line {}",
+                    column_index,
+                    index + 1
+                ).into());
+            }
+
+            let transformed = transform_fn(columns[column_index]);
+            results.push(transformed);
+        }
+
+        Ok(results)
+    }
+
+    pub fn calculate_column_stats<P: AsRef<Path>>(
+        &self,
+        file_path: P,
+        column_index: usize,
+    ) -> Result<(f64, f64, f64), Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        let mut values = Vec::new();
+
+        for (index, line) in reader.lines().enumerate() {
+            let line = line?;
+            
+            if index == 0 && self.has_headers {
+                continue;
+            }
+
+            let columns: Vec<&str> = line.split(self.delimiter).collect();
+            
+            if column_index >= columns.len() {
+                return Err(format!(
+                    "Column index {} out of bounds on line {}",
+                    column_index,
+                    index + 1
+                ).into());
+            }
+
+            match columns[column_index].parse::<f64>() {
+                Ok(value) => values.push(value),
+                Err(_) => return Err(format!(
+                    "Invalid numeric value on line {}: {}",
+                    index + 1,
+                    columns[column_index]
+                ).into()),
+            }
+        }
+
+        if values.is_empty() {
+            return Err("No valid numeric values found".into());
+        }
+
+        let sum: f64 = values.iter().sum();
+        let count = values.len() as f64;
+        let mean = sum / count;
+        
+        let variance: f64 = values.iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>() / count;
+        
+        let std_dev = variance.sqrt();
+
+        Ok((mean, variance, std_dev))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    fn create_test_csv() -> NamedTempFile {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "name,age,salary").unwrap();
+        writeln!(file, "Alice,30,50000").unwrap();
+        writeln!(file, "Bob,25,45000").unwrap();
+        writeln!(file, "Charlie,35,55000").unwrap();
+        file
+    }
+
+    #[test]
+    fn test_validate_file() {
+        let file = create_test_csv();
+        let processor = CsvProcessor::new(',', true);
+        
+        let result = processor.validate_file(file.path());
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 3);
+    }
+
+    #[test]
+    fn test_transform_column() {
+        let file = create_test_csv();
+        let processor = CsvProcessor::new(',', true);
+        
+        let result = processor.transform_column(file.path(), 0, |s| s.to_uppercase());
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), vec!["ALICE", "BOB", "CHARLIE"]);
+    }
+
+    #[test]
+    fn test_calculate_column_stats() {
+        let file = create_test_csv();
+        let processor = CsvProcessor::new(',', true);
+        
+        let result = processor.calculate_column_stats(file.path(), 2);
+        assert!(result.is_ok());
+        
+        let (mean, variance, std_dev) = result.unwrap();
+        assert!((mean - 50000.0).abs() < 0.001);
+        assert!(variance > 0.0);
+        assert!(std_dev > 0.0);
+    }
+}

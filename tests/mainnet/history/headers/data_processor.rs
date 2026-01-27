@@ -1,62 +1,108 @@
 
 use std::collections::HashMap;
 
-#[derive(Debug, Clone)]
-pub struct DataRecord {
-    pub id: u64,
-    pub values: Vec<f64>,
-    pub metadata: HashMap<String, String>,
+pub struct DataProcessor {
+    cache: HashMap<String, Vec<f64>>,
+    validation_rules: Vec<ValidationRule>,
 }
 
-impl DataRecord {
-    pub fn new(id: u64, values: Vec<f64>) -> Self {
-        Self {
-            id,
-            values,
-            metadata: HashMap::new(),
+pub struct ValidationRule {
+    field_name: String,
+    min_value: f64,
+    max_value: f64,
+    required: bool,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            cache: HashMap::new(),
+            validation_rules: Vec::new(),
         }
     }
 
-    pub fn validate(&self) -> Result<(), String> {
-        if self.id == 0 {
-            return Err("Invalid record ID".to_string());
+    pub fn add_validation_rule(&mut self, rule: ValidationRule) {
+        self.validation_rules.push(rule);
+    }
+
+    pub fn process_dataset(&mut self, dataset_name: &str, data: &[f64]) -> Result<Vec<f64>, String> {
+        if data.is_empty() {
+            return Err("Dataset cannot be empty".to_string());
         }
 
-        if self.values.is_empty() {
-            return Err("Empty values vector".to_string());
-        }
+        for rule in &self.validation_rules {
+            if rule.required && data.iter().any(|&x| x.is_nan()) {
+                return Err(format!("Field {} contains invalid NaN values", rule.field_name));
+            }
 
-        for value in &self.values {
-            if value.is_nan() || value.is_infinite() {
-                return Err("Invalid numeric value detected".to_string());
+            if let Some(&value) = data.iter().find(|&&x| x < rule.min_value || x > rule.max_value) {
+                return Err(format!(
+                    "Value {} in field {} is outside allowed range [{}, {}]",
+                    value, rule.field_name, rule.min_value, rule.max_value
+                ));
             }
         }
 
-        Ok(())
+        let processed_data: Vec<f64> = data
+            .iter()
+            .map(|&x| {
+                if x.is_nan() {
+                    0.0
+                } else {
+                    x * 2.0
+                }
+            })
+            .collect();
+
+        self.cache.insert(dataset_name.to_string(), processed_data.clone());
+
+        Ok(processed_data)
     }
 
-    pub fn transform(&mut self, factor: f64) {
-        for value in &mut self.values {
-            *value *= factor;
-        }
+    pub fn get_cached_data(&self, dataset_name: &str) -> Option<&Vec<f64>> {
+        self.cache.get(dataset_name)
     }
 
-    pub fn add_metadata(&mut self, key: &str, value: &str) {
-        self.metadata.insert(key.to_string(), value.to_string());
+    pub fn calculate_statistics(&self, dataset_name: &str) -> Option<DatasetStatistics> {
+        self.cache.get(dataset_name).map(|data| {
+            let sum: f64 = data.iter().sum();
+            let count = data.len() as f64;
+            let mean = sum / count;
+            
+            let variance: f64 = data.iter()
+                .map(|&x| (x - mean).powi(2))
+                .sum::<f64>() / count;
+            
+            let std_dev = variance.sqrt();
+
+            DatasetStatistics {
+                mean,
+                std_dev,
+                min: *data.iter().min_by(|a, b| a.partial_cmp(b).unwrap()).unwrap_or(&0.0),
+                max: *data.iter().max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap_or(&0.0),
+                count: data.len(),
+            }
+        })
     }
 }
 
-pub fn process_records(records: &mut [DataRecord], factor: f64) -> Result<Vec<DataRecord>, String> {
-    let mut processed = Vec::with_capacity(records.len());
+pub struct DatasetStatistics {
+    pub mean: f64,
+    pub std_dev: f64,
+    pub min: f64,
+    pub max: f64,
+    pub count: usize,
+}
 
-    for record in records {
-        record.validate()?;
-        let mut transformed = record.clone();
-        transformed.transform(factor);
-        processed.push(transformed);
+impl ValidationRule {
+    pub fn new(field_name: &str, min_value: f64, max_value: f64, required: bool) -> Self {
+        ValidationRule {
+            field_name: field_name.to_string(),
+            min_value,
+            max_value,
+            required,
+        }
     }
-
-    Ok(processed)
 }
 
 #[cfg(test)]
@@ -64,32 +110,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_record_validation() {
-        let valid_record = DataRecord::new(1, vec![1.0, 2.0, 3.0]);
-        assert!(valid_record.validate().is_ok());
-
-        let invalid_record = DataRecord::new(0, vec![1.0, 2.0]);
-        assert!(invalid_record.validate().is_err());
-    }
-
-    #[test]
-    fn test_record_transformation() {
-        let mut record = DataRecord::new(1, vec![1.0, 2.0, 3.0]);
-        record.transform(2.0);
-        assert_eq!(record.values, vec![2.0, 4.0, 6.0]);
-    }
-
-    #[test]
-    fn test_batch_processing() {
-        let mut records = vec![
-            DataRecord::new(1, vec![1.0, 2.0]),
-            DataRecord::new(2, vec![3.0, 4.0]),
-        ];
-
-        let result = process_records(&mut records, 3.0);
+    fn test_data_processing() {
+        let mut processor = DataProcessor::new();
+        processor.add_validation_rule(ValidationRule::new("temperature", -50.0, 150.0, true));
+        
+        let data = vec![20.5, 25.0, 18.3, 22.7];
+        let result = processor.process_dataset("weather", &data);
+        
         assert!(result.is_ok());
-        let processed = result.unwrap();
-        assert_eq!(processed[0].values, vec![3.0, 6.0]);
-        assert_eq!(processed[1].values, vec![9.0, 12.0]);
+        assert_eq!(processor.get_cached_data("weather").unwrap().len(), 4);
+    }
+
+    #[test]
+    fn test_invalid_data() {
+        let mut processor = DataProcessor::new();
+        processor.add_validation_rule(ValidationRule::new("pressure", 0.0, 100.0, true));
+        
+        let data = vec![50.0, 120.0, 30.0];
+        let result = processor.process_dataset("pressure_data", &data);
+        
+        assert!(result.is_err());
     }
 }

@@ -121,4 +121,132 @@ mod tests {
         assert_eq!(summary.info_count, 2);
         assert_eq!(summary.error_lines.len(), 2);
     }
+}use std::collections::HashMap;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use chrono::{DateTime, FixedOffset};
+use regex::Regex;
+
+#[derive(Debug)]
+pub struct LogEntry {
+    timestamp: DateTime<FixedOffset>,
+    level: String,
+    component: String,
+    message: String,
+    metadata: HashMap<String, String>,
+}
+
+pub struct LogAnalyzer {
+    entries: Vec<LogEntry>,
+}
+
+impl LogAnalyzer {
+    pub fn new() -> Self {
+        LogAnalyzer {
+            entries: Vec::new(),
+        }
+    }
+
+    pub fn load_from_file(&mut self, path: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let log_pattern = Regex::new(r"\[(?P<timestamp>[^\]]+)\] (?P<level>\w+) (?P<component>[^:]+): (?P<message>.+)")?;
+
+        for line in reader.lines() {
+            let line = line?;
+            if let Some(caps) = log_pattern.captures(&line) {
+                let timestamp_str = caps.name("timestamp").unwrap().as_str();
+                let timestamp = DateTime::parse_from_rfc3339(timestamp_str)?;
+                
+                let entry = LogEntry {
+                    timestamp,
+                    level: caps.name("level").unwrap().as_str().to_string(),
+                    component: caps.name("component").unwrap().as_str().to_string(),
+                    message: caps.name("message").unwrap().as_str().to_string(),
+                    metadata: HashMap::new(),
+                };
+                
+                self.entries.push(entry);
+            }
+        }
+        
+        Ok(())
+    }
+
+    pub fn filter_by_level(&self, level: &str) -> Vec<&LogEntry> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.level.to_lowercase() == level.to_lowercase())
+            .collect()
+    }
+
+    pub fn filter_by_component(&self, component: &str) -> Vec<&LogEntry> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.component.contains(component))
+            .collect()
+    }
+
+    pub fn count_by_level(&self) -> HashMap<String, usize> {
+        let mut counts = HashMap::new();
+        for entry in &self.entries {
+            *counts.entry(entry.level.clone()).or_insert(0) += 1;
+        }
+        counts
+    }
+
+    pub fn get_entries_in_time_range(
+        &self,
+        start: DateTime<FixedOffset>,
+        end: DateTime<FixedOffset>,
+    ) -> Vec<&LogEntry> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.timestamp >= start && entry.timestamp <= end)
+            .collect()
+    }
+
+    pub fn search_messages(&self, pattern: &str) -> Vec<&LogEntry> {
+        let search_regex = Regex::new(pattern).unwrap_or_else(|_| Regex::new("").unwrap());
+        self.entries
+            .iter()
+            .filter(|entry| search_regex.is_match(&entry.message))
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    #[test]
+    fn test_log_analyzer_creation() {
+        let analyzer = LogAnalyzer::new();
+        assert_eq!(analyzer.entries.len(), 0);
+    }
+
+    #[test]
+    fn test_filter_by_level() {
+        let mut analyzer = LogAnalyzer::new();
+        analyzer.entries.push(LogEntry {
+            timestamp: FixedOffset::east(0).ymd(2023, 1, 1).and_hms(0, 0, 0),
+            level: "ERROR".to_string(),
+            component: "database".to_string(),
+            message: "Connection failed".to_string(),
+            metadata: HashMap::new(),
+        });
+        
+        analyzer.entries.push(LogEntry {
+            timestamp: FixedOffset::east(0).ymd(2023, 1, 1).and_hms(0, 0, 1),
+            level: "INFO".to_string(),
+            component: "server".to_string(),
+            message: "Server started".to_string(),
+            metadata: HashMap::new(),
+        });
+
+        let errors = analyzer.filter_by_level("ERROR");
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].level, "ERROR");
+    }
 }

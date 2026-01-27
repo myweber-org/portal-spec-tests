@@ -1,156 +1,57 @@
-use csv::{ReaderBuilder, WriterBuilder};
-use serde::{Deserialize, Serialize};
-use std::error::Error;
-use std::fs::File;
-use std::path::Path;
-
-#[derive(Debug, Deserialize, Serialize)]
-struct Record {
-    id: u32,
-    name: String,
-    value: f64,
-    category: String,
-}
-
-fn clean_csv_data(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
-    let input_file = File::open(Path::new(input_path))?;
-    let mut rdr = ReaderBuilder::new()
-        .has_headers(true)
-        .from_reader(input_file);
-
-    let output_file = File::create(Path::new(output_path))?;
-    let mut wtr = WriterBuilder::new()
-        .has_headers(true)
-        .from_writer(output_file);
-
-    for result in rdr.deserialize() {
-        let mut record: Record = result?;
-        
-        record.name = record.name.trim().to_string();
-        record.category = record.category.to_uppercase();
-        
-        if record.value < 0.0 {
-            record.value = 0.0;
-        }
-
-        wtr.serialize(&record)?;
-    }
-
-    wtr.flush()?;
-    Ok(())
-}
-
-fn validate_record(record: &Record) -> bool {
-    !record.name.is_empty() && 
-    record.value >= 0.0 && 
-    !record.category.is_empty()
-}
-
-fn main() -> Result<(), Box<dyn Error>> {
-    let input = "input_data.csv";
-    let output = "cleaned_data.csv";
-    
-    match clean_csv_data(input, output) {
-        Ok(_) => println!("Data cleaning completed successfully"),
-        Err(e) => eprintln!("Error during data cleaning: {}", e),
-    }
-    
-    Ok(())
-}
-use csv::{ReaderBuilder, WriterBuilder};
 use std::collections::HashSet;
-use std::error::Error;
-use std::fs::File;
-use std::io::{BufReader, BufWriter};
 
-pub fn remove_duplicates(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
-    let input_file = File::open(input_path)?;
-    let reader = BufReader::new(input_file);
-    let mut csv_reader = ReaderBuilder::new().has_headers(true).from_reader(reader);
+pub struct DataCleaner<T> {
+    data: Vec<T>,
+}
 
-    let output_file = File::create(output_path)?;
-    let writer = BufWriter::new(output_file);
-    let mut csv_writer = WriterBuilder::new().has_headers(true).from_writer(writer);
-
-    let headers = csv_reader.headers()?.clone();
-    csv_writer.write_record(&headers)?;
-
-    let mut seen = HashSet::new();
-    for result in csv_reader.records() {
-        let record = result?;
-        let key: String = record.iter().collect();
-        
-        if seen.insert(key) {
-            csv_writer.write_record(&record)?;
-        }
+impl<T> DataCleaner<T>
+where
+    T: Eq + std::hash::Hash + Clone,
+{
+    pub fn new(data: Vec<T>) -> Self {
+        DataCleaner { data }
     }
 
-    csv_writer.flush()?;
-    Ok(())
+    pub fn remove_duplicates(&mut self) -> Vec<T> {
+        let mut seen = HashSet::new();
+        let mut result = Vec::new();
+
+        for item in self.data.iter() {
+            if seen.insert(item) {
+                result.push(item.clone());
+            }
+        }
+
+        self.data = result.clone();
+        result
+    }
+
+    pub fn get_unique_count(&self) -> usize {
+        let set: HashSet<_> = self.data.iter().collect();
+        set.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
 
     #[test]
     fn test_remove_duplicates() {
-        let mut input_file = NamedTempFile::new().unwrap();
-        writeln!(input_file, "id,name,value").unwrap();
-        writeln!(input_file, "1,Alice,100").unwrap();
-        writeln!(input_file, "2,Bob,200").unwrap();
-        writeln!(input_file, "1,Alice,100").unwrap();
-        writeln!(input_file, "3,Charlie,300").unwrap();
-
-        let output_file = NamedTempFile::new().unwrap();
-
-        remove_duplicates(
-            input_file.path().to_str().unwrap(),
-            output_file.path().to_str().unwrap(),
-        ).unwrap();
-
-        let content = std::fs::read_to_string(output_file.path()).unwrap();
-        let lines: Vec<&str> = content.lines().collect();
-        assert_eq!(lines.len(), 4);
-        assert!(lines.contains(&"1,Alice,100"));
-        assert!(lines.contains(&"2,Bob,200"));
-        assert!(lines.contains(&"3,Charlie,300"));
+        let mut cleaner = DataCleaner::new(vec![1, 2, 2, 3, 4, 4, 5]);
+        let unique = cleaner.remove_duplicates();
+        assert_eq!(unique, vec![1, 2, 3, 4, 5]);
+        assert_eq!(cleaner.get_unique_count(), 5);
     }
-}use std::collections::HashSet;
-
-pub fn normalize_and_deduplicate_strings(strings: Vec<String>) -> Vec<String> {
-    let mut seen = HashSet::new();
-    let mut result = Vec::new();
-
-    for s in strings {
-        let normalized = s.trim().to_lowercase();
-        if !normalized.is_empty() && seen.insert(normalized.clone()) {
-            result.push(normalized);
-        }
-    }
-
-    result
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
 
     #[test]
-    fn test_normalize_and_deduplicate() {
-        let input = vec![
-            "  Apple  ".to_string(),
-            "apple".to_string(),
-            "BANANA".to_string(),
-            "banana ".to_string(),
-            "".to_string(),
-            "  ".to_string(),
-            "Cherry".to_string(),
-        ];
-
-        let result = normalize_and_deduplicate_strings(input);
-        assert_eq!(result, vec!["apple", "banana", "cherry"]);
+    fn test_empty_data() {
+        let cleaner: DataCleaner<i32> = DataCleaner::new(vec![]);
+        assert!(cleaner.is_empty());
+        assert_eq!(cleaner.get_unique_count(), 0);
     }
 }

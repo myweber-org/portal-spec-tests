@@ -151,3 +151,15 @@ fn main() {
         _ => println!("Invalid choice. Please select 1 or 2."),
     }
 }
+fn celsius_to_fahrenheit(celsius: f64) -> f64 {
+    (celsius * 9.0 / 5.0) + 32.0
+}
+
+fn main() {
+    let celsius_temperatures = [0.0, 20.0, 37.0, 100.0];
+    
+    for &temp in &celsius_temperatures {
+        let fahrenheit = celsius_to_fahrenheit(temp);
+        println!("{}°C = {:.1}°F", temp, fahrenheit);
+    }
+}

@@ -304,3 +304,147 @@ features: {}
         assert!(errors.len() >= 4);
     }
 }
+use std::collections::HashMap;
+use std::env;
+use std::fs;
+
+#[derive(Debug, Clone)]
+pub struct Config {
+    pub database_url: String,
+    pub server_port: u16,
+    pub log_level: String,
+    pub feature_flags: HashMap<String, bool>,
+}
+
+impl Config {
+    pub fn from_file(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let content = fs::read_to_string(path)?;
+        let mut config_map = HashMap::new();
+        
+        for line in content.lines() {
+            if line.trim().is_empty() || line.starts_with('#') {
+                continue;
+            }
+            
+            let parts: Vec<&str> = line.splitn(2, '=').collect();
+            if parts.len() == 2 {
+                let key = parts[0].trim().to_string();
+                let raw_value = parts[1].trim().to_string();
+                let value = Self::interpolate_env_vars(&raw_value);
+                config_map.insert(key, value);
+            }
+        }
+        
+        Ok(Config {
+            database_url: config_map
+                .get("DATABASE_URL")
+                .cloned()
+                .unwrap_or_else(|| "postgresql://localhost:5432/app".to_string()),
+            server_port: config_map
+                .get("SERVER_PORT")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(8080),
+            log_level: config_map
+                .get("LOG_LEVEL")
+                .cloned()
+                .unwrap_or_else(|| "info".to_string()),
+            feature_flags: config_map
+                .iter()
+                .filter(|(k, _)| k.starts_with("FEATURE_"))
+                .map(|(k, v)| (k.clone(), v == "true" || v == "1"))
+                .collect(),
+        })
+    }
+    
+    fn interpolate_env_vars(value: &str) -> String {
+        let mut result = value.to_string();
+        
+        if value.starts_with("${") && value.ends_with('}') {
+            let env_key = &value[2..value.len() - 1];
+            if let Ok(env_value) = env::var(env_key) {
+                result = env_value;
+            }
+        }
+        
+        result
+    }
+    
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+        
+        if self.database_url.is_empty() {
+            errors.push("DATABASE_URL cannot be empty".to_string());
+        }
+        
+        if self.server_port == 0 {
+            errors.push("SERVER_PORT must be greater than 0".to_string());
+        }
+        
+        let valid_log_levels = ["error", "warn", "info", "debug", "trace"];
+        if !valid_log_levels.contains(&self.log_level.as_str()) {
+            errors.push(format!(
+                "LOG_LEVEL must be one of: {}",
+                valid_log_levels.join(", ")
+            ));
+        }
+        
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+    
+    #[test]
+    fn test_config_parsing() {
+        let mut config_file = NamedTempFile::new().unwrap();
+        writeln!(config_file, "DATABASE_URL=postgresql://localhost:5432/test").unwrap();
+        writeln!(config_file, "SERVER_PORT=3000").unwrap();
+        writeln!(config_file, "LOG_LEVEL=debug").unwrap();
+        writeln!(config_file, "FEATURE_AUTH=true").unwrap();
+        writeln!(config_file, "FEATURE_CACHE=1").unwrap();
+        
+        let config = Config::from_file(config_file.path().to_str().unwrap()).unwrap();
+        
+        assert_eq!(config.database_url, "postgresql://localhost:5432/test");
+        assert_eq!(config.server_port, 3000);
+        assert_eq!(config.log_level, "debug");
+        assert_eq!(config.feature_flags.get("FEATURE_AUTH"), Some(&true));
+        assert_eq!(config.feature_flags.get("FEATURE_CACHE"), Some(&true));
+    }
+    
+    #[test]
+    fn test_env_var_interpolation() {
+        env::set_var("DB_HOST", "localhost");
+        
+        let mut config_file = NamedTempFile::new().unwrap();
+        writeln!(config_file, "DATABASE_URL=${{DB_HOST}}").unwrap();
+        
+        let config = Config::from_file(config_file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.database_url, "localhost");
+    }
+    
+    #[test]
+    fn test_config_validation() {
+        let config = Config {
+            database_url: "".to_string(),
+            server_port: 0,
+            log_level: "invalid".to_string(),
+            feature_flags: HashMap::new(),
+        };
+        
+        let validation_result = config.validate();
+        assert!(validation_result.is_err());
+        
+        if let Err(errors) = validation_result {
+            assert!(errors.len() >= 2);
+        }
+    }
+}

@@ -112,3 +112,171 @@ mod tests {
         assert_eq!(values, 3);
     }
 }
+use std::collections::HashMap;
+
+pub struct DataProcessor {
+    cache: HashMap<String, Vec<f64>>,
+    validation_rules: Vec<ValidationRule>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ValidationRule {
+    pub field_name: String,
+    pub min_value: f64,
+    pub max_value: f64,
+    pub required: bool,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            cache: HashMap::new(),
+            validation_rules: Vec::new(),
+        }
+    }
+
+    pub fn add_validation_rule(&mut self, rule: ValidationRule) {
+        self.validation_rules.push(rule);
+    }
+
+    pub fn process_data(&mut self, dataset: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, String> {
+        if dataset.is_empty() {
+            return Err("Empty dataset provided".to_string());
+        }
+
+        let mut processed = Vec::with_capacity(dataset.len());
+        
+        for (index, row) in dataset.iter().enumerate() {
+            match self.validate_row(row) {
+                Ok(_) => {
+                    let transformed = self.transform_row(row);
+                    processed.push(transformed);
+                    self.cache.insert(format!("row_{}", index), row.clone());
+                }
+                Err(e) => return Err(format!("Validation failed at row {}: {}", index, e)),
+            }
+        }
+
+        Ok(processed)
+    }
+
+    fn validate_row(&self, row: &[f64]) -> Result<(), String> {
+        for rule in &self.validation_rules {
+            let field_index = match self.get_field_index(&rule.field_name) {
+                Some(idx) => idx,
+                None => continue,
+            };
+
+            if field_index >= row.len() {
+                if rule.required {
+                    return Err(format!("Required field '{}' missing", rule.field_name));
+                }
+                continue;
+            }
+
+            let value = row[field_index];
+            if value < rule.min_value || value > rule.max_value {
+                return Err(format!(
+                    "Field '{}' value {} outside valid range [{}, {}]",
+                    rule.field_name, value, rule.min_value, rule.max_value
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn transform_row(&self, row: &[f64]) -> Vec<f64> {
+        let mut transformed = Vec::with_capacity(row.len());
+        
+        for &value in row {
+            let transformed_value = if value < 0.0 {
+                value.abs()
+            } else if value > 100.0 {
+                100.0
+            } else {
+                value
+            };
+            transformed.push(transformed_value);
+        }
+        
+        transformed
+    }
+
+    fn get_field_index(&self, field_name: &str) -> Option<usize> {
+        match field_name {
+            "temperature" => Some(0),
+            "pressure" => Some(1),
+            "humidity" => Some(2),
+            "velocity" => Some(3),
+            _ => None,
+        }
+    }
+
+    pub fn get_cached_row(&self, key: &str) -> Option<&Vec<f64>> {
+        self.cache.get(key)
+    }
+
+    pub fn clear_cache(&mut self) {
+        self.cache.clear();
+    }
+
+    pub fn get_statistics(&self) -> HashMap<String, f64> {
+        let mut stats = HashMap::new();
+        
+        for (key, values) in &self.cache {
+            if !values.is_empty() {
+                let sum: f64 = values.iter().sum();
+                let avg = sum / values.len() as f64;
+                stats.insert(key.clone(), avg);
+            }
+        }
+        
+        stats
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_data_processor() {
+        let mut processor = DataProcessor::new();
+        
+        processor.add_validation_rule(ValidationRule {
+            field_name: "temperature".to_string(),
+            min_value: -50.0,
+            max_value: 150.0,
+            required: true,
+        });
+
+        let test_data = vec![
+            vec![25.0, 1013.0, 65.0, 10.0],
+            vec![-10.0, 1000.0, 70.0, 5.0],
+        ];
+
+        let result = processor.process_data(&test_data);
+        assert!(result.is_ok());
+        
+        let processed = result.unwrap();
+        assert_eq!(processed.len(), 2);
+        assert_eq!(processed[0][0], 25.0);
+        assert_eq!(processed[1][0], 10.0);
+    }
+
+    #[test]
+    fn test_validation_failure() {
+        let mut processor = DataProcessor::new();
+        
+        processor.add_validation_rule(ValidationRule {
+            field_name: "temperature".to_string(),
+            min_value: 0.0,
+            max_value: 100.0,
+            required: true,
+        });
+
+        let invalid_data = vec![vec![120.0, 1013.0, 65.0, 10.0]];
+        let result = processor.process_data(&invalid_data);
+        assert!(result.is_err());
+    }
+}

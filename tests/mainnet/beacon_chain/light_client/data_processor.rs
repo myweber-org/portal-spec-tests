@@ -1,62 +1,120 @@
 
 use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug)]
+pub enum ProcessingError {
+    InvalidData(String),
+    TransformationFailed(String),
+    ValidationError(String),
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProcessingError::InvalidData(msg) => write!(f, "Invalid data: {}", msg),
+            ProcessingError::TransformationFailed(msg) => write!(f, "Transformation failed: {}", msg),
+            ProcessingError::ValidationError(msg) => write!(f, "Validation error: {}", msg),
+        }
+    }
+}
+
+impl Error for ProcessingError {}
 
 pub struct DataProcessor {
-    cache: HashMap<String, Vec<f64>>,
+    config: ProcessingConfig,
+    cache: HashMap<u32, DataRecord>,
+}
+
+#[derive(Clone)]
+pub struct ProcessingConfig {
+    pub max_value: f64,
+    pub min_value: f64,
+    pub allowed_tags: Vec<String>,
 }
 
 impl DataProcessor {
-    pub fn new() -> Self {
+    pub fn new(config: ProcessingConfig) -> Self {
         DataProcessor {
+            config,
             cache: HashMap::new(),
         }
     }
 
-    pub fn process_dataset(&mut self, key: &str, data: &[f64]) -> Result<Vec<f64>, String> {
-        if data.is_empty() {
-            return Err("Empty dataset provided".to_string());
+    pub fn validate_record(&self, record: &DataRecord) -> Result<(), ProcessingError> {
+        if record.value > self.config.max_value {
+            return Err(ProcessingError::ValidationError(
+                format!("Value {} exceeds maximum {}", record.value, self.config.max_value)
+            ));
         }
 
-        if let Some(cached) = self.cache.get(key) {
-            return Ok(cached.clone());
+        if record.value < self.config.min_value {
+            return Err(ProcessingError::ValidationError(
+                format!("Value {} below minimum {}", record.value, self.config.min_value)
+            ));
         }
 
-        let processed = Self::normalize_data(data)?;
-        let transformed = Self::apply_transformations(&processed);
-        
-        self.cache.insert(key.to_string(), transformed.clone());
+        for tag in &record.tags {
+            if !self.config.allowed_tags.contains(tag) {
+                return Err(ProcessingError::ValidationError(
+                    format!("Tag '{}' is not allowed", tag)
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn process_record(&mut self, record: DataRecord) -> Result<DataRecord, ProcessingError> {
+        self.validate_record(&record)?;
+
+        let transformed_value = self.transform_value(record.value)?;
+        let normalized_name = self.normalize_name(&record.name);
+
+        let processed_record = DataRecord {
+            value: transformed_value,
+            name: normalized_name,
+            ..record
+        };
+
+        self.cache.insert(processed_record.id, processed_record.clone());
+        Ok(processed_record)
+    }
+
+    fn transform_value(&self, value: f64) -> Result<f64, ProcessingError> {
+        if value.is_nan() || value.is_infinite() {
+            return Err(ProcessingError::TransformationFailed(
+                "Cannot transform NaN or infinite values".to_string()
+            ));
+        }
+
+        let transformed = (value * 100.0).round() / 100.0;
         Ok(transformed)
     }
 
-    fn normalize_data(data: &[f64]) -> Result<Vec<f64>, String> {
-        let mean = data.iter().sum::<f64>() / data.len() as f64;
-        let variance: f64 = data.iter()
-            .map(|&x| (x - mean).powi(2))
-            .sum::<f64>() / data.len() as f64;
-        
-        if variance.abs() < f64::EPSILON {
-            return Err("Zero variance in dataset".to_string());
-        }
-
-        let std_dev = variance.sqrt();
-        Ok(data.iter()
-            .map(|&x| (x - mean) / std_dev)
-            .collect())
+    fn normalize_name(&self, name: &str) -> String {
+        name.trim().to_lowercase()
     }
 
-    fn apply_transformations(data: &[f64]) -> Vec<f64> {
-        data.iter()
-            .map(|&x| x.powi(2).ln().max(0.0))
-            .collect()
+    pub fn get_cached_record(&self, id: u32) -> Option<&DataRecord> {
+        self.cache.get(&id)
     }
 
     pub fn clear_cache(&mut self) {
         self.cache.clear();
     }
 
-    pub fn get_cache_stats(&self) -> (usize, usize) {
-        let total_items: usize = self.cache.values().map(|v| v.len()).sum();
-        (self.cache.len(), total_items)
+    pub fn cache_size(&self) -> usize {
+        self.cache.len()
     }
 }
 
@@ -64,24 +122,55 @@ impl DataProcessor {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_normalize_data() {
-        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
-        let result = DataProcessor::normalize_data(&data).unwrap();
-        
-        let mean = result.iter().sum::<f64>() / result.len() as f64;
-        let variance: f64 = result.iter()
-            .map(|&x| (x - mean).powi(2))
-            .sum::<f64>() / result.len() as f64;
-        
-        assert!(mean.abs() < 1e-10);
-        assert!((variance - 1.0).abs() < 1e-10);
+    fn create_test_config() -> ProcessingConfig {
+        ProcessingConfig {
+            max_value: 1000.0,
+            min_value: 0.0,
+            allowed_tags: vec!["important".to_string(), "normal".to_string()],
+        }
     }
 
     #[test]
-    fn test_empty_dataset() {
-        let mut processor = DataProcessor::new();
-        let result = processor.process_dataset("test", &[]);
-        assert!(result.is_err());
+    fn test_validation_success() {
+        let processor = DataProcessor::new(create_test_config());
+        let record = DataRecord {
+            id: 1,
+            name: "Test".to_string(),
+            value: 500.0,
+            tags: vec!["important".to_string()],
+        };
+
+        assert!(processor.validate_record(&record).is_ok());
+    }
+
+    #[test]
+    fn test_validation_failure() {
+        let processor = DataProcessor::new(create_test_config());
+        let record = DataRecord {
+            id: 1,
+            name: "Test".to_string(),
+            value: 1500.0,
+            tags: vec!["important".to_string()],
+        };
+
+        assert!(processor.validate_record(&record).is_err());
+    }
+
+    #[test]
+    fn test_process_record() {
+        let mut processor = DataProcessor::new(create_test_config());
+        let record = DataRecord {
+            id: 1,
+            name: "  TEST  ".to_string(),
+            value: 123.456,
+            tags: vec!["normal".to_string()],
+        };
+
+        let result = processor.process_record(record);
+        assert!(result.is_ok());
+        let processed = result.unwrap();
+        assert_eq!(processed.name, "test");
+        assert_eq!(processed.value, 123.46);
+        assert_eq!(processor.cache_size(), 1);
     }
 }

@@ -1,138 +1,74 @@
-
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use thiserror::Error;
 
-#[derive(Error, Debug)]
-pub enum DataError {
-    #[error("Invalid input data: {0}")]
-    InvalidInput(String),
-    #[error("Transformation failed: {0}")]
-    TransformationFailed(String),
-    #[error("Validation error: {0}")]
-    ValidationError(String),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct DataRecord {
-    pub id: u64,
-    pub timestamp: i64,
-    pub values: HashMap<String, f64>,
-    pub tags: Vec<String>,
+    pub id: u32,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
 }
 
 impl DataRecord {
-    pub fn new(id: u64, timestamp: i64) -> Self {
+    pub fn new(id: u32, values: Vec<f64>) -> Self {
         Self {
             id,
-            timestamp,
-            values: HashMap::new(),
-            tags: Vec::new(),
+            values,
+            metadata: HashMap::new(),
         }
     }
 
-    pub fn add_value(&mut self, key: &str, value: f64) -> Result<(), DataError> {
-        if !value.is_finite() {
-            return Err(DataError::InvalidInput(
-                "Value must be finite number".to_string(),
-            ));
-        }
-        self.values.insert(key.to_string(), value);
-        Ok(())
+    pub fn add_metadata(&mut self, key: String, value: String) {
+        self.metadata.insert(key, value);
     }
 
-    pub fn add_tag(&mut self, tag: &str) {
-        if !self.tags.contains(&tag.to_string()) {
-            self.tags.push(tag.to_string());
+    pub fn validate(&self) -> Result<(), String> {
+        if self.id == 0 {
+            return Err("ID cannot be zero".to_string());
         }
-    }
 
-    pub fn validate(&self) -> Result<(), DataError> {
         if self.values.is_empty() {
-            return Err(DataError::ValidationError(
-                "Record must contain at least one value".to_string(),
-            ));
+            return Err("Values cannot be empty".to_string());
         }
 
-        if self.timestamp < 0 {
-            return Err(DataError::ValidationError(
-                "Timestamp must be non-negative".to_string(),
-            ));
+        for value in &self.values {
+            if value.is_nan() || value.is_infinite() {
+                return Err("Invalid numeric value detected".to_string());
+            }
         }
 
         Ok(())
     }
+
+    pub fn normalize(&mut self) {
+        if self.values.is_empty() {
+            return;
+        }
+
+        let sum: f64 = self.values.iter().sum();
+        if sum != 0.0 {
+            for value in &mut self.values {
+                *value /= sum;
+            }
+        }
+    }
 }
 
-pub struct DataProcessor {
-    records: Vec<DataRecord>,
-    transformations: Vec<Box<dyn Fn(&DataRecord) -> Result<DataRecord, DataError>>>,
-}
+pub fn process_records(records: &mut [DataRecord]) -> Vec<Result<DataRecord, String>> {
+    let mut results = Vec::new();
 
-impl DataProcessor {
-    pub fn new() -> Self {
-        Self {
-            records: Vec::new(),
-            transformations: Vec::new(),
-        }
-    }
-
-    pub fn add_record(&mut self, record: DataRecord) -> Result<(), DataError> {
-        record.validate()?;
-        self.records.push(record);
-        Ok(())
-    }
-
-    pub fn add_transformation<F>(&mut self, transform: F)
-    where
-        F: Fn(&DataRecord) -> Result<DataRecord, DataError> + 'static,
-    {
-        self.transformations.push(Box::new(transform));
-    }
-
-    pub fn process(&self) -> Result<Vec<DataRecord>, DataError> {
-        let mut processed = Vec::with_capacity(self.records.len());
-
-        for record in &self.records {
-            let mut current = record.clone();
-
-            for transform in &self.transformations {
-                current = transform(&current)?;
+    for record in records {
+        match record.validate() {
+            Ok(_) => {
+                let mut processed = record.clone();
+                processed.normalize();
+                results.push(Ok(processed));
             }
-
-            processed.push(current);
-        }
-
-        Ok(processed)
-    }
-
-    pub fn calculate_statistics(&self) -> HashMap<String, f64> {
-        let mut stats = HashMap::new();
-
-        if self.records.is_empty() {
-            return stats;
-        }
-
-        let mut value_sums: HashMap<String, f64> = HashMap::new();
-        let mut value_counts: HashMap<String, usize> = HashMap::new();
-
-        for record in &self.records {
-            for (key, value) in &record.values {
-                *value_sums.entry(key.clone()).or_insert(0.0) += value;
-                *value_counts.entry(key.clone()).or_insert(0) += 1;
+            Err(e) => {
+                results.push(Err(format!("Record {} failed validation: {}", record.id, e)));
             }
         }
-
-        for (key, sum) in value_sums {
-            if let Some(&count) = value_counts.get(&key) {
-                if count > 0 {
-                    stats.insert(format!("{}_average", key), sum / count as f64);
-                }
-            }
-        }
-
-        stats
     }
+
+    results
 }
 
 #[cfg(test)]
@@ -140,37 +76,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_record_validation() {
-        let mut record = DataRecord::new(1, 1234567890);
-        assert!(record.validate().is_err());
-
-        record.add_value("temperature", 25.5).unwrap();
+    fn test_valid_record() {
+        let record = DataRecord::new(1, vec![1.0, 2.0, 3.0]);
         assert!(record.validate().is_ok());
     }
 
     #[test]
-    fn test_invalid_value() {
-        let mut record = DataRecord::new(1, 1234567890);
-        let result = record.add_value("invalid", f64::INFINITY);
-        assert!(matches!(result, Err(DataError::InvalidInput(_))));
+    fn test_invalid_id() {
+        let record = DataRecord::new(0, vec![1.0, 2.0]);
+        assert!(record.validate().is_err());
     }
 
     #[test]
-    fn test_data_processing() {
-        let mut processor = DataProcessor::new();
-        let mut record = DataRecord::new(1, 1234567890);
-        record.add_value("pressure", 1013.25).unwrap();
-        processor.add_record(record).unwrap();
-
-        processor.add_transformation(|r| {
-            let mut transformed = r.clone();
-            for (key, value) in &mut transformed.values {
-                *value *= 1.1;
-            }
-            Ok(transformed)
-        });
-
-        let processed = processor.process().unwrap();
-        assert_eq!(processed[0].values["pressure"], 1114.575);
+    fn test_normalization() {
+        let mut record = DataRecord::new(1, vec![1.0, 2.0, 3.0]);
+        record.normalize();
+        let sum: f64 = record.values.iter().sum();
+        assert!((sum - 1.0).abs() < 1e-10);
     }
 }

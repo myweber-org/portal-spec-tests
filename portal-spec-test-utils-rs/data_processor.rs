@@ -99,3 +99,139 @@ mod tests {
         assert!((std_dev - 2.236).abs() < 0.001);
     }
 }
+use std::collections::HashMap;
+
+pub struct DataProcessor {
+    data: HashMap<String, Vec<f64>>,
+    validation_rules: ValidationRules,
+}
+
+pub struct ValidationRules {
+    min_value: f64,
+    max_value: f64,
+    required_keys: Vec<String>,
+}
+
+impl DataProcessor {
+    pub fn new(rules: ValidationRules) -> Self {
+        DataProcessor {
+            data: HashMap::new(),
+            validation_rules: rules,
+        }
+    }
+
+    pub fn add_dataset(&mut self, key: String, values: Vec<f64>) -> Result<(), String> {
+        if !self.validation_rules.required_keys.contains(&key) {
+            return Err(format!("Key '{}' is not in required keys list", key));
+        }
+
+        for &value in &values {
+            if value < self.validation_rules.min_value || value > self.validation_rules.max_value {
+                return Err(format!("Value {} is out of allowed range [{}, {}]", 
+                    value, self.validation_rules.min_value, self.validation_rules.max_value));
+            }
+        }
+
+        self.data.insert(key, values);
+        Ok(())
+    }
+
+    pub fn calculate_statistics(&self) -> HashMap<String, Stats> {
+        let mut stats_map = HashMap::new();
+        
+        for (key, values) in &self.data {
+            if values.is_empty() {
+                continue;
+            }
+
+            let sum: f64 = values.iter().sum();
+            let count = values.len() as f64;
+            let mean = sum / count;
+            
+            let variance: f64 = values.iter()
+                .map(|&x| (x - mean).powi(2))
+                .sum::<f64>() / count;
+            
+            let std_dev = variance.sqrt();
+            
+            let stats = Stats {
+                mean,
+                std_dev,
+                min: *values.iter().fold(&f64::INFINITY, |a, b| a.min(b)),
+                max: *values.iter().fold(&f64::NEG_INFINITY, |a, b| a.max(b)),
+                count: values.len(),
+            };
+            
+            stats_map.insert(key.clone(), stats);
+        }
+        
+        stats_map
+    }
+
+    pub fn normalize_data(&mut self) {
+        for values in self.data.values_mut() {
+            if values.is_empty() {
+                continue;
+            }
+            
+            let min = *values.iter().fold(&f64::INFINITY, |a, b| a.min(b));
+            let max = *values.iter().fold(&f64::NEG_INFINITY, |a, b| a.max(b));
+            let range = max - min;
+            
+            if range > 0.0 {
+                for value in values.iter_mut() {
+                    *value = (*value - min) / range;
+                }
+            }
+        }
+    }
+}
+
+pub struct Stats {
+    pub mean: f64,
+    pub std_dev: f64,
+    pub min: f64,
+    pub max: f64,
+    pub count: usize,
+}
+
+impl ValidationRules {
+    pub fn new(min_value: f64, max_value: f64, required_keys: Vec<String>) -> Self {
+        ValidationRules {
+            min_value,
+            max_value,
+            required_keys,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_data_processor() {
+        let rules = ValidationRules::new(
+            0.0,
+            100.0,
+            vec!["temperature".to_string(), "humidity".to_string()]
+        );
+        
+        let mut processor = DataProcessor::new(rules);
+        
+        assert!(processor.add_dataset(
+            "temperature".to_string(),
+            vec![20.5, 22.3, 18.7, 25.1]
+        ).is_ok());
+        
+        assert!(processor.add_dataset(
+            "pressure".to_string(),
+            vec![1013.25, 1012.8]
+        ).is_err());
+        
+        let stats = processor.calculate_statistics();
+        assert!(stats.contains_key("temperature"));
+        
+        processor.normalize_data();
+    }
+}

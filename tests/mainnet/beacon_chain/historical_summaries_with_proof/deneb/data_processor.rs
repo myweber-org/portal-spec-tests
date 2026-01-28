@@ -1,101 +1,78 @@
 
 use std::collections::HashMap;
+use std::error::Error;
 
-pub struct DataProcessor {
-    cache: HashMap<String, Vec<f64>>,
-    validation_rules: Vec<ValidationRule>,
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    id: u32,
+    name: String,
+    value: f64,
+    tags: Vec<String>,
 }
 
-pub struct ValidationRule {
-    field_name: String,
-    min_value: f64,
-    max_value: f64,
-    required: bool,
+impl DataRecord {
+    pub fn new(id: u32, name: String, value: f64, tags: Vec<String>) -> Self {
+        Self { id, name, value, tags }
+    }
+
+    pub fn validate(&self) -> Result<(), Box<dyn Error>> {
+        if self.name.is_empty() {
+            return Err("Name cannot be empty".into());
+        }
+        if self.value < 0.0 {
+            return Err("Value must be non-negative".into());
+        }
+        Ok(())
+    }
+
+    pub fn transform(&mut self, multiplier: f64) {
+        self.value *= multiplier;
+        self.name = self.name.to_uppercase();
+    }
+}
+
+pub struct DataProcessor {
+    records: HashMap<u32, DataRecord>,
 }
 
 impl DataProcessor {
     pub fn new() -> Self {
-        DataProcessor {
-            cache: HashMap::new(),
-            validation_rules: Vec::new(),
+        Self {
+            records: HashMap::new(),
         }
     }
 
-    pub fn add_validation_rule(&mut self, rule: ValidationRule) {
-        self.validation_rules.push(rule);
+    pub fn add_record(&mut self, record: DataRecord) -> Result<(), Box<dyn Error>> {
+        record.validate()?;
+        self.records.insert(record.id, record);
+        Ok(())
     }
 
-    pub fn process_dataset(&mut self, dataset_name: &str, data: Vec<f64>) -> Result<Vec<f64>, String> {
-        if data.is_empty() {
-            return Err("Dataset cannot be empty".to_string());
+    pub fn process_all(&mut self, multiplier: f64) {
+        for record in self.records.values_mut() {
+            record.transform(multiplier);
+        }
+    }
+
+    pub fn get_statistics(&self) -> (f64, f64, f64) {
+        let count = self.records.len() as f64;
+        if count == 0.0 {
+            return (0.0, 0.0, 0.0);
         }
 
-        for rule in &self.validation_rules {
-            if rule.required && data.iter().any(|&x| x.is_nan()) {
-                return Err(format!("Field {} contains invalid values", rule.field_name));
-            }
-        }
+        let sum: f64 = self.records.values().map(|r| r.value).sum();
+        let avg = sum / count;
+        let max = self.records.values().map(|r| r.value).fold(f64::MIN, f64::max);
+        let min = self.records.values().map(|r| r.value).fold(f64::MAX, f64::min);
 
-        let processed_data: Vec<f64> = data
-            .iter()
-            .map(|&value| {
-                let mut transformed = value;
-                for rule in &self.validation_rules {
-                    if value < rule.min_value {
-                        transformed = rule.min_value;
-                    } else if value > rule.max_value {
-                        transformed = rule.max_value;
-                    }
-                }
-                transformed
-            })
-            .collect();
-
-        self.cache.insert(dataset_name.to_string(), processed_data.clone());
-        Ok(processed_data)
+        (avg, min, max)
     }
 
-    pub fn get_cached_data(&self, dataset_name: &str) -> Option<&Vec<f64>> {
-        self.cache.get(dataset_name)
-    }
-
-    pub fn calculate_statistics(&self, dataset_name: &str) -> Option<DatasetStats> {
-        self.cache.get(dataset_name).map(|data| {
-            let sum: f64 = data.iter().sum();
-            let count = data.len() as f64;
-            let mean = sum / count;
-            
-            let variance: f64 = data.iter()
-                .map(|&value| (value - mean).powi(2))
-                .sum::<f64>() / count;
-            
-            DatasetStats {
-                mean,
-                variance,
-                min: *data.iter().min_by(|a, b| a.partial_cmp(b).unwrap()).unwrap_or(&0.0),
-                max: *data.iter().max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap_or(&0.0),
-                count: data.len(),
-            }
-        })
-    }
-}
-
-pub struct DatasetStats {
-    pub mean: f64,
-    pub variance: f64,
-    pub min: f64,
-    pub max: f64,
-    pub count: usize,
-}
-
-impl ValidationRule {
-    pub fn new(field_name: &str, min_value: f64, max_value: f64, required: bool) -> Self {
-        ValidationRule {
-            field_name: field_name.to_string(),
-            min_value,
-            max_value,
-            required,
-        }
+    pub fn filter_by_tag(&self, tag: &str) -> Vec<&DataRecord> {
+        self.records
+            .values()
+            .filter(|record| record.tags.contains(&tag.to_string()))
+            .collect()
     }
 }
 
@@ -104,25 +81,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_data_processing() {
-        let mut processor = DataProcessor::new();
-        processor.add_validation_rule(ValidationRule::new("temperature", -50.0, 100.0, true));
-        
-        let data = vec![25.0, 30.0, 35.0, 40.0];
-        let result = processor.process_dataset("test_data", data);
-        
-        assert!(result.is_ok());
-        assert_eq!(processor.get_cached_data("test_data").unwrap().len(), 4);
+    fn test_record_validation() {
+        let valid_record = DataRecord::new(1, "test".to_string(), 10.0, vec![]);
+        assert!(valid_record.validate().is_ok());
+
+        let invalid_record = DataRecord::new(2, "".to_string(), -5.0, vec![]);
+        assert!(invalid_record.validate().is_err());
     }
 
     #[test]
-    fn test_invalid_data() {
+    fn test_data_processing() {
         let mut processor = DataProcessor::new();
-        processor.add_validation_rule(ValidationRule::new("pressure", 0.0, 10.0, true));
+        let record = DataRecord::new(1, "sample".to_string(), 5.0, vec!["tag1".to_string()]);
         
-        let data = vec![5.0, f64::NAN, 8.0];
-        let result = processor.process_dataset("invalid_data", data);
+        assert!(processor.add_record(record).is_ok());
+        processor.process_all(2.0);
         
-        assert!(result.is_err());
+        let stats = processor.get_statistics();
+        assert_eq!(stats.0, 10.0);
     }
 }

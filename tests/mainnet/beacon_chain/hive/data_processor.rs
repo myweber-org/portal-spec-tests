@@ -270,3 +270,160 @@ pub fn filter_by_category(records: Vec<Record>, category: &str) -> Vec<Record> {
         .filter(|r| r.category == category)
         .collect()
 }
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    id: u32,
+    name: String,
+    value: f64,
+    tags: Vec<String>,
+}
+
+#[derive(Debug)]
+pub enum DataError {
+    InvalidId,
+    InvalidName,
+    InvalidValue,
+    EmptyTags,
+}
+
+impl fmt::Display for DataError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DataError::InvalidId => write!(f, "ID must be greater than 0"),
+            DataError::InvalidName => write!(f, "Name cannot be empty"),
+            DataError::InvalidValue => write!(f, "Value must be between 0.0 and 1000.0"),
+            DataError::EmptyTags => write!(f, "Record must have at least one tag"),
+        }
+    }
+}
+
+impl Error for DataError {}
+
+impl DataRecord {
+    pub fn new(id: u32, name: String, value: f64, tags: Vec<String>) -> Result<Self, DataError> {
+        if id == 0 {
+            return Err(DataError::InvalidId);
+        }
+        if name.trim().is_empty() {
+            return Err(DataError::InvalidName);
+        }
+        if !(0.0..=1000.0).contains(&value) {
+            return Err(DataError::InvalidValue);
+        }
+        if tags.is_empty() {
+            return Err(DataError::EmptyTags);
+        }
+
+        Ok(Self {
+            id,
+            name,
+            value,
+            tags,
+        })
+    }
+
+    pub fn transform(&self, multiplier: f64) -> Self {
+        Self {
+            id: self.id,
+            name: self.name.clone(),
+            value: self.value * multiplier,
+            tags: self.tags.clone(),
+        }
+    }
+
+    pub fn has_tag(&self, tag: &str) -> bool {
+        self.tags.iter().any(|t| t == tag)
+    }
+}
+
+pub struct DataProcessor {
+    records: HashMap<u32, DataRecord>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        Self {
+            records: HashMap::new(),
+        }
+    }
+
+    pub fn add_record(&mut self, record: DataRecord) -> Result<(), DataError> {
+        if self.records.contains_key(&record.id) {
+            return Err(DataError::InvalidId);
+        }
+        self.records.insert(record.id, record);
+        Ok(())
+    }
+
+    pub fn get_record(&self, id: u32) -> Option<&DataRecord> {
+        self.records.get(&id)
+    }
+
+    pub fn process_records<F>(&self, mut processor: F) -> Vec<DataRecord>
+    where
+        F: FnMut(&DataRecord) -> DataRecord,
+    {
+        self.records.values().map(&mut processor).collect()
+    }
+
+    pub fn filter_by_tag(&self, tag: &str) -> Vec<&DataRecord> {
+        self.records
+            .values()
+            .filter(|record| record.has_tag(tag))
+            .collect()
+    }
+
+    pub fn calculate_average(&self) -> f64 {
+        if self.records.is_empty() {
+            return 0.0;
+        }
+        let sum: f64 = self.records.values().map(|r| r.value).sum();
+        sum / self.records.len() as f64
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_record_creation() {
+        let record = DataRecord::new(
+            1,
+            "Test Record".to_string(),
+            100.0,
+            vec!["tag1".to_string(), "tag2".to_string()],
+        );
+        assert!(record.is_ok());
+    }
+
+    #[test]
+    fn test_invalid_id() {
+        let record = DataRecord::new(
+            0,
+            "Test".to_string(),
+            100.0,
+            vec!["tag".to_string()],
+        );
+        assert!(matches!(record, Err(DataError::InvalidId)));
+    }
+
+    #[test]
+    fn test_data_processor_operations() {
+        let mut processor = DataProcessor::new();
+        let record = DataRecord::new(
+            1,
+            "Sample".to_string(),
+            50.0,
+            vec!["important".to_string()],
+        ).unwrap();
+
+        assert!(processor.add_record(record).is_ok());
+        assert_eq!(processor.records.len(), 1);
+        assert!(processor.get_record(1).is_some());
+    }
+}

@@ -322,4 +322,107 @@ debug_mode = false
         let result = Config::load_from_file(temp_file.path());
         assert!(result.is_err());
     }
+}use std::collections::HashMap;
+use std::env;
+use regex::Regex;
+
+pub struct ConfigParser {
+    values: HashMap<String, String>,
+}
+
+impl ConfigParser {
+    pub fn new() -> Self {
+        ConfigParser {
+            values: HashMap::new(),
+        }
+    }
+
+    pub fn parse_file(&mut self, path: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let content = std::fs::read_to_string(path)?;
+        self.parse_content(&content)
+    }
+
+    pub fn parse_content(&mut self, content: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let env_var_pattern = Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")?;
+        
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+
+            if let Some((key, mut value)) = trimmed.split_once('=') {
+                let key = key.trim().to_string();
+                value = value.trim();
+
+                let processed_value = env_var_pattern.replace_all(value, |caps: &regex::Captures| {
+                    let var_name = &caps[1];
+                    env::var(var_name).unwrap_or_else(|_| caps[0].to_string())
+                });
+
+                self.values.insert(key, processed_value.to_string());
+            }
+        }
+        Ok(())
+    }
+
+    pub fn get(&self, key: &str) -> Option<&String> {
+        self.values.get(key)
+    }
+
+    pub fn get_or_default(&self, key: &str, default: &str) -> String {
+        self.values.get(key).map(|s| s.as_str()).unwrap_or(default).to_string()
+    }
+
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.values.contains_key(key)
+    }
+
+    pub fn keys(&self) -> impl Iterator<Item = &String> {
+        self.values.keys()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_basic_parsing() {
+        let mut parser = ConfigParser::new();
+        let content = "HOST=localhost\nPORT=8080\nDEBUG=true";
+        parser.parse_content(content).unwrap();
+
+        assert_eq!(parser.get("HOST"), Some(&"localhost".to_string()));
+        assert_eq!(parser.get("PORT"), Some(&"8080".to_string()));
+        assert_eq!(parser.get("DEBUG"), Some(&"true".to_string()));
+    }
+
+    #[test]
+    fn test_env_var_substitution() {
+        env::set_var("DB_HOST", "postgresql");
+        let mut parser = ConfigParser::new();
+        let content = "DATABASE_URL=jdbc:postgresql://${DB_HOST}:5432/mydb";
+        parser.parse_content(content).unwrap();
+
+        let expected = "jdbc:postgresql://postgresql:5432/mydb";
+        assert_eq!(parser.get("DATABASE_URL"), Some(&expected.to_string()));
+    }
+
+    #[test]
+    fn test_file_parsing() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "API_KEY=secret123").unwrap();
+        writeln!(file, "# This is a comment").unwrap();
+        writeln!(file, "TIMEOUT=30").unwrap();
+
+        let mut parser = ConfigParser::new();
+        parser.parse_file(file.path().to_str().unwrap()).unwrap();
+
+        assert_eq!(parser.get("API_KEY"), Some(&"secret123".to_string()));
+        assert_eq!(parser.get("TIMEOUT"), Some(&"30".to_string()));
+        assert!(!parser.contains_key("COMMENT"));
+    }
 }

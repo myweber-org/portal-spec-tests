@@ -1,151 +1,176 @@
 
-use std::error::Error;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
-use std::path::Path;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use thiserror::Error;
 
-#[derive(Debug, PartialEq)]
+#[derive(Error, Debug)]
+pub enum DataError {
+    #[error("Invalid input data: {0}")]
+    InvalidInput(String),
+    #[error("Transformation failed: {0}")]
+    TransformationFailed(String),
+    #[error("Validation error: {0}")]
+    ValidationError(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DataRecord {
-    id: u32,
-    value: f64,
-    category: String,
+    pub id: u64,
+    pub timestamp: i64,
+    pub values: HashMap<String, f64>,
+    pub tags: Vec<String>,
 }
 
 impl DataRecord {
-    pub fn new(id: u32, value: f64, category: &str) -> Result<Self, String> {
-        if value < 0.0 {
-            return Err("Value cannot be negative".to_string());
-        }
-        if category.is_empty() {
-            return Err("Category cannot be empty".to_string());
-        }
-        
-        Ok(Self {
+    pub fn new(id: u64, timestamp: i64) -> Self {
+        Self {
             id,
-            value,
-            category: category.to_string(),
-        })
+            timestamp,
+            values: HashMap::new(),
+            tags: Vec::new(),
+        }
     }
-    
-    pub fn calculate_tax(&self, rate: f64) -> f64 {
-        self.value * rate
+
+    pub fn add_value(&mut self, key: &str, value: f64) -> Result<(), DataError> {
+        if !value.is_finite() {
+            return Err(DataError::InvalidInput(
+                "Value must be finite number".to_string(),
+            ));
+        }
+        self.values.insert(key.to_string(), value);
+        Ok(())
+    }
+
+    pub fn add_tag(&mut self, tag: &str) {
+        if !self.tags.contains(&tag.to_string()) {
+            self.tags.push(tag.to_string());
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), DataError> {
+        if self.values.is_empty() {
+            return Err(DataError::ValidationError(
+                "Record must contain at least one value".to_string(),
+            ));
+        }
+
+        if self.timestamp < 0 {
+            return Err(DataError::ValidationError(
+                "Timestamp must be non-negative".to_string(),
+            ));
+        }
+
+        Ok(())
     }
 }
 
 pub struct DataProcessor {
     records: Vec<DataRecord>,
+    transformations: Vec<Box<dyn Fn(&DataRecord) -> Result<DataRecord, DataError>>>,
 }
 
 impl DataProcessor {
     pub fn new() -> Self {
         Self {
             records: Vec::new(),
+            transformations: Vec::new(),
         }
     }
-    
-    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<usize, Box<dyn Error>> {
-        let file = File::open(path)?;
-        let reader = BufReader::new(file);
-        
-        let mut count = 0;
-        for (line_num, line) in reader.lines().enumerate() {
-            let line = line?;
-            
-            if line_num == 0 {
-                continue;
+
+    pub fn add_record(&mut self, record: DataRecord) -> Result<(), DataError> {
+        record.validate()?;
+        self.records.push(record);
+        Ok(())
+    }
+
+    pub fn add_transformation<F>(&mut self, transform: F)
+    where
+        F: Fn(&DataRecord) -> Result<DataRecord, DataError> + 'static,
+    {
+        self.transformations.push(Box::new(transform));
+    }
+
+    pub fn process(&self) -> Result<Vec<DataRecord>, DataError> {
+        let mut processed = Vec::with_capacity(self.records.len());
+
+        for record in &self.records {
+            let mut current = record.clone();
+
+            for transform in &self.transformations {
+                current = transform(&current)?;
             }
-            
-            let parts: Vec<&str> = line.split(',').collect();
-            if parts.len() != 3 {
-                continue;
-            }
-            
-            let id = match parts[0].parse::<u32>() {
-                Ok(val) => val,
-                Err(_) => continue,
-            };
-            
-            let value = match parts[1].parse::<f64>() {
-                Ok(val) => val,
-                Err(_) => continue,
-            };
-            
-            let category = parts[2].trim();
-            
-            match DataRecord::new(id, value, category) {
-                Ok(record) => {
-                    self.records.push(record);
-                    count += 1;
-                }
-                Err(_) => continue,
-            }
+
+            processed.push(current);
         }
-        
-        Ok(count)
+
+        Ok(processed)
     }
-    
-    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
-        self.records
-            .iter()
-            .filter(|record| record.category == category)
-            .collect()
-    }
-    
-    pub fn calculate_total(&self) -> f64 {
-        self.records.iter().map(|record| record.value).sum()
-    }
-    
-    pub fn get_average(&self) -> Option<f64> {
+
+    pub fn calculate_statistics(&self) -> HashMap<String, f64> {
+        let mut stats = HashMap::new();
+
         if self.records.is_empty() {
-            None
-        } else {
-            Some(self.calculate_total() / self.records.len() as f64)
+            return stats;
         }
-    }
-    
-    pub fn find_max_value(&self) -> Option<&DataRecord> {
-        self.records.iter().max_by(|a, b| {
-            a.value.partial_cmp(&b.value).unwrap()
-        })
+
+        let mut value_sums: HashMap<String, f64> = HashMap::new();
+        let mut value_counts: HashMap<String, usize> = HashMap::new();
+
+        for record in &self.records {
+            for (key, value) in &record.values {
+                *value_sums.entry(key.clone()).or_insert(0.0) += value;
+                *value_counts.entry(key.clone()).or_insert(0) += 1;
+            }
+        }
+
+        for (key, sum) in value_sums {
+            if let Some(&count) = value_counts.get(&key) {
+                if count > 0 {
+                    stats.insert(format!("{}_average", key), sum / count as f64);
+                }
+            }
+        }
+
+        stats
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
-    fn test_record_creation() {
-        let record = DataRecord::new(1, 100.5, "electronics").unwrap();
-        assert_eq!(record.id, 1);
-        assert_eq!(record.value, 100.5);
-        assert_eq!(record.category, "electronics");
+    fn test_record_validation() {
+        let mut record = DataRecord::new(1, 1234567890);
+        assert!(record.validate().is_err());
+
+        record.add_value("temperature", 25.5).unwrap();
+        assert!(record.validate().is_ok());
     }
-    
+
     #[test]
-    fn test_invalid_record() {
-        let result = DataRecord::new(2, -10.0, "books");
-        assert!(result.is_err());
+    fn test_invalid_value() {
+        let mut record = DataRecord::new(1, 1234567890);
+        let result = record.add_value("invalid", f64::INFINITY);
+        assert!(matches!(result, Err(DataError::InvalidInput(_))));
     }
-    
+
     #[test]
-    fn test_tax_calculation() {
-        let record = DataRecord::new(3, 200.0, "clothing").unwrap();
-        assert_eq!(record.calculate_tax(0.1), 20.0);
-    }
-    
-    #[test]
-    fn test_processor_operations() {
+    fn test_data_processing() {
         let mut processor = DataProcessor::new();
-        processor.records.push(DataRecord::new(1, 50.0, "A").unwrap());
-        processor.records.push(DataRecord::new(2, 150.0, "B").unwrap());
-        processor.records.push(DataRecord::new(3, 100.0, "A").unwrap());
-        
-        assert_eq!(processor.calculate_total(), 300.0);
-        assert_eq!(processor.get_average(), Some(100.0));
-        assert_eq!(processor.filter_by_category("A").len(), 2);
-        
-        let max_record = processor.find_max_value().unwrap();
-        assert_eq!(max_record.value, 150.0);
+        let mut record = DataRecord::new(1, 1234567890);
+        record.add_value("pressure", 1013.25).unwrap();
+        processor.add_record(record).unwrap();
+
+        processor.add_transformation(|r| {
+            let mut transformed = r.clone();
+            for (key, value) in &mut transformed.values {
+                *value *= 1.1;
+            }
+            Ok(transformed)
+        });
+
+        let processed = processor.process().unwrap();
+        assert_eq!(processed[0].values["pressure"], 1114.575);
     }
 }

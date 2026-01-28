@@ -335,3 +335,138 @@ mod tests {
         assert_eq!(processor.get_stats(), (0, 3));
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug)]
+pub struct CsvRecord {
+    pub columns: Vec<String>,
+}
+
+pub struct CsvProcessor {
+    pub records: Vec<CsvRecord>,
+    pub headers: Vec<String>,
+}
+
+impl CsvProcessor {
+    pub fn new() -> Self {
+        CsvProcessor {
+            records: Vec::new(),
+            headers: Vec::new(),
+        }
+    }
+
+    pub fn load_from_file<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut lines = reader.lines();
+
+        if let Some(first_line) = lines.next() {
+            self.headers = first_line?
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .collect();
+        }
+
+        for line_result in lines {
+            let line = line_result?;
+            if line.trim().is_empty() {
+                continue;
+            }
+
+            let columns: Vec<String> = line
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .collect();
+
+            self.records.push(CsvRecord { columns });
+        }
+
+        Ok(())
+    }
+
+    pub fn filter_by_column<F>(&self, column_index: usize, predicate: F) -> Vec<&CsvRecord>
+    where
+        F: Fn(&str) -> bool,
+    {
+        self.records
+            .iter()
+            .filter(|record| {
+                if let Some(value) = record.columns.get(column_index) {
+                    predicate(value)
+                } else {
+                    false
+                }
+            })
+            .collect()
+    }
+
+    pub fn get_column_values(&self, column_index: usize) -> Vec<&str> {
+        self.records
+            .iter()
+            .filter_map(|record| record.columns.get(column_index))
+            .map(|s| s.as_str())
+            .collect()
+    }
+
+    pub fn record_count(&self) -> usize {
+        self.records.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_csv_loading() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,city").unwrap();
+        writeln!(temp_file, "Alice,30,New York").unwrap();
+        writeln!(temp_file, "Bob,25,London").unwrap();
+        writeln!(temp_file, "Charlie,35,Paris").unwrap();
+
+        let mut processor = CsvProcessor::new();
+        let result = processor.load_from_file(temp_file.path());
+        
+        assert!(result.is_ok());
+        assert_eq!(processor.headers, vec!["name", "age", "city"]);
+        assert_eq!(processor.record_count(), 3);
+    }
+
+    #[test]
+    fn test_filter_records() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,city").unwrap();
+        writeln!(temp_file, "Alice,30,New York").unwrap();
+        writeln!(temp_file, "Bob,25,London").unwrap();
+        writeln!(temp_file, "Charlie,35,Paris").unwrap();
+
+        let mut processor = CsvProcessor::new();
+        processor.load_from_file(temp_file.path()).unwrap();
+
+        let filtered = processor.filter_by_column(1, |age| {
+            age.parse::<u32>().map_or(false, |a| a >= 30)
+        });
+
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered.iter().any(|r| r.columns[0] == "Alice"));
+        assert!(filtered.iter().any(|r| r.columns[0] == "Charlie"));
+    }
+
+    #[test]
+    fn test_empty_file() {
+        let temp_file = NamedTempFile::new().unwrap();
+        
+        let mut processor = CsvProcessor::new();
+        let result = processor.load_from_file(temp_file.path());
+        
+        assert!(result.is_ok());
+        assert_eq!(processor.headers.len(), 0);
+        assert_eq!(processor.record_count(), 0);
+    }
+}

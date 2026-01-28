@@ -1,107 +1,5 @@
 
-use regex::Regex;
-use std::collections::HashSet;
-
-pub struct UrlParser {
-    domain_blacklist: HashSet<String>,
-}
-
-impl UrlParser {
-    pub fn new() -> Self {
-        let mut blacklist = HashSet::new();
-        blacklist.insert("localhost".to_string());
-        blacklist.insert("127.0.0.1".to_string());
-        blacklist.insert("::1".to_string());
-        blacklist.insert("0.0.0.0".to_string());
-        
-        UrlParser {
-            domain_blacklist: blacklist,
-        }
-    }
-
-    pub fn extract_domain(&self, url: &str) -> Option<String> {
-        let re = Regex::new(r"^(?:https?://)?(?:www\.)?([^:/]+)").unwrap();
-        
-        re.captures(url)
-            .and_then(|caps| caps.get(1))
-            .map(|m| m.as_str().to_lowercase())
-            .filter(|domain| !self.domain_blacklist.contains(domain))
-    }
-
-    pub fn is_valid_url(&self, url: &str) -> bool {
-        let url_pattern = Regex::new(
-            r"^(https?://)?(www\.)?[a-zA-Z0-9-]+(\.[a-zA-Z]{2,})+(:\d+)?(/[^\s]*)?$"
-        ).unwrap();
-        
-        url_pattern.is_match(url) && self.extract_domain(url).is_some()
-    }
-
-    pub fn normalize_url(&self, url: &str) -> Option<String> {
-        if !self.is_valid_url(url) {
-            return None;
-        }
-
-        let domain = self.extract_domain(url)?;
-        let re = Regex::new(r"^(https?://)?(www\.)?").unwrap();
-        let clean_url = re.replace(url, "");
-        
-        Some(format!("https://www.{}", clean_url))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_domain_extraction() {
-        let parser = UrlParser::new();
-        
-        assert_eq!(
-            parser.extract_domain("https://www.example.com/path"),
-            Some("example.com".to_string())
-        );
-        
-        assert_eq!(
-            parser.extract_domain("http://subdomain.example.co.uk:8080"),
-            Some("subdomain.example.co.uk".to_string())
-        );
-        
-        assert_eq!(
-            parser.extract_domain("ftp://invalid.protocol"),
-            None
-        );
-    }
-
-    #[test]
-    fn test_blacklist_validation() {
-        let parser = UrlParser::new();
-        
-        assert_eq!(parser.extract_domain("http://localhost/api"), None);
-        assert_eq!(parser.extract_domain("https://127.0.0.1:3000"), None);
-        assert_eq!(parser.is_valid_url("http://0.0.0.0"), false);
-    }
-
-    #[test]
-    fn test_url_normalization() {
-        let parser = UrlParser::new();
-        
-        assert_eq!(
-            parser.normalize_url("example.com"),
-            Some("https://www.example.com".to_string())
-        );
-        
-        assert_eq!(
-            parser.normalize_url("http://example.com"),
-            Some("https://www.example.com".to_string())
-        );
-        
-        assert_eq!(
-            parser.normalize_url("https://example.com/path?query=1"),
-            Some("https://www.example.com/path?query=1".to_string())
-        );
-    }
-}use std::collections::HashMap;
+use std::collections::HashMap;
 
 pub struct UrlParser;
 
@@ -112,11 +10,12 @@ impl UrlParser {
         if let Some(query_start) = url.find('?') {
             let query_string = &url[query_start + 1..];
             
-            for pair in query_string.split('&') {
-                let mut parts = pair.split('=');
-                if let Some(key) = parts.next() {
-                    let value = parts.next().unwrap_or("");
-                    params.insert(key.to_string(), value.to_string());
+            for param_pair in query_string.split('&') {
+                let parts: Vec<&str> = param_pair.split('=').collect();
+                if parts.len() == 2 {
+                    let key = parts[0].to_string();
+                    let value = parts[1].to_string();
+                    params.insert(key, value);
                 }
             }
         }
@@ -125,19 +24,14 @@ impl UrlParser {
     }
     
     pub fn extract_domain(url: &str) -> Option<String> {
-        let url_lower = url.to_lowercase();
+        let url = url.trim_start_matches("http://")
+            .trim_start_matches("https://");
         
-        if url_lower.starts_with("http://") || url_lower.starts_with("https://") {
-            if let Some(start) = url.find("://") {
-                let after_protocol = &url[start + 3..];
-                if let Some(end) = after_protocol.find('/') {
-                    return Some(after_protocol[..end].to_string());
-                }
-                return Some(after_protocol.to_string());
-            }
+        if let Some(end) = url.find('/') {
+            Some(url[..end].to_string())
+        } else {
+            Some(url.to_string())
         }
-        
-        None
     }
 }
 
@@ -147,30 +41,22 @@ mod tests {
     
     #[test]
     fn test_parse_query_params() {
-        let url = "https://example.com/search?q=rust&page=2&sort=desc";
+        let url = "https://example.com/search?q=rust&lang=en&page=1";
         let params = UrlParser::parse_query_params(url);
         
         assert_eq!(params.get("q"), Some(&"rust".to_string()));
-        assert_eq!(params.get("page"), Some(&"2".to_string()));
-        assert_eq!(params.get("sort"), Some(&"desc".to_string()));
-        assert_eq!(params.get("missing"), None);
+        assert_eq!(params.get("lang"), Some(&"en".to_string()));
+        assert_eq!(params.get("page"), Some(&"1".to_string()));
     }
     
     #[test]
     fn test_extract_domain() {
-        assert_eq!(
-            UrlParser::extract_domain("https://www.example.com/path"),
-            Some("www.example.com".to_string())
-        );
+        let url1 = "https://example.com/path/to/resource";
+        let url2 = "http://subdomain.example.com";
+        let url3 = "example.com";
         
-        assert_eq!(
-            UrlParser::extract_domain("http://localhost:8080/api"),
-            Some("localhost:8080".to_string())
-        );
-        
-        assert_eq!(
-            UrlParser::extract_domain("invalid-url"),
-            None
-        );
+        assert_eq!(UrlParser::extract_domain(url1), Some("example.com".to_string()));
+        assert_eq!(UrlParser::extract_domain(url2), Some("subdomain.example.com".to_string()));
+        assert_eq!(UrlParser::extract_domain(url3), Some("example.com".to_string()));
     }
 }

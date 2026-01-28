@@ -1,81 +1,94 @@
+
+use csv::Reader;
+use serde::Deserialize;
 use std::error::Error;
 use std::fs::File;
-use std::path::Path;
 
-pub struct DataSet {
-    values: Vec<f64>,
+#[derive(Debug, Deserialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    category: String,
 }
 
-impl DataSet {
+pub struct DataProcessor {
+    records: Vec<Record>,
+}
+
+impl DataProcessor {
     pub fn new() -> Self {
-        DataSet { values: Vec::new() }
+        DataProcessor { records: Vec::new() }
     }
 
-    pub fn from_csv<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn Error>> {
-        let file = File::open(path)?;
-        let mut rdr = csv::Reader::from_reader(file);
-        let mut values = Vec::new();
+    pub fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let mut rdr = Reader::from_reader(file);
 
-        for result in rdr.records() {
-            let record = result?;
-            if let Some(field) = record.get(0) {
-                if let Ok(num) = field.parse::<f64>() {
-                    values.push(num);
-                }
-            }
+        for result in rdr.deserialize() {
+            let record: Record = result?;
+            self.records.push(record);
         }
 
-        Ok(DataSet { values })
-    }
-
-    pub fn add_value(&mut self, value: f64) {
-        self.values.push(value);
-    }
-
-    pub fn calculate_mean(&self) -> Option<f64> {
-        if self.values.is_empty() {
-            return None;
-        }
-        let sum: f64 = self.values.iter().sum();
-        Some(sum / self.values.len() as f64)
-    }
-
-    pub fn calculate_std_dev(&self) -> Option<f64> {
-        if self.values.len() < 2 {
-            return None;
-        }
-        let mean = self.calculate_mean()?;
-        let variance: f64 = self.values
-            .iter()
-            .map(|&x| (x - mean).powi(2))
-            .sum::<f64>() / (self.values.len() - 1) as f64;
-        Some(variance.sqrt())
-    }
-
-    pub fn get_summary(&self) -> DataSummary {
-        DataSummary {
-            count: self.values.len(),
-            mean: self.calculate_mean(),
-            std_dev: self.calculate_std_dev(),
-        }
-    }
-}
-
-pub struct DataSummary {
-    pub count: usize,
-    pub mean: Option<f64>,
-    pub std_dev: Option<f64>,
-}
-
-impl std::fmt::Display for DataSummary {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Count: {}", self.count)?;
-        if let Some(mean) = self.mean {
-            write!(f, ", Mean: {:.4}", mean)?;
-        }
-        if let Some(std_dev) = self.std_dev {
-            write!(f, ", Std Dev: {:.4}", std_dev)?;
-        }
         Ok(())
+    }
+
+    pub fn validate_records(&self) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|r| r.value >= 0.0 && !r.name.is_empty())
+            .collect()
+    }
+
+    pub fn calculate_average(&self) -> Option<f64> {
+        let valid_records = self.validate_records();
+        if valid_records.is_empty() {
+            return None;
+        }
+
+        let sum: f64 = valid_records.iter().map(|r| r.value).sum();
+        Some(sum / valid_records.len() as f64)
+    }
+
+    pub fn group_by_category(&self) -> std::collections::HashMap<String, Vec<&Record>> {
+        let mut categories = std::collections::HashMap::new();
+        
+        for record in &self.records {
+            categories
+                .entry(record.category.clone())
+                .or_insert_with(Vec::new)
+                .push(record);
+        }
+        
+        categories
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_data_processing() {
+        let mut processor = DataProcessor::new();
+        
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,name,value,category").unwrap();
+        writeln!(temp_file, "1,ItemA,10.5,Category1").unwrap();
+        writeln!(temp_file, "2,ItemB,15.2,Category2").unwrap();
+        writeln!(temp_file, "3,ItemC,8.7,Category1").unwrap();
+        
+        let result = processor.load_from_csv(temp_file.path().to_str().unwrap());
+        assert!(result.is_ok());
+        
+        let average = processor.calculate_average();
+        assert!(average.is_some());
+        assert!((average.unwrap() - 11.466666666666666).abs() < 0.0001);
+        
+        let categories = processor.group_by_category();
+        assert_eq!(categories.get("Category1").unwrap().len(), 2);
+        assert_eq!(categories.get("Category2").unwrap().len(), 1);
     }
 }

@@ -98,3 +98,150 @@ mod tests {
         assert_eq!(column, vec!["b".to_string(), "e".to_string()]);
     }
 }
+use std::collections::HashMap;
+
+pub struct DataProcessor {
+    data: HashMap<String, Vec<f64>>,
+    validation_rules: ValidationRules,
+}
+
+pub struct ValidationRules {
+    min_value: f64,
+    max_value: f64,
+    required_keys: Vec<String>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            data: HashMap::new(),
+            validation_rules: ValidationRules {
+                min_value: 0.0,
+                max_value: 100.0,
+                required_keys: vec!["temperature".to_string(), "pressure".to_string()],
+            },
+        }
+    }
+
+    pub fn add_dataset(&mut self, key: String, values: Vec<f64>) -> Result<(), String> {
+        if values.is_empty() {
+            return Err("Dataset cannot be empty".to_string());
+        }
+
+        for &value in &values {
+            if value < self.validation_rules.min_value || value > self.validation_rules.max_value {
+                return Err(format!("Value {} out of valid range [{}, {}]", 
+                    value, self.validation_rules.min_value, self.validation_rules.max_value));
+            }
+        }
+
+        self.data.insert(key, values);
+        Ok(())
+    }
+
+    pub fn validate_all_datasets(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        for required_key in &self.validation_rules.required_keys {
+            if !self.data.contains_key(required_key) {
+                errors.push(format!("Missing required dataset: {}", required_key));
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+
+    pub fn calculate_statistics(&self, key: &str) -> Option<Statistics> {
+        self.data.get(key).map(|values| {
+            let sum: f64 = values.iter().sum();
+            let count = values.len() as f64;
+            let mean = sum / count;
+
+            let variance: f64 = values.iter()
+                .map(|&x| (x - mean).powi(2))
+                .sum::<f64>() / count;
+
+            Statistics {
+                mean,
+                variance,
+                count: values.len(),
+                min: *values.iter().fold(&f64::INFINITY, |a, b| a.min(b)),
+                max: *values.iter().fold(&f64::NEG_INFINITY, |a, b| a.max(b)),
+            }
+        })
+    }
+
+    pub fn normalize_data(&mut self, key: &str) -> Result<(), String> {
+        if let Some(values) = self.data.get_mut(key) {
+            let stats = self.calculate_statistics(key).unwrap();
+            
+            if stats.variance == 0.0 {
+                return Err("Cannot normalize data with zero variance".to_string());
+            }
+
+            for value in values.iter_mut() {
+                *value = (*value - stats.mean) / stats.variance.sqrt();
+            }
+            Ok(())
+        } else {
+            Err(format!("Dataset '{}' not found", key))
+        }
+    }
+}
+
+pub struct Statistics {
+    pub mean: f64,
+    pub variance: f64,
+    pub count: usize,
+    pub min: f64,
+    pub max: f64,
+}
+
+impl DataProcessor {
+    pub fn merge_processors(&self, other: &DataProcessor) -> DataProcessor {
+        let mut merged = DataProcessor::new();
+        
+        for (key, values) in &self.data {
+            let _ = merged.add_dataset(key.clone(), values.clone());
+        }
+        
+        for (key, values) in &other.data {
+            let _ = merged.add_dataset(key.clone(), values.clone());
+        }
+        
+        merged
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_add_valid_dataset() {
+        let mut processor = DataProcessor::new();
+        let result = processor.add_dataset("test".to_string(), vec![10.0, 20.0, 30.0]);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_add_invalid_dataset() {
+        let mut processor = DataProcessor::new();
+        let result = processor.add_dataset("test".to_string(), vec![150.0]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_calculate_statistics() {
+        let mut processor = DataProcessor::new();
+        processor.add_dataset("values".to_string(), vec![1.0, 2.0, 3.0, 4.0, 5.0]).unwrap();
+        
+        let stats = processor.calculate_statistics("values").unwrap();
+        assert_eq!(stats.mean, 3.0);
+        assert_eq!(stats.count, 5);
+    }
+}

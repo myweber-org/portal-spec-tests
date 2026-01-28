@@ -463,4 +463,130 @@ mod tests {
         assert_eq!(records.len(), 3);
         Ok(())
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+pub struct CsvConfig {
+    delimiter: char,
+    selected_columns: Vec<usize>,
+    skip_header: bool,
+}
+
+impl Default for CsvConfig {
+    fn default() -> Self {
+        CsvConfig {
+            delimiter: ',',
+            selected_columns: Vec::new(),
+            skip_header: false,
+        }
+    }
+}
+
+impl CsvConfig {
+    pub fn new(delimiter: char, selected_columns: Vec<usize>, skip_header: bool) -> Self {
+        CsvConfig {
+            delimiter,
+            selected_columns,
+            skip_header,
+        }
+    }
+}
+
+pub struct CsvProcessor {
+    config: CsvConfig,
+}
+
+impl CsvProcessor {
+    pub fn new(config: CsvConfig) -> Self {
+        CsvProcessor { config }
+    }
+
+    pub fn process_file<P: AsRef<Path>>(&self, path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut results = Vec::new();
+        let mut line_number = 0;
+
+        for line in reader.lines() {
+            let line = line?;
+            line_number += 1;
+
+            if self.config.skip_header && line_number == 1 {
+                continue;
+            }
+
+            let processed_row = self.process_line(&line);
+            results.push(processed_row);
+        }
+
+        Ok(results)
+    }
+
+    fn process_line(&self, line: &str) -> Vec<String> {
+        let parts: Vec<&str> = line.split(self.config.delimiter).collect();
+        
+        if self.config.selected_columns.is_empty() {
+            parts.iter().map(|&s| s.to_string()).collect()
+        } else {
+            self.config.selected_columns
+                .iter()
+                .filter_map(|&idx| parts.get(idx).map(|&s| s.to_string()))
+                .collect()
+        }
+    }
+
+    pub fn summarize(&self, data: &[Vec<String>]) -> (usize, usize) {
+        let row_count = data.len();
+        let col_count = if row_count > 0 { data[0].len() } else { 0 };
+        (row_count, col_count)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_basic_processing() {
+        let config = CsvConfig::default();
+        let processor = CsvProcessor::new(config);
+        
+        let mut temp_file = NamedTempFile::new().unwrap();
+        write!(temp_file, "a,b,c\n1,2,3\n4,5,6").unwrap();
+        
+        let result = processor.process_file(temp_file.path()).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], vec!["1", "2", "3"]);
+    }
+
+    #[test]
+    fn test_column_selection() {
+        let config = CsvConfig::new(',', vec![0, 2], false);
+        let processor = CsvProcessor::new(config);
+        
+        let mut temp_file = NamedTempFile::new().unwrap();
+        write!(temp_file, "a,b,c\n1,2,3\n4,5,6").unwrap();
+        
+        let result = processor.process_file(temp_file.path()).unwrap();
+        assert_eq!(result[0], vec!["1", "3"]);
+        assert_eq!(result[1], vec!["4", "6"]);
+    }
+
+    #[test]
+    fn test_summarize() {
+        let config = CsvConfig::default();
+        let processor = CsvProcessor::new(config);
+        let data = vec![
+            vec!["a".to_string(), "b".to_string()],
+            vec!["c".to_string(), "d".to_string()],
+        ];
+        
+        let (rows, cols) = processor.summarize(&data);
+        assert_eq!(rows, 2);
+        assert_eq!(cols, 2);
+    }
 }

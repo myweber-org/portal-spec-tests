@@ -1,88 +1,65 @@
-use sha2::{Digest, Sha256};
-use rand::RngCore;
+use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce,
+};
+use anyhow::{Context, Result};
 
-/// Generates a cryptographically secure random byte array of the specified length.
-pub fn generate_random_bytes(length: usize) -> Vec<u8> {
-    let mut rng = rand::thread_rng();
-    let mut bytes = vec![0u8; length];
-    rng.fill_bytes(&mut bytes);
-    bytes
+pub fn encrypt_data(plaintext: &[u8], key: &[u8; 32]) -> Result<Vec<u8>> {
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+    let nonce = Nonce::generate(&mut OsRng);
+    
+    let ciphertext = cipher
+        .encrypt(&nonce, plaintext)
+        .context("Encryption failed")?;
+    
+    let mut result = Vec::with_capacity(nonce.len() + ciphertext.len());
+    result.extend_from_slice(nonce.as_slice());
+    result.extend_from_slice(&ciphertext);
+    
+    Ok(result)
 }
 
-/// Computes the SHA-256 hash of the input data and returns it as a hex string.
-pub fn sha256_hash(data: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(data);
-    let result = hasher.finalize();
-    hex::encode(result)
+pub fn decrypt_data(ciphertext: &[u8], key: &[u8; 32]) -> Result<Vec<u8>> {
+    if ciphertext.len() < 12 {
+        anyhow::bail!("Ciphertext too short");
+    }
+    
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+    let (nonce_bytes, encrypted_data) = ciphertext.split_at(12);
+    let nonce = Nonce::from_slice(nonce_bytes);
+    
+    let plaintext = cipher
+        .decrypt(nonce, encrypted_data)
+        .context("Decryption failed")?;
+    
+    Ok(plaintext)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hex_literal::hex;
 
     #[test]
-    fn test_generate_random_bytes_length() {
-        let bytes = generate_random_bytes(32);
-        assert_eq!(bytes.len(), 32);
+    fn test_encryption_roundtrip() {
+        let key = hex!("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
+        let plaintext = b"Secret message for encryption test";
+        
+        let ciphertext = encrypt_data(plaintext, &key).unwrap();
+        let decrypted = decrypt_data(&ciphertext, &key).unwrap();
+        
+        assert_eq!(plaintext, decrypted.as_slice());
     }
-
+    
     #[test]
-    fn test_sha256_hash() {
-        let data = b"hello, world";
-        let hash = sha256_hash(data);
-        let expected = "09ca7e4eaa6e8ae9c7d261167129184883644d07dfba7cbfbc4c8a2e08360d5b";
-        assert_eq!(hash, expected);
+    fn test_tampered_ciphertext() {
+        let key = hex!("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
+        let plaintext = b"Test message";
+        
+        let mut ciphertext = encrypt_data(plaintext, &key).unwrap();
+        ciphertext[20] ^= 0x01;
+        
+        let result = decrypt_data(&ciphertext, &key);
+        assert!(result.is_err());
     }
-}
-use rand::{thread_rng, Rng};
-use rand::distributions::Alphanumeric;
-
-pub fn generate_password(length: usize) -> String {
-    let mut rng = thread_rng();
-    (0..length)
-        .map(|_| rng.sample(Alphanumeric) as char)
-        .collect()
-}
-
-pub fn generate_secure_token() -> [u8; 32] {
-    let mut token = [0u8; 32];
-    thread_rng().fill(&mut token);
-    token
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_password_length() {
-        let password = generate_password(16);
-        assert_eq!(password.len(), 16);
-    }
-
-    #[test]
-    fn test_token_size() {
-        let token = generate_secure_token();
-        assert_eq!(token.len(), 32);
-    }
-}
-use rand::Rng;
-use sha2::{Digest, Sha256};
-
-pub fn generate_random_bytes(length: usize) -> Vec<u8> {
-    let mut rng = rand::thread_rng();
-    (0..length).map(|_| rng.gen()).collect()
-}
-
-pub fn sha256_hash(data: &[u8]) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    hasher.update(data);
-    hasher.finalize().into()
-}
-
-pub fn generate_secure_token() -> String {
-    let random_bytes = generate_random_bytes(32);
-    let hash = sha256_hash(&random_bytes);
-    hex::encode(hash)
 }

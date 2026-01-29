@@ -326,4 +326,83 @@ mod tests {
         assert_eq!(stats.get("mean").unwrap(), &3.0);
         assert_eq!(stats.get("count").unwrap(), &5.0);
     }
+}use std::collections::HashSet;
+
+pub struct DataCleaner {
+    records: Vec<String>,
+    seen: HashSet<String>,
+}
+
+impl DataCleaner {
+    pub fn new() -> Self {
+        DataCleaner {
+            records: Vec::new(),
+            seen: HashSet::new(),
+        }
+    }
+
+    pub fn add_record(&mut self, record: &str) -> bool {
+        let trimmed = record.trim().to_lowercase();
+        
+        if trimmed.is_empty() {
+            return false;
+        }
+
+        if self.seen.insert(trimmed.clone()) {
+            self.records.push(trimmed);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn validate_records(&self) -> Vec<&String> {
+        self.records
+            .iter()
+            .filter(|record| record.len() >= 3 && record.len() <= 100)
+            .collect()
+    }
+
+    pub fn get_unique_count(&self) -> usize {
+        self.seen.len()
+    }
+
+    pub fn clear(&mut self) {
+        self.records.clear();
+        self.seen.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_deduplication() {
+        let mut cleaner = DataCleaner::new();
+        assert!(cleaner.add_record("test"));
+        assert!(!cleaner.add_record("test"));
+        assert!(cleaner.add_record("TEST"));
+        assert_eq!(cleaner.get_unique_count(), 1);
+    }
+
+    #[test]
+    fn test_validation() {
+        let mut cleaner = DataCleaner::new();
+        cleaner.add_record("ab");
+        cleaner.add_record("valid");
+        cleaner.add_record(&"x".repeat(101));
+        
+        let valid = cleaner.validate_records();
+        assert_eq!(valid.len(), 1);
+        assert_eq!(valid[0], "valid");
+    }
+
+    #[test]
+    fn test_empty_record() {
+        let mut cleaner = DataCleaner::new();
+        assert!(!cleaner.add_record(""));
+        assert!(!cleaner.add_record("   "));
+        assert_eq!(cleaner.get_unique_count(), 0);
+    }
 }

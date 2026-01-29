@@ -423,3 +423,111 @@ mod tests {
         assert!((avg_age - 30.0).abs() < 0.001);
     }
 }
+use std::collections::HashMap;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    id: u64,
+    values: Vec<f64>,
+    metadata: HashMap<String, String>,
+}
+
+impl DataRecord {
+    pub fn new(id: u64, values: Vec<f64>) -> Self {
+        Self {
+            id,
+            values,
+            metadata: HashMap::new(),
+        }
+    }
+
+    pub fn add_metadata(&mut self, key: &str, value: &str) {
+        self.metadata.insert(key.to_string(), value.to_string());
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.id == 0 {
+            return Err("ID cannot be zero".to_string());
+        }
+
+        if self.values.is_empty() {
+            return Err("Values vector cannot be empty".to_string());
+        }
+
+        for value in &self.values {
+            if !value.is_finite() {
+                return Err("All values must be finite numbers".to_string());
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn normalize(&mut self) {
+        let sum: f64 = self.values.iter().sum();
+        if sum != 0.0 {
+            for value in &mut self.values {
+                *value /= sum;
+            }
+        }
+    }
+
+    pub fn calculate_statistics(&self) -> (f64, f64, f64) {
+        let count = self.values.len() as f64;
+        let sum: f64 = self.values.iter().sum();
+        let mean = sum / count;
+
+        let variance: f64 = self.values
+            .iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>() / count;
+
+        let std_dev = variance.sqrt();
+
+        (mean, variance, std_dev)
+    }
+}
+
+pub fn process_records(records: &mut [DataRecord]) -> Result<Vec<DataRecord>, String> {
+    let mut processed = Vec::new();
+
+    for record in records {
+        record.validate()?;
+        let mut processed_record = record.clone();
+        processed_record.normalize();
+        processed.push(processed_record);
+    }
+
+    Ok(processed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_record_validation() {
+        let valid_record = DataRecord::new(1, vec![1.0, 2.0, 3.0]);
+        assert!(valid_record.validate().is_ok());
+
+        let invalid_record = DataRecord::new(0, vec![1.0, 2.0]);
+        assert!(invalid_record.validate().is_err());
+    }
+
+    #[test]
+    fn test_normalization() {
+        let mut record = DataRecord::new(1, vec![1.0, 2.0, 3.0]);
+        record.normalize();
+        let sum: f64 = record.values.iter().sum();
+        assert!((sum - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_statistics() {
+        let record = DataRecord::new(1, vec![1.0, 2.0, 3.0, 4.0]);
+        let (mean, variance, std_dev) = record.calculate_statistics();
+        assert!((mean - 2.5).abs() < 1e-10);
+        assert!((variance - 1.25).abs() < 1e-10);
+        assert!((std_dev - 1.118033988749895).abs() < 1e-10);
+    }
+}

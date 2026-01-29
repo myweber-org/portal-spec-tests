@@ -153,4 +153,64 @@ pub fn decrypt_file(input_path: &str, output_path: &str) -> Result<(), Box<dyn s
     
     fs::write(output_path, decrypted_data)?;
     Ok(())
+}use aes_gcm::{
+    aead::{Aead, KeyInit},
+    Aes256Gcm, Key, Nonce
+};
+use rand::rngs::OsRng;
+use rand::RngCore;
+
+pub fn encrypt_data(plaintext: &[u8], key: &[u8; 32]) -> Result<Vec<u8>, String> {
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+    let mut nonce = [0u8; 12];
+    OsRng.fill_bytes(&mut nonce);
+    
+    cipher.encrypt(Nonce::from_slice(&nonce), plaintext)
+        .map(|mut ciphertext| {
+            ciphertext.splice(0..0, nonce.iter().copied());
+            ciphertext
+        })
+        .map_err(|e| format!("Encryption failed: {}", e))
+}
+
+pub fn decrypt_data(ciphertext: &[u8], key: &[u8; 32]) -> Result<Vec<u8>, String> {
+    if ciphertext.len() < 12 {
+        return Err("Invalid ciphertext length".into());
+    }
+    
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+    let (nonce_bytes, encrypted_data) = ciphertext.split_at(12);
+    let nonce = Nonce::from_slice(nonce_bytes);
+    
+    cipher.decrypt(nonce, encrypted_data)
+        .map_err(|e| format!("Decryption failed: {}", e))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hex::encode;
+
+    #[test]
+    fn test_encryption_roundtrip() {
+        let key = [0x42; 32];
+        let plaintext = b"Secret message for encryption";
+        
+        let encrypted = encrypt_data(plaintext, &key).unwrap();
+        assert_ne!(plaintext, encrypted.as_slice());
+        
+        let decrypted = decrypt_data(&encrypted, &key).unwrap();
+        assert_eq!(plaintext, decrypted.as_slice());
+    }
+    
+    #[test]
+    fn test_key_integrity() {
+        let key1 = [0x01; 32];
+        let key2 = [0x02; 32];
+        let plaintext = b"Test data";
+        
+        let encrypted = encrypt_data(plaintext, &key1).unwrap();
+        let result = decrypt_data(&encrypted, &key2);
+        assert!(result.is_err());
+    }
 }

@@ -498,4 +498,134 @@ mod tests {
         assert!(!processor.validate_record(1, 50000.0, "Valid"));
         assert!(!processor.validate_record(1, 50.0, ""));
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::collections::HashMap;
+
+pub struct DataProcessor {
+    records: Vec<HashMap<String, f64>>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        let mut lines = reader.lines();
+        
+        let header = match lines.next() {
+            Some(Ok(h)) => h,
+            _ => return Err("Empty file or missing header".into()),
+        };
+        
+        let columns: Vec<String> = header.split(',').map(|s| s.trim().to_string()).collect();
+        
+        for line in lines {
+            let line = line?;
+            let values: Vec<&str> = line.split(',').map(|s| s.trim()).collect();
+            
+            if values.len() != columns.len() {
+                continue;
+            }
+            
+            let mut record = HashMap::new();
+            for (i, col) in columns.iter().enumerate() {
+                if let Ok(num) = values[i].parse::<f64>() {
+                    record.insert(col.clone(), num);
+                }
+            }
+            
+            if !record.is_empty() {
+                self.records.push(record);
+            }
+        }
+        
+        Ok(())
+    }
+
+    pub fn calculate_statistics(&self, column: &str) -> Option<(f64, f64, f64)> {
+        let values: Vec<f64> = self.records
+            .iter()
+            .filter_map(|r| r.get(column).copied())
+            .collect();
+        
+        if values.is_empty() {
+            return None;
+        }
+        
+        let sum: f64 = values.iter().sum();
+        let count = values.len() as f64;
+        let mean = sum / count;
+        
+        let variance: f64 = values.iter()
+            .map(|v| (v - mean).powi(2))
+            .sum::<f64>() / count;
+        
+        let std_dev = variance.sqrt();
+        
+        Some((mean, variance, std_dev))
+    }
+
+    pub fn filter_records<F>(&self, predicate: F) -> Vec<HashMap<String, f64>>
+    where
+        F: Fn(&HashMap<String, f64>) -> bool,
+    {
+        self.records
+            .iter()
+            .filter(|r| predicate(r))
+            .cloned()
+            .collect()
+    }
+
+    pub fn get_column_names(&self) -> Vec<String> {
+        if let Some(first) = self.records.first() {
+            first.keys().cloned().collect()
+        } else {
+            Vec::new()
+        }
+    }
+
+    pub fn record_count(&self) -> usize {
+        self.records.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_data_processor() {
+        let mut processor = DataProcessor::new();
+        
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,value,timestamp").unwrap();
+        writeln!(temp_file, "1,23.5,1625097600").unwrap();
+        writeln!(temp_file, "2,42.1,1625184000").unwrap();
+        writeln!(temp_file, "3,17.8,1625270400").unwrap();
+        
+        let result = processor.load_csv(temp_file.path().to_str().unwrap());
+        assert!(result.is_ok());
+        assert_eq!(processor.record_count(), 3);
+        
+        let stats = processor.calculate_statistics("value");
+        assert!(stats.is_some());
+        
+        let (mean, _, std_dev) = stats.unwrap();
+        assert!((mean - 27.8).abs() < 0.01);
+        assert!(std_dev > 0.0);
+        
+        let filtered = processor.filter_records(|r| {
+            r.get("value").map_or(false, |&v| v > 20.0)
+        });
+        assert_eq!(filtered.len(), 2);
+    }
 }

@@ -94,3 +94,139 @@ mod tests {
         assert!(stats.1.is_some());
     }
 }
+use csv::{ReaderBuilder, WriterBuilder};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::path::Path;
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
+}
+
+pub struct DataProcessor {
+    records: Vec<Record>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn Error>> {
+        let mut reader = ReaderBuilder::new()
+            .has_headers(true)
+            .from_path(path)?;
+
+        for result in reader.deserialize() {
+            let record: Record = result?;
+            self.records.push(record);
+        }
+
+        Ok(())
+    }
+
+    pub fn save_to_csv<P: AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn Error>> {
+        let mut writer = WriterBuilder::new()
+            .has_headers(true)
+            .from_path(path)?;
+
+        for record in &self.records {
+            writer.serialize(record)?;
+        }
+
+        writer.flush()?;
+        Ok(())
+    }
+
+    pub fn add_record(&mut self, id: u32, name: String, value: f64, active: bool) {
+        self.records.push(Record {
+            id,
+            name,
+            value,
+            active,
+        });
+    }
+
+    pub fn filter_active(&self) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|record| record.active)
+            .collect()
+    }
+
+    pub fn calculate_total(&self) -> f64 {
+        self.records
+            .iter()
+            .map(|record| record.value)
+            .sum()
+    }
+
+    pub fn find_by_id(&self, target_id: u32) -> Option<&Record> {
+        self.records
+            .iter()
+            .find(|record| record.id == target_id)
+    }
+
+    pub fn clear(&mut self) {
+        self.records.clear();
+    }
+
+    pub fn count(&self) -> usize {
+        self.records.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_data_processor_operations() {
+        let mut processor = DataProcessor::new();
+        
+        assert_eq!(processor.count(), 0);
+        
+        processor.add_record(1, "Test".to_string(), 10.5, true);
+        processor.add_record(2, "Sample".to_string(), 20.0, false);
+        
+        assert_eq!(processor.count(), 2);
+        assert_eq!(processor.calculate_total(), 30.5);
+        
+        let active_records = processor.filter_active();
+        assert_eq!(active_records.len(), 1);
+        
+        let found = processor.find_by_id(1);
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().name, "Test");
+        
+        processor.clear();
+        assert_eq!(processor.count(), 0);
+    }
+
+    #[test]
+    fn test_csv_operations() -> Result<(), Box<dyn Error>> {
+        let mut processor = DataProcessor::new();
+        processor.add_record(1, "Alpha".to_string(), 15.75, true);
+        processor.add_record(2, "Beta".to_string(), 25.50, false);
+        
+        let temp_file = NamedTempFile::new()?;
+        let path = temp_file.path();
+        
+        processor.save_to_csv(path)?;
+        
+        let mut new_processor = DataProcessor::new();
+        new_processor.load_from_csv(path)?;
+        
+        assert_eq!(new_processor.count(), 2);
+        assert_eq!(new_processor.calculate_total(), 41.25);
+        
+        Ok(())
+    }
+}

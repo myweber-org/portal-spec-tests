@@ -456,3 +456,59 @@ mod tests {
         assert_eq!(invalid, vec![1, 2]);
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::path::Path;
+
+pub struct DataProcessor {
+    delimiter: char,
+    has_headers: bool,
+}
+
+impl DataProcessor {
+    pub fn new(delimiter: char, has_headers: bool) -> Self {
+        DataProcessor {
+            delimiter,
+            has_headers,
+        }
+    }
+
+    pub fn process_file<P: AsRef<Path>>(&self, file_path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let mut rdr = csv::ReaderBuilder::new()
+            .delimiter(self.delimiter as u8)
+            .has_headers(self.has_headers)
+            .from_reader(file);
+
+        let mut records = Vec::new();
+        for result in rdr.records() {
+            let record = result?;
+            let fields: Vec<String> = record.iter().map(|s| s.to_string()).collect();
+            records.push(fields);
+        }
+
+        Ok(records)
+    }
+
+    pub fn validate_data(&self, data: &[Vec<String>], expected_columns: usize) -> Result<(), String> {
+        for (index, row) in data.iter().enumerate() {
+            if row.len() != expected_columns {
+                return Err(format!(
+                    "Row {} has {} columns, expected {}",
+                    index,
+                    row.len(),
+                    expected_columns
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+pub fn calculate_average(numbers: &[f64]) -> Option<f64> {
+    if numbers.is_empty() {
+        return None;
+    }
+    let sum: f64 = numbers.iter().sum();
+    Some(sum / numbers.len() as f64)
+}

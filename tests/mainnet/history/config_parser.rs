@@ -118,4 +118,61 @@ mod tests {
         let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
         assert_eq!(config.get("VALUE"), Some(&"${MISSING_VAR}".to_string()));
     }
+}use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::Path;
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AppConfig {
+    pub server_address: String,
+    pub port: u16,
+    pub max_connections: usize,
+    pub enable_logging: bool,
+    pub log_level: String,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        AppConfig {
+            server_address: String::from("127.0.0.1"),
+            port: 8080,
+            max_connections: 100,
+            enable_logging: true,
+            log_level: String::from("info"),
+        }
+    }
+}
+
+impl AppConfig {
+    pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
+        let content = fs::read_to_string(path)?;
+        let config: AppConfig = toml::from_str(&content)?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    pub fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn std::error::Error>> {
+        let content = toml::to_string_pretty(self)?;
+        fs::write(path, content)?;
+        Ok(())
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if self.port == 0 {
+            return Err(String::from("Port cannot be zero"));
+        }
+        if self.max_connections == 0 {
+            return Err(String::from("Max connections cannot be zero"));
+        }
+        let valid_log_levels = ["trace", "debug", "info", "warn", "error"];
+        if !valid_log_levels.contains(&self.log_level.as_str()) {
+            return Err(format!("Invalid log level: {}", self.log_level));
+        }
+        Ok(())
+    }
+}
+
+pub fn create_default_config<P: AsRef<Path>>(path: P) -> Result<(), Box<dyn std::error::Error>> {
+    let default_config = AppConfig::default();
+    default_config.save_to_file(path)
 }

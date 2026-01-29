@@ -64,4 +64,93 @@ mod tests {
         assert_eq!(config.get("MAX_CONNECTIONS").unwrap(), "10");
         assert_eq!(config.get_or_default("NON_EXISTENT", "default"), "default");
     }
+}use std::fs;
+use std::collections::HashMap;
+
+#[derive(Debug, PartialEq)]
+pub struct Config {
+    pub settings: HashMap<String, String>,
+}
+
+impl Config {
+    pub fn new() -> Self {
+        Config {
+            settings: HashMap::new(),
+        }
+    }
+
+    pub fn from_file(path: &str) -> Result<Self, String> {
+        let contents = fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read config file: {}", e))?;
+
+        let mut config = Config::new();
+        for line in contents.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+
+            let parts: Vec<&str> = trimmed.splitn(2, '=').collect();
+            if parts.len() == 2 {
+                let key = parts[0].trim().to_string();
+                let value = parts[1].trim().to_string();
+                config.settings.insert(key, value);
+            } else {
+                return Err(format!("Invalid config line: {}", line));
+            }
+        }
+
+        Ok(config)
+    }
+
+    pub fn get(&self, key: &str) -> Option<&String> {
+        self.settings.get(key)
+    }
+
+    pub fn get_or_default(&self, key: &str, default: &str) -> String {
+        self.settings.get(key).map(|s| s.as_str()).unwrap_or(default).to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_empty_config() {
+        let config = Config::new();
+        assert!(config.settings.is_empty());
+    }
+
+    #[test]
+    fn test_parse_valid_config() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "host=localhost\nport=8080\n# This is a comment\n").unwrap();
+
+        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.get("host"), Some(&"localhost".to_string()));
+        assert_eq!(config.get("port"), Some(&"8080".to_string()));
+        assert_eq!(config.get("nonexistent"), None);
+    }
+
+    #[test]
+    fn test_get_or_default() {
+        let mut config = Config::new();
+        config.settings.insert("timeout".to_string(), "30".to_string());
+
+        assert_eq!(config.get_or_default("timeout", "10"), "30");
+        assert_eq!(config.get_or_default("retries", "3"), "3");
+    }
+
+    #[test]
+    fn test_invalid_config_line() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "invalid_line_without_equals").unwrap();
+
+        let result = Config::from_file(file.path().to_str().unwrap());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Invalid config line"));
+    }
 }

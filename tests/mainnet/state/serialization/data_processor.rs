@@ -1,186 +1,118 @@
-use csv::{ReaderBuilder, WriterBuilder};
-use serde::{Deserialize, Serialize};
+
 use std::error::Error;
 use std::fs::File;
-
-#[derive(Debug, Deserialize, Serialize)]
-struct Record {
-    id: u32,
-    name: String,
-    value: f64,
-    category: String,
-}
-
-struct DataProcessor {
-    records: Vec<Record>,
-}
-
-impl DataProcessor {
-    fn new() -> Self {
-        DataProcessor {
-            records: Vec::new(),
-        }
-    }
-
-    fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
-        let file = File::open(file_path)?;
-        let mut rdr = ReaderBuilder::new().has_headers(true).from_reader(file);
-
-        for result in rdr.deserialize() {
-            let record: Record = result?;
-            self.records.push(record);
-        }
-
-        Ok(())
-    }
-
-    fn filter_by_category(&self, category: &str) -> Vec<&Record> {
-        self.records
-            .iter()
-            .filter(|record| record.category == category)
-            .collect()
-    }
-
-    fn calculate_average(&self) -> f64 {
-        if self.records.is_empty() {
-            return 0.0;
-        }
-
-        let sum: f64 = self.records.iter().map(|record| record.value).sum();
-        sum / self.records.len() as f64
-    }
-
-    fn save_filtered_to_csv(&self, category: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
-        let filtered = self.filter_by_category(category);
-        let file = File::create(output_path)?;
-        let mut wtr = WriterBuilder::new().has_headers(true).from_writer(file);
-
-        for record in filtered {
-            wtr.serialize(record)?;
-        }
-
-        wtr.flush()?;
-        Ok(())
-    }
-
-    fn find_max_value(&self) -> Option<&Record> {
-        self.records.iter().max_by(|a, b| {
-            a.value
-                .partial_cmp(&b.value)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
-    }
-}
-
-fn process_data() -> Result<(), Box<dyn Error>> {
-    let mut processor = DataProcessor::new();
-    
-    processor.load_from_csv("input_data.csv")?;
-    
-    println!("Total records loaded: {}", processor.records.len());
-    println!("Average value: {:.2}", processor.calculate_average());
-    
-    if let Some(max_record) = processor.find_max_value() {
-        println!("Record with maximum value: {:?}", max_record);
-    }
-    
-    let filtered = processor.filter_by_category("premium");
-    println!("Premium records found: {}", filtered.len());
-    
-    processor.save_filtered_to_csv("premium", "premium_records.csv")?;
-    
-    Ok(())
-}
-
-fn main() {
-    if let Err(e) = process_data() {
-        eprintln!("Error processing data: {}", e);
-        std::process::exit(1);
-    }
-}use csv::Reader;
-use serde::Deserialize;
-use std::error::Error;
-use std::fs::File;
-
-#[derive(Debug, Deserialize)]
-pub struct Record {
-    id: u32,
-    name: String,
-    value: f64,
-    active: bool,
-}
+use std::io::{BufRead, BufReader};
+use std::path::Path;
 
 pub struct DataProcessor {
-    records: Vec<Record>,
+    delimiter: char,
+    has_header: bool,
 }
 
 impl DataProcessor {
-    pub fn new() -> Self {
+    pub fn new(delimiter: char, has_header: bool) -> Self {
         DataProcessor {
-            records: Vec::new(),
+            delimiter,
+            has_header,
         }
     }
 
-    pub fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
+    pub fn process_file<P: AsRef<Path>>(&self, file_path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
         let file = File::open(file_path)?;
-        let mut reader = Reader::from_reader(file);
-
-        for result in reader.deserialize() {
-            let record: Record = result?;
-            self.records.push(record);
+        let reader = BufReader::new(file);
+        
+        let mut records = Vec::new();
+        let mut lines = reader.lines();
+        
+        if self.has_header {
+            lines.next();
         }
-
-        Ok(())
+        
+        for line_result in lines {
+            let line = line_result?;
+            let fields: Vec<String> = line
+                .split(self.delimiter)
+                .map(|s| s.trim().to_string())
+                .collect();
+            
+            if !fields.is_empty() {
+                records.push(fields);
+            }
+        }
+        
+        Ok(records)
     }
-
-    pub fn validate_records(&self) -> Vec<&Record> {
-        self.records
-            .iter()
-            .filter(|record| record.value > 0.0 && !record.name.is_empty())
-            .collect()
+    
+    pub fn validate_record(&self, record: &[String]) -> bool {
+        !record.is_empty() && record.iter().all(|field| !field.is_empty())
     }
-
-    pub fn calculate_total(&self) -> f64 {
-        self.records.iter().map(|record| record.value).sum()
-    }
-
-    pub fn get_active_records(&self) -> Vec<&Record> {
-        self.records
-            .iter()
-            .filter(|record| record.active)
-            .collect()
-    }
-
-    pub fn find_by_id(&self, target_id: u32) -> Option<&Record> {
-        self.records.iter().find(|record| record.id == target_id)
+    
+    pub fn calculate_statistics(&self, records: &[Vec<String>], column_index: usize) -> Option<f64> {
+        let mut sum = 0.0;
+        let mut count = 0;
+        
+        for record in records {
+            if column_index < record.len() {
+                if let Ok(value) = record[column_index].parse::<f64>() {
+                    sum += value;
+                    count += 1;
+                }
+            }
+        }
+        
+        if count > 0 {
+            Some(sum / count as f64)
+        } else {
+            None
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::NamedTempFile;
     use std::io::Write;
-
+    use tempfile::NamedTempFile;
+    
     #[test]
-    fn test_data_processor() {
-        let mut processor = DataProcessor::new();
-        
+    fn test_process_csv() {
         let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "id,name,value,active").unwrap();
-        writeln!(temp_file, "1,ItemA,25.5,true").unwrap();
-        writeln!(temp_file, "2,ItemB,0.0,false").unwrap();
-        writeln!(temp_file, "3,ItemC,42.1,true").unwrap();
+        writeln!(temp_file, "name,age,city").unwrap();
+        writeln!(temp_file, "John,25,New York").unwrap();
+        writeln!(temp_file, "Alice,30,London").unwrap();
         
-        let result = processor.load_from_csv(temp_file.path().to_str().unwrap());
+        let processor = DataProcessor::new(',', true);
+        let result = processor.process_file(temp_file.path());
+        
         assert!(result.is_ok());
+        let records = result.unwrap();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0], vec!["John", "25", "New York"]);
+    }
+    
+    #[test]
+    fn test_validate_record() {
+        let processor = DataProcessor::new(',', false);
+        let valid_record = vec!["data".to_string(), "123".to_string()];
+        let invalid_record = vec!["".to_string(), "test".to_string()];
         
-        assert_eq!(processor.calculate_total(), 67.6);
-        assert_eq!(processor.validate_records().len(), 2);
-        assert_eq!(processor.get_active_records().len(), 2);
+        assert!(processor.validate_record(&valid_record));
+        assert!(!processor.validate_record(&invalid_record));
+    }
+    
+    #[test]
+    fn test_calculate_statistics() {
+        let processor = DataProcessor::new(',', false);
+        let records = vec![
+            vec!["10.5".to_string(), "20.0".to_string()],
+            vec!["15.5".to_string(), "30.0".to_string()],
+            vec!["invalid".to_string(), "40.0".to_string()],
+        ];
         
-        let found = processor.find_by_id(3);
-        assert!(found.is_some());
-        assert_eq!(found.unwrap().name, "ItemC");
+        let avg = processor.calculate_statistics(&records, 0);
+        assert_eq!(avg, Some(13.0));
+        
+        let invalid_avg = processor.calculate_statistics(&records, 2);
+        assert_eq!(invalid_avg, None);
     }
 }

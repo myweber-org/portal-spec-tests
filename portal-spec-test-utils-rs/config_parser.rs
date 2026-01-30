@@ -498,3 +498,97 @@ mod tests {
         assert_eq!(config.get_or_default("MISSING", "default_value"), "default_value");
     }
 }
+use std::collections::HashMap;
+use std::env;
+use std::fs;
+
+#[derive(Debug)]
+pub struct Config {
+    pub database_url: String,
+    pub port: u16,
+    pub debug_mode: bool,
+    pub api_keys: HashMap<String, String>,
+}
+
+impl Config {
+    pub fn from_file(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let content = fs::read_to_string(path)?;
+        let mut config = HashMap::new();
+
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+
+            if let Some((key, value)) = line.split_once('=') {
+                let key = key.trim().to_string();
+                let processed_value = Self::process_value(value.trim());
+                config.insert(key, processed_value);
+            }
+        }
+
+        Ok(Config {
+            database_url: config
+                .get("DATABASE_URL")
+                .cloned()
+                .unwrap_or_else(|| "postgres://localhost:5432".to_string()),
+            port: config
+                .get("PORT")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(8080),
+            debug_mode: config
+                .get("DEBUG")
+                .map(|v| v == "true")
+                .unwrap_or(false),
+            api_keys: config
+                .iter()
+                .filter(|(k, _)| k.starts_with("API_KEY_"))
+                .map(|(k, v)| (k.replace("API_KEY_", ""), v.clone()))
+                .collect(),
+        })
+    }
+
+    fn process_value(value: &str) -> String {
+        if let Some(env_var) = value.strip_prefix("${").and_then(|s| s.strip_suffix('}')) {
+            env::var(env_var).unwrap_or_else(|_| value.to_string())
+        } else {
+            value.to_string()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_config_parsing() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "DATABASE_URL=postgres://user:pass@localhost:5432/db").unwrap();
+        writeln!(file, "PORT=3000").unwrap();
+        writeln!(file, "DEBUG=true").unwrap();
+        writeln!(file, "API_KEY_WEATHER=abc123").unwrap();
+        writeln!(file, "# This is a comment").unwrap();
+        writeln!(file, "").unwrap();
+        writeln!(file, "ANOTHER_KEY=value").unwrap();
+
+        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.port, 3000);
+        assert!(config.debug_mode);
+        assert_eq!(config.api_keys.get("WEATHER").unwrap(), "abc123");
+    }
+
+    #[test]
+    fn test_env_var_interpolation() {
+        env::set_var("SECRET_PASSWORD", "super_secret");
+        
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "PASSWORD=${{SECRET_PASSWORD}}").unwrap();
+        
+        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.database_url, "postgres://localhost:5432");
+    }
+}

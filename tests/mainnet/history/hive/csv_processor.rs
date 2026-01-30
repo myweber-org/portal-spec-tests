@@ -266,4 +266,76 @@ mod tests {
         assert_eq!(variance, 66.66666666666667);
         assert_eq!(std_dev, 8.16496580927726);
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+pub struct CsvConfig {
+    delimiter: char,
+    selected_columns: Vec<usize>,
+    has_header: bool,
+}
+
+impl Default for CsvConfig {
+    fn default() -> Self {
+        CsvConfig {
+            delimiter: ',',
+            selected_columns: Vec::new(),
+            has_header: true,
+        }
+    }
+}
+
+pub struct CsvProcessor {
+    config: CsvConfig,
+}
+
+impl CsvProcessor {
+    pub fn new(config: CsvConfig) -> Self {
+        CsvProcessor { config }
+    }
+
+    pub fn process_file<P: AsRef<Path>>(&self, path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut lines = reader.lines();
+
+        if self.config.has_header {
+            lines.next();
+        }
+
+        let mut result = Vec::new();
+        for line in lines {
+            let line = line?;
+            let fields: Vec<String> = line.split(self.config.delimiter).map(String::from).collect();
+            
+            if self.config.selected_columns.is_empty() {
+                result.push(fields);
+            } else {
+                let selected: Vec<String> = self.config.selected_columns
+                    .iter()
+                    .filter_map(|&idx| fields.get(idx).cloned())
+                    .collect();
+                result.push(selected);
+            }
+        }
+        
+        Ok(result)
+    }
+
+    pub fn filter_rows<F>(&self, data: Vec<Vec<String>>, predicate: F) -> Vec<Vec<String>>
+    where
+        F: Fn(&[String]) -> bool,
+    {
+        data.into_iter().filter(|row| predicate(row)).collect()
+    }
+}
+
+pub fn create_sample_data() -> Vec<Vec<String>> {
+    vec![
+        vec!["Alice".to_string(), "25".to_string(), "Engineer".to_string()],
+        vec!["Bob".to_string(), "30".to_string(), "Designer".to_string()],
+        vec!["Charlie".to_string(), "35".to_string(), "Manager".to_string()],
+    ]
 }

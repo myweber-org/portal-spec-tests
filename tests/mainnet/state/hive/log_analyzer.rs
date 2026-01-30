@@ -1,92 +1,133 @@
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
-use regex::Regex;
+use std::path::Path;
 
 #[derive(Debug)]
-pub struct LogEntry {
-    timestamp: String,
-    level: String,
-    message: String,
+pub struct LogSummary {
+    pub total_lines: usize,
+    pub error_count: usize,
+    pub warning_count: usize,
+    pub info_count: usize,
+    pub ip_addresses: HashMap<String, usize>,
+    pub status_codes: HashMap<u16, usize>,
 }
 
-pub struct LogAnalyzer {
-    entries: Vec<LogEntry>,
-    level_counts: HashMap<String, usize>,
-}
-
-impl LogAnalyzer {
+impl LogSummary {
     pub fn new() -> Self {
-        LogAnalyzer {
-            entries: Vec::new(),
-            level_counts: HashMap::new(),
+        LogSummary {
+            total_lines: 0,
+            error_count: 0,
+            warning_count: 0,
+            info_count: 0,
+            ip_addresses: HashMap::new(),
+            status_codes: HashMap::new(),
         }
     }
 
-    pub fn parse_file(&mut self, path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn analyze_file<P: AsRef<Path>>(path: P) -> Result<Self, std::io::Error> {
         let file = File::open(path)?;
         let reader = BufReader::new(file);
-        let log_pattern = Regex::new(r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \[(\w+)\] (.+)")?;
+        let mut summary = LogSummary::new();
 
         for line in reader.lines() {
             let line = line?;
-            if let Some(captures) = log_pattern.captures(&line) {
-                let timestamp = captures[1].to_string();
-                let level = captures[2].to_string();
-                let message = captures[3].to_string();
+            summary.process_line(&line);
+        }
 
-                let entry = LogEntry {
-                    timestamp,
-                    level: level.clone(),
-                    message,
-                };
+        Ok(summary)
+    }
 
-                self.entries.push(entry);
-                *self.level_counts.entry(level).or_insert(0) += 1;
+    fn process_line(&mut self, line: &str) {
+        self.total_lines += 1;
+
+        if line.contains("ERROR") {
+            self.error_count += 1;
+        } else if line.contains("WARNING") {
+            self.warning_count += 1;
+        } else if line.contains("INFO") {
+            self.info_count += 1;
+        }
+
+        if let Some(ip) = extract_ip_address(line) {
+            *self.ip_addresses.entry(ip).or_insert(0) += 1;
+        }
+
+        if let Some(status) = extract_status_code(line) {
+            *self.status_codes.entry(status).or_insert(0) += 1;
+        }
+    }
+
+    pub fn print_summary(&self) {
+        println!("Log Analysis Summary:");
+        println!("Total lines: {}", self.total_lines);
+        println!("Errors: {}", self.error_count);
+        println!("Warnings: {}", self.warning_count);
+        println!("Info messages: {}", self.info_count);
+        
+        if !self.ip_addresses.is_empty() {
+            println!("\nTop IP addresses:");
+            let mut ips: Vec<_> = self.ip_addresses.iter().collect();
+            ips.sort_by(|a, b| b.1.cmp(a.1));
+            for (ip, count) in ips.iter().take(5) {
+                println!("  {}: {}", ip, count);
             }
         }
 
-        Ok(())
+        if !self.status_codes.is_empty() {
+            println!("\nStatus codes:");
+            let mut codes: Vec<_> = self.status_codes.iter().collect();
+            codes.sort_by_key(|&(code, _)| code);
+            for (code, count) in codes {
+                println!("  {}: {}", code, count);
+            }
+        }
     }
+}
 
-    pub fn get_level_summary(&self) -> &HashMap<String, usize> {
-        &self.level_counts
-    }
+fn extract_ip_address(line: &str) -> Option<String> {
+    let ip_pattern = r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b";
+    let re = regex::Regex::new(ip_pattern).unwrap();
+    
+    re.find(line)
+        .map(|m| m.as_str().to_string())
+}
 
-    pub fn filter_by_level(&self, level: &str) -> Vec<&LogEntry> {
-        self.entries
-            .iter()
-            .filter(|entry| entry.level == level)
-            .collect()
-    }
-
-    pub fn total_entries(&self) -> usize {
-        self.entries.len()
-    }
-
-    pub fn find_errors(&self) -> Vec<&LogEntry> {
-        self.filter_by_level("ERROR")
-    }
+fn extract_status_code(line: &str) -> Option<u16> {
+    let status_pattern = r"\b(\d{3})\b";
+    let re = regex::Regex::new(status_pattern).unwrap();
+    
+    re.captures(line)
+        .and_then(|cap| cap.get(1))
+        .and_then(|m| m.as_str().parse().ok())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_log_parsing() {
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "2024-01-15 10:30:00 [INFO] Application started").unwrap();
-        writeln!(temp_file, "2024-01-15 10:31:00 [ERROR] Database connection failed").unwrap();
-        writeln!(temp_file, "2024-01-15 10:32:00 [WARN] High memory usage detected").unwrap();
+    fn test_log_summary_creation() {
+        let summary = LogSummary::new();
+        assert_eq!(summary.total_lines, 0);
+        assert_eq!(summary.error_count, 0);
+        assert_eq!(summary.warning_count, 0);
+        assert_eq!(summary.info_count, 0);
+        assert!(summary.ip_addresses.is_empty());
+        assert!(summary.status_codes.is_empty());
+    }
 
-        let mut analyzer = LogAnalyzer::new();
-        analyzer.parse_file(temp_file.path().to_str().unwrap()).unwrap();
+    #[test]
+    fn test_extract_ip_address() {
+        let line = "192.168.1.1 - - [10/Oct/2023:13:55:36 +0000] \"GET /api/data HTTP/1.1\" 200 1234";
+        let ip = extract_ip_address(line);
+        assert_eq!(ip, Some("192.168.1.1".to_string()));
+    }
 
-        assert_eq!(analyzer.total_entries(), 3);
-        assert_eq!(analyzer.find_errors().len(), 1);
-        assert_eq!(analyzer.get_level_summary().get("INFO"), Some(&1));
+    #[test]
+    fn test_extract_status_code() {
+        let line = "192.168.1.1 - - [10/Oct/2023:13:55:36 +0000] \"GET /api/data HTTP/1.1\" 404 1234";
+        let status = extract_status_code(line);
+        assert_eq!(status, Some(404));
     }
 }

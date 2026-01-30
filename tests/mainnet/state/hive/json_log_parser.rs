@@ -1,149 +1,146 @@
-use serde::{Deserialize, Serialize};
-use chrono::{DateTime, Utc};
+use serde_json::Value;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
-pub enum LogLevel {
-    ERROR,
-    WARN,
-    INFO,
-    DEBUG,
-    TRACE,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone)]
 pub struct LogEntry {
-    pub timestamp: DateTime<Utc>,
-    pub level: LogLevel,
-    pub message: String,
-    pub component: String,
-    pub metadata: Option<serde_json::Value>,
+    pub timestamp: Option<String>,
+    pub level: Option<String>,
+    pub message: Option<String>,
+    pub fields: HashMap<String, Value>,
 }
 
 pub struct LogParser {
-    file_path: String,
+    filter_level: Option<String>,
+    required_fields: Vec<String>,
 }
 
 impl LogParser {
-    pub fn new(file_path: &str) -> Self {
+    pub fn new() -> Self {
         LogParser {
-            file_path: file_path.to_string(),
+            filter_level: None,
+            required_fields: Vec::new(),
         }
     }
 
-    pub fn parse(&self) -> Result<Vec<LogEntry>, Box<dyn std::error::Error>> {
-        let path = Path::new(&self.file_path);
-        let file = File::open(path)?;
+    pub fn set_level_filter(&mut self, level: &str) -> &mut Self {
+        self.filter_level = Some(level.to_lowercase());
+        self
+    }
+
+    pub fn add_required_field(&mut self, field: &str) -> &mut Self {
+        self.required_fields.push(field.to_string());
+        self
+    }
+
+    pub fn parse_file<P: AsRef<Path>>(&self, path: P) -> Result<Vec<LogEntry>, String> {
+        let file = File::open(path).map_err(|e| e.to_string())?;
         let reader = BufReader::new(file);
         let mut entries = Vec::new();
 
         for line in reader.lines() {
-            let line_content = line?;
-            if line_content.trim().is_empty() {
-                continue;
-            }
-
-            match serde_json::from_str::<LogEntry>(&line_content) {
-                Ok(entry) => entries.push(entry),
-                Err(e) => eprintln!("Failed to parse line: {}. Error: {}", line_content, e),
+            let line = line.map_err(|e| e.to_string())?;
+            if let Some(entry) = self.parse_line(&line) {
+                entries.push(entry);
             }
         }
 
         Ok(entries)
     }
 
-    pub fn filter_by_level(&self, level: LogLevel) -> Result<Vec<LogEntry>, Box<dyn std::error::Error>> {
-        let entries = self.parse()?;
-        let filtered: Vec<LogEntry> = entries
-            .into_iter()
-            .filter(|entry| entry.level == level)
-            .collect();
-        Ok(filtered)
-    }
+    fn parse_line(&self, line: &str) -> Option<LogEntry> {
+        let json_value: Value = serde_json::from_str(line).ok()?;
+        
+        let mut fields = HashMap::new();
+        let mut timestamp = None;
+        let mut level = None;
+        let mut message = None;
 
-    pub fn filter_by_time_range(
-        &self,
-        start: DateTime<Utc>,
-        end: DateTime<Utc>,
-    ) -> Result<Vec<LogEntry>, Box<dyn std::error::Error>> {
-        let entries = self.parse()?;
-        let filtered: Vec<LogEntry> = entries
-            .into_iter()
-            .filter(|entry| entry.timestamp >= start && entry.timestamp <= end)
-            .collect();
-        Ok(filtered)
-    }
-
-    pub fn count_entries_by_component(&self) -> Result<std::collections::HashMap<String, usize>, Box<dyn std::error::Error>> {
-        let entries = self.parse()?;
-        let mut counts = std::collections::HashMap::new();
-
-        for entry in entries {
-            *counts.entry(entry.component).or_insert(0) += 1;
+        if let Value::Object(map) = json_value {
+            for (key, value) in map {
+                match key.as_str() {
+                    "timestamp" | "time" | "@timestamp" => {
+                        timestamp = value.as_str().map(|s| s.to_string());
+                    }
+                    "level" | "log_level" | "severity" => {
+                        level = value.as_str().map(|s| s.to_lowercase());
+                    }
+                    "message" | "msg" | "log" => {
+                        message = value.as_str().map(|s| s.to_string());
+                    }
+                    _ => {
+                        fields.insert(key, value);
+                    }
+                }
+            }
         }
 
-        Ok(counts)
+        if let Some(filter) = &self.filter_level {
+            if level.as_deref() != Some(filter) {
+                return None;
+            }
+        }
+
+        if !self.required_fields.is_empty() {
+            for field in &self.required_fields {
+                if !fields.contains_key(field) {
+                    return None;
+                }
+            }
+        }
+
+        Some(LogEntry {
+            timestamp,
+            level,
+            message,
+            fields,
+        })
+    }
+
+    pub fn extract_field_values(&self, entries: &[LogEntry], field_name: &str) -> Vec<Value> {
+        entries
+            .iter()
+            .filter_map(|entry| entry.fields.get(field_name).cloned())
+            .collect()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::TimeZone;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
 
-    fn create_test_log_file() -> NamedTempFile {
-        let mut file = NamedTempFile::new().unwrap();
-        let log_lines = vec![
-            r#"{"timestamp":"2024-01-15T10:30:00Z","level":"ERROR","message":"Database connection failed","component":"database","metadata":{"error_code":1001}}"#,
-            r#"{"timestamp":"2024-01-15T10:31:00Z","level":"WARN","message":"High memory usage","component":"memory","metadata":{"usage_percent":85}}"#,
-            r#"{"timestamp":"2024-01-15T10:32:00Z","level":"INFO","message":"User login successful","component":"auth","metadata":null}"#,
-            r#"{"timestamp":"2024-01-15T10:33:00Z","level":"ERROR","message":"API timeout","component":"api","metadata":{"timeout_seconds":30}}"#,
-            r#"{"timestamp":"2024-01-15T10:34:00Z","level":"INFO","message":"Cache cleared","component":"cache","metadata":null}"#,
+    #[test]
+    fn test_parser_with_filter() {
+        let log_data = r#"{"timestamp": "2024-01-15T10:30:00Z", "level": "ERROR", "message": "Failed to connect", "service": "api"}"#;
+        
+        let mut parser = LogParser::new();
+        parser.set_level_filter("error");
+        
+        let entry = parser.parse_line(log_data).unwrap();
+        assert_eq!(entry.level, Some("error".to_string()));
+        assert_eq!(entry.message, Some("Failed to connect".to_string()));
+        assert_eq!(entry.fields.get("service").and_then(|v| v.as_str()), Some("api"));
+    }
+
+    #[test]
+    fn test_field_extraction() {
+        let entries = vec![
+            LogEntry {
+                timestamp: Some("2024-01-15T10:30:00Z".to_string()),
+                level: Some("info".to_string()),
+                message: Some("Request processed".to_string()),
+                fields: vec![("user_id".to_string(), Value::String("user123".to_string()))]
+                    .into_iter()
+                    .collect(),
+            },
         ];
-
-        for line in log_lines {
-            writeln!(file, "{}", line).unwrap();
-        }
-        file
-    }
-
-    #[test]
-    fn test_parse_log_file() {
-        let file = create_test_log_file();
-        let parser = LogParser::new(file.path().to_str().unwrap());
-        let entries = parser.parse().unwrap();
-        assert_eq!(entries.len(), 5);
-    }
-
-    #[test]
-    fn test_filter_by_level() {
-        let file = create_test_log_file();
-        let parser = LogParser::new(file.path().to_str().unwrap());
-        let errors = parser.filter_by_level(LogLevel::ERROR).unwrap();
-        assert_eq!(errors.len(), 2);
-        assert!(errors.iter().all(|e| e.level == LogLevel::ERROR));
-    }
-
-    #[test]
-    fn test_filter_by_time_range() {
-        let file = create_test_log_file();
-        let parser = LogParser::new(file.path().to_str().unwrap());
-        let start = Utc.with_ymd_and_hms(2024, 1, 15, 10, 31, 0).unwrap();
-        let end = Utc.with_ymd_and_hms(2024, 1, 15, 10, 33, 0).unwrap();
-        let filtered = parser.filter_by_time_range(start, end).unwrap();
-        assert_eq!(filtered.len(), 3);
-    }
-
-    #[test]
-    fn test_count_entries_by_component() {
-        let file = create_test_log_file();
-        let parser = LogParser::new(file.path().to_str().unwrap());
-        let counts = parser.count_entries_by_component().unwrap();
-        assert_eq!(counts.get("database"), Some(&1));
-        assert_eq!(counts.get("api"), Some(&1));
+        
+        let parser = LogParser::new();
+        let user_ids = parser.extract_field_values(&entries, "user_id");
+        
+        assert_eq!(user_ids.len(), 1);
+        assert_eq!(user_ids[0].as_str(), Some("user123"));
     }
 }

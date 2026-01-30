@@ -1,9 +1,10 @@
-use std::collections::HashMap;
+
+use serde_json::{Map, Value};
 use std::fs;
 use std::path::Path;
 
-pub fn merge_json_files(file_paths: &[&str]) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
-    let mut merged_map = HashMap::new();
+pub fn merge_json_files(file_paths: &[&str]) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut merged_map = Map::new();
 
     for path_str in file_paths {
         let path = Path::new(path_str);
@@ -12,10 +13,13 @@ pub fn merge_json_files(file_paths: &[&str]) -> Result<serde_json::Value, Box<dy
         }
 
         let content = fs::read_to_string(path)?;
-        let json_value: serde_json::Value = serde_json::from_str(&content)?;
+        let json_value: Value = serde_json::from_str(&content)?;
 
-        if let serde_json::Value::Object(map) = json_value {
+        if let Value::Object(map) = json_value {
             for (key, value) in map {
+                if merged_map.contains_key(&key) {
+                    eprintln!("Warning: Key '{}' already exists, overwriting.", key);
+                }
                 merged_map.insert(key, value);
             }
         } else {
@@ -23,12 +27,13 @@ pub fn merge_json_files(file_paths: &[&str]) -> Result<serde_json::Value, Box<dy
         }
     }
 
-    Ok(serde_json::Value::Object(merged_map))
+    Ok(Value::Object(merged_map))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use std::io::Write;
     use tempfile::NamedTempFile;
 
@@ -37,18 +42,33 @@ mod tests {
         let mut file1 = NamedTempFile::new().unwrap();
         let mut file2 = NamedTempFile::new().unwrap();
 
-        writeln!(file1, r#"{"a": 1, "b": "test"}"#).unwrap();
-        writeln!(file2, r#"{"c": true, "d": [1,2,3]}"#).unwrap();
+        let json1 = json!({
+            "name": "test",
+            "value": 42
+        });
 
-        let result = merge_json_files(&[
+        let json2 = json!({
+            "enabled": true,
+            "tags": ["rust", "json"]
+        });
+
+        write!(file1, "{}", json1.to_string()).unwrap();
+        write!(file2, "{}", json2.to_string()).unwrap();
+
+        let paths = vec![
             file1.path().to_str().unwrap(),
             file2.path().to_str().unwrap(),
-        ]).unwrap();
+        ];
 
-        assert_eq!(result["a"], 1);
-        assert_eq!(result["b"], "test");
-        assert_eq!(result["c"], true);
-        assert_eq!(result["d"], serde_json::json!([1, 2, 3]));
+        let result = merge_json_files(&paths).unwrap();
+        let expected = json!({
+            "name": "test",
+            "value": 42,
+            "enabled": true,
+            "tags": ["rust", "json"]
+        });
+
+        assert_eq!(result, expected);
     }
 
     #[test]
@@ -56,14 +76,18 @@ mod tests {
         let mut file1 = NamedTempFile::new().unwrap();
         let mut file2 = NamedTempFile::new().unwrap();
 
-        writeln!(file1, r#"{"key": "first"}"#).unwrap();
-        writeln!(file2, r#"{"key": "second"}"#).unwrap();
+        let json1 = json!({"key": "first"});
+        let json2 = json!({"key": "second"});
 
-        let result = merge_json_files(&[
+        write!(file1, "{}", json1.to_string()).unwrap();
+        write!(file2, "{}", json2.to_string()).unwrap();
+
+        let paths = vec![
             file1.path().to_str().unwrap(),
             file2.path().to_str().unwrap(),
-        ]).unwrap();
+        ];
 
+        let result = merge_json_files(&paths).unwrap();
         assert_eq!(result["key"], "second");
     }
 }

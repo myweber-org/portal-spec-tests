@@ -1,457 +1,83 @@
-
 use std::error::Error;
 use std::fs::File;
-use std::io::{BufRead, BufReader};
-use std::path::Path;
-
-#[derive(Debug)]
-pub struct CsvRecord {
-    pub columns: Vec<String>,
-}
+use std::io::{BufRead, BufReader, Write};
 
 pub struct CsvProcessor {
-    delimiter: char,
-    has_header: bool,
+    input_path: String,
+    output_path: String,
+    filter_column: usize,
+    filter_value: String,
 }
 
 impl CsvProcessor {
-    pub fn new(delimiter: char, has_header: bool) -> Self {
+    pub fn new(input_path: &str, output_path: &str, filter_column: usize, filter_value: &str) -> Self {
         CsvProcessor {
-            delimiter,
-            has_header,
+            input_path: input_path.to_string(),
+            output_path: output_path.to_string(),
+            filter_column,
+            filter_value: filter_value.to_string(),
         }
     }
 
-    pub fn parse_file<P: AsRef<Path>>(&self, path: P) -> Result<Vec<CsvRecord>, Box<dyn Error>> {
-        let file = File::open(path)?;
-        let reader = BufReader::new(file);
-        let mut records = Vec::new();
-        let mut lines = reader.lines().enumerate();
+    pub fn process(&self) -> Result<usize, Box<dyn Error>> {
+        let input_file = File::open(&self.input_path)?;
+        let reader = BufReader::new(input_file);
+        let mut output_file = File::create(&self.output_path)?;
+        let mut processed_count = 0;
 
-        if self.has_header {
-            lines.next();
-        }
-
-        for (line_num, line) in lines {
+        for (line_num, line) in reader.lines().enumerate() {
             let line = line?;
-            let columns: Vec<String> = line
-                .split(self.delimiter)
-                .map(|s| s.trim().to_string())
-                .collect();
-
-            if columns.is_empty() {
-                continue;
-            }
-
-            records.push(CsvRecord { columns });
-        }
-
-        Ok(records)
-    }
-
-    pub fn filter_records<F>(&self, records: Vec<CsvRecord>, predicate: F) -> Vec<CsvRecord>
-    where
-        F: Fn(&CsvRecord) -> bool,
-    {
-        records.into_iter().filter(predicate).collect()
-    }
-
-    pub fn extract_column(&self, records: &[CsvRecord], column_index: usize) -> Vec<String> {
-        records
-            .iter()
-            .filter_map(|record| record.columns.get(column_index).cloned())
-            .collect()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
-
-    #[test]
-    fn test_csv_parsing() {
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "name,age,city").unwrap();
-        writeln!(temp_file, "Alice,30,New York").unwrap();
-        writeln!(temp_file, "Bob,25,London").unwrap();
-
-        let processor = CsvProcessor::new(',', true);
-        let records = processor.parse_file(temp_file.path()).unwrap();
-
-        assert_eq!(records.len(), 2);
-        assert_eq!(records[0].columns, vec!["Alice", "30", "New York"]);
-    }
-
-    #[test]
-    fn test_filter_records() {
-        let records = vec![
-            CsvRecord {
-                columns: vec!["A".to_string(), "10".to_string()],
-            },
-            CsvRecord {
-                columns: vec!["B".to_string(), "20".to_string()],
-            },
-        ];
-
-        let processor = CsvProcessor::new(',', false);
-        let filtered = processor.filter_records(records, |record| {
-            record.columns.get(1).map_or(false, |age| age == "10")
-        });
-
-        assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].columns[0], "A");
-    }
-}
-use std::error::Error;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
-use std::path::Path;
-
-pub struct CsvConfig {
-    pub delimiter: char,
-    pub has_headers: bool,
-    pub expected_columns: Option<usize>,
-}
-
-impl Default for CsvConfig {
-    fn default() -> Self {
-        CsvConfig {
-            delimiter: ',',
-            has_headers: true,
-            expected_columns: None,
-        }
-    }
-}
-
-pub struct CsvProcessor {
-    config: CsvConfig,
-}
-
-impl CsvProcessor {
-    pub fn new(config: CsvConfig) -> Self {
-        CsvProcessor { config }
-    }
-
-    pub fn validate_file<P: AsRef<Path>>(&self, file_path: P) -> Result<usize, Box<dyn Error>> {
-        let file = File::open(file_path)?;
-        let reader = BufReader::new(file);
-        let mut line_count = 0;
-        let mut column_count: Option<usize> = None;
-
-        for (index, line_result) in reader.lines().enumerate() {
-            let line = line_result?;
-            line_count += 1;
-
-            if index == 0 && self.config.has_headers {
-                continue;
-            }
-
-            let columns: Vec<&str> = line.split(self.config.delimiter).collect();
+            let parts: Vec<&str> = line.split(',').collect();
             
-            if let Some(expected) = self.config.expected_columns {
-                if columns.len() != expected {
-                    return Err(format!(
-                        "Line {} has {} columns, expected {}",
-                        line_count,
-                        columns.len(),
-                        expected
-                    ).into());
+            if line_num == 0 {
+                writeln!(output_file, "{}", line)?;
+                continue;
+            }
+
+            if let Some(value) = parts.get(self.filter_column) {
+                if value.trim() == self.filter_value {
+                    writeln!(output_file, "{}", line)?;
+                    processed_count += 1;
                 }
             }
-
-            if column_count.is_none() {
-                column_count = Some(columns.len());
-            } else if column_count != Some(columns.len()) {
-                return Err(format!(
-                    "Inconsistent column count at line {}",
-                    line_count
-                ).into());
-            }
         }
 
-        if line_count == 0 {
-            return Err("File is empty".into());
-        }
-
-        if self.config.has_headers && line_count == 1 {
-            return Err("File contains only headers".into());
-        }
-
-        Ok(line_count - if self.config.has_headers { 1 } else { 0 })
+        Ok(processed_count)
     }
 
-    pub fn extract_column<P: AsRef<Path>>(
-        &self,
-        file_path: P,
-        column_index: usize,
-    ) -> Result<Vec<String>, Box<dyn Error>> {
-        let file = File::open(file_path)?;
-        let reader = BufReader::new(file);
-        let mut result = Vec::new();
+    pub fn transform_column(&self, column_index: usize, transformer: fn(&str) -> String) -> Result<usize, Box<dyn Error>> {
+        let input_file = File::open(&self.input_path)?;
+        let reader = BufReader::new(input_file);
+        let mut output_file = File::create(&self.output_path)?;
+        let mut transformed_count = 0;
 
-        for (index, line_result) in reader.lines().enumerate() {
-            let line = line_result?;
-
-            if index == 0 && self.config.has_headers {
-                continue;
-            }
-
-            let columns: Vec<&str> = line.split(self.config.delimiter).collect();
-            
-            if column_index >= columns.len() {
-                return Err(format!(
-                    "Column index {} out of bounds at line {}",
-                    column_index,
-                    index + 1
-                ).into());
-            }
-
-            result.push(columns[column_index].to_string());
-        }
-
-        Ok(result)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
-
-    fn create_test_csv(content: &str) -> NamedTempFile {
-        let mut file = NamedTempFile::new().unwrap();
-        write!(file, "{}", content).unwrap();
-        file
-    }
-
-    #[test]
-    fn test_validate_valid_csv() {
-        let csv_content = "name,age,city\nJohn,30,NYC\nJane,25,LA\n";
-        let file = create_test_csv(csv_content);
-        
-        let config = CsvConfig::default();
-        let processor = CsvProcessor::new(config);
-        
-        let result = processor.validate_file(file.path());
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), 2);
-    }
-
-    #[test]
-    fn test_validate_inconsistent_columns() {
-        let csv_content = "name,age,city\nJohn,30\nJane,25,LA,extra\n";
-        let file = create_test_csv(csv_content);
-        
-        let config = CsvConfig::default();
-        let processor = CsvProcessor::new(config);
-        
-        let result = processor.validate_file(file.path());
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_extract_column() {
-        let csv_content = "name,age,city\nJohn,30,NYC\nJane,25,LA\n";
-        let file = create_test_csv(csv_content);
-        
-        let config = CsvConfig::default();
-        let processor = CsvProcessor::new(config);
-        
-        let result = processor.extract_column(file.path(), 0);
-        assert!(result.is_ok());
-        let names = result.unwrap();
-        assert_eq!(names, vec!["John", "Jane"]);
-    }
-}
-use std::error::Error;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
-use std::path::Path;
-
-pub struct CsvProcessor {
-    delimiter: char,
-    has_headers: bool,
-}
-
-impl CsvProcessor {
-    pub fn new(delimiter: char, has_headers: bool) -> Self {
-        CsvProcessor {
-            delimiter,
-            has_headers,
-        }
-    }
-
-    pub fn validate_file<P: AsRef<Path>>(&self, file_path: P) -> Result<usize, Box<dyn Error>> {
-        let file = File::open(file_path)?;
-        let reader = BufReader::new(file);
-        let mut line_count = 0;
-        let mut column_count: Option<usize> = None;
-
-        for (index, line) in reader.lines().enumerate() {
+        for (line_num, line) in reader.lines().enumerate() {
             let line = line?;
-            let columns: Vec<&str> = line.split(self.delimiter).collect();
+            let mut parts: Vec<&str> = line.split(',').collect();
             
-            if index == 0 && self.has_headers {
-                column_count = Some(columns.len());
+            if line_num == 0 {
+                writeln!(output_file, "{}", line)?;
                 continue;
             }
 
-            if let Some(expected) = column_count {
-                if columns.len() != expected {
-                    return Err(format!(
-                        "Line {} has {} columns, expected {}",
-                        index + 1,
-                        columns.len(),
-                        expected
-                    ).into());
-                }
-            } else {
-                column_count = Some(columns.len());
+            if let Some(value) = parts.get_mut(column_index) {
+                let transformed = transformer(value);
+                parts[column_index] = &transformed;
+                transformed_count += 1;
             }
 
-            line_count += 1;
+            let new_line = parts.join(",");
+            writeln!(output_file, "{}", new_line)?;
         }
 
-        Ok(line_count)
-    }
-
-    pub fn transform_column<P: AsRef<Path>>(
-        &self,
-        file_path: P,
-        column_index: usize,
-        transform_fn: fn(&str) -> String,
-    ) -> Result<Vec<String>, Box<dyn Error>> {
-        let file = File::open(file_path)?;
-        let reader = BufReader::new(file);
-        let mut results = Vec::new();
-
-        for (index, line) in reader.lines().enumerate() {
-            let line = line?;
-            
-            if index == 0 && self.has_headers {
-                continue;
-            }
-
-            let columns: Vec<&str> = line.split(self.delimiter).collect();
-            
-            if column_index >= columns.len() {
-                return Err(format!(
-                    "Column index {} out of bounds on line {}",
-                    column_index,
-                    index + 1
-                ).into());
-            }
-
-            let transformed = transform_fn(columns[column_index]);
-            results.push(transformed);
-        }
-
-        Ok(results)
-    }
-
-    pub fn calculate_column_stats<P: AsRef<Path>>(
-        &self,
-        file_path: P,
-        column_index: usize,
-    ) -> Result<(f64, f64, f64), Box<dyn Error>> {
-        let file = File::open(file_path)?;
-        let reader = BufReader::new(file);
-        let mut values = Vec::new();
-
-        for (index, line) in reader.lines().enumerate() {
-            let line = line?;
-            
-            if index == 0 && self.has_headers {
-                continue;
-            }
-
-            let columns: Vec<&str> = line.split(self.delimiter).collect();
-            
-            if column_index >= columns.len() {
-                return Err(format!(
-                    "Column index {} out of bounds on line {}",
-                    column_index,
-                    index + 1
-                ).into());
-            }
-
-            match columns[column_index].parse::<f64>() {
-                Ok(value) => values.push(value),
-                Err(_) => return Err(format!(
-                    "Invalid numeric value on line {}: {}",
-                    index + 1,
-                    columns[column_index]
-                ).into()),
-            }
-        }
-
-        if values.is_empty() {
-            return Err("No valid numeric values found".into());
-        }
-
-        let sum: f64 = values.iter().sum();
-        let count = values.len() as f64;
-        let mean = sum / count;
-        
-        let variance: f64 = values.iter()
-            .map(|&x| (x - mean).powi(2))
-            .sum::<f64>() / count;
-        
-        let std_dev = variance.sqrt();
-
-        Ok((mean, variance, std_dev))
+        Ok(transformed_count)
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
+pub fn uppercase_transformer(value: &str) -> String {
+    value.to_uppercase()
+}
 
-    fn create_test_csv() -> NamedTempFile {
-        let mut file = NamedTempFile::new().unwrap();
-        writeln!(file, "name,age,salary").unwrap();
-        writeln!(file, "Alice,30,50000").unwrap();
-        writeln!(file, "Bob,25,45000").unwrap();
-        writeln!(file, "Charlie,35,55000").unwrap();
-        file
-    }
-
-    #[test]
-    fn test_validate_file() {
-        let file = create_test_csv();
-        let processor = CsvProcessor::new(',', true);
-        
-        let result = processor.validate_file(file.path());
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), 3);
-    }
-
-    #[test]
-    fn test_transform_column() {
-        let file = create_test_csv();
-        let processor = CsvProcessor::new(',', true);
-        
-        let result = processor.transform_column(file.path(), 0, |s| s.to_uppercase());
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), vec!["ALICE", "BOB", "CHARLIE"]);
-    }
-
-    #[test]
-    fn test_calculate_column_stats() {
-        let file = create_test_csv();
-        let processor = CsvProcessor::new(',', true);
-        
-        let result = processor.calculate_column_stats(file.path(), 2);
-        assert!(result.is_ok());
-        
-        let (mean, variance, std_dev) = result.unwrap();
-        assert!((mean - 50000.0).abs() < 0.001);
-        assert!(variance > 0.0);
-        assert!(std_dev > 0.0);
-    }
+pub fn trim_transformer(value: &str) -> String {
+    value.trim().to_string()
 }

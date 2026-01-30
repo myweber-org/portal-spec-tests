@@ -314,3 +314,138 @@ mod tests {
         assert_eq!(processor.get_total_value(), 60.0);
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug)]
+pub struct DataRecord {
+    id: u32,
+    value: f64,
+    timestamp: String,
+}
+
+impl DataRecord {
+    pub fn new(id: u32, value: f64, timestamp: String) -> Self {
+        DataRecord {
+            id,
+            value,
+            timestamp,
+        }
+    }
+
+    pub fn is_valid(&self) -> bool {
+        self.id > 0 && self.value.is_finite() && !self.timestamp.is_empty()
+    }
+}
+
+pub struct DataProcessor {
+    records: Vec<DataRecord>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_csv(&mut self, file_path: &str) -> Result<usize, Box<dyn Error>> {
+        let path = Path::new(file_path);
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+
+        let mut count = 0;
+        for (line_num, line) in reader.lines().enumerate() {
+            let line = line?;
+            
+            if line_num == 0 {
+                continue;
+            }
+
+            let parts: Vec<&str> = line.split(',').collect();
+            if parts.len() != 3 {
+                continue;
+            }
+
+            let id = match parts[0].parse::<u32>() {
+                Ok(val) => val,
+                Err(_) => continue,
+            };
+
+            let value = match parts[1].parse::<f64>() {
+                Ok(val) => val,
+                Err(_) => continue,
+            };
+
+            let timestamp = parts[2].to_string();
+
+            let record = DataRecord::new(id, value, timestamp);
+            if record.is_valid() {
+                self.records.push(record);
+                count += 1;
+            }
+        }
+
+        Ok(count)
+    }
+
+    pub fn calculate_average(&self) -> Option<f64> {
+        if self.records.is_empty() {
+            return None;
+        }
+
+        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        Some(sum / self.records.len() as f64)
+    }
+
+    pub fn filter_by_threshold(&self, threshold: f64) -> Vec<&DataRecord> {
+        self.records
+            .iter()
+            .filter(|record| record.value > threshold)
+            .collect()
+    }
+
+    pub fn get_record_count(&self) -> usize {
+        self.records.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_data_record_validation() {
+        let valid_record = DataRecord::new(1, 42.5, "2024-01-15T10:30:00Z".to_string());
+        assert!(valid_record.is_valid());
+
+        let invalid_record = DataRecord::new(0, f64::NAN, "".to_string());
+        assert!(!invalid_record.is_valid());
+    }
+
+    #[test]
+    fn test_data_processor() {
+        let mut processor = DataProcessor::new();
+        
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,value,timestamp").unwrap();
+        writeln!(temp_file, "1,10.5,2024-01-15T10:30:00Z").unwrap();
+        writeln!(temp_file, "2,20.3,2024-01-15T11:30:00Z").unwrap();
+        writeln!(temp_file, "3,15.7,2024-01-15T12:30:00Z").unwrap();
+        
+        let result = processor.load_from_csv(temp_file.path().to_str().unwrap());
+        assert!(result.is_ok());
+        assert_eq!(processor.get_record_count(), 3);
+        
+        let average = processor.calculate_average();
+        assert!(average.is_some());
+        assert!((average.unwrap() - 15.5).abs() < 0.1);
+        
+        let filtered = processor.filter_by_threshold(15.0);
+        assert_eq!(filtered.len(), 2);
+    }
+}

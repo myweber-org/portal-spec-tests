@@ -641,3 +641,81 @@ mod tests {
         assert_eq!(stats.get("metric_count"), Some(&2.0));
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::path::Path;
+
+#[derive(Debug)]
+pub struct DataRecord {
+    id: u32,
+    value: f64,
+    category: String,
+}
+
+impl DataRecord {
+    pub fn new(id: u32, value: f64, category: String) -> Result<Self, String> {
+        if value < 0.0 {
+            return Err("Value cannot be negative".to_string());
+        }
+        if category.is_empty() {
+            return Err("Category cannot be empty".to_string());
+        }
+        Ok(Self { id, value, category })
+    }
+
+    pub fn calculate_tax(&self, rate: f64) -> f64 {
+        self.value * rate
+    }
+}
+
+pub fn load_csv_data(file_path: &str) -> Result<Vec<DataRecord>, Box<dyn Error>> {
+    let path = Path::new(file_path);
+    let file = File::open(path)?;
+    let mut rdr = csv::Reader::from_reader(file);
+    let mut records = Vec::new();
+
+    for result in rdr.deserialize() {
+        let raw_record: (u32, f64, String) = result?;
+        match DataRecord::new(raw_record.0, raw_record.1, raw_record.2) {
+            Ok(record) => records.push(record),
+            Err(e) => eprintln!("Skipping invalid record: {}", e),
+        }
+    }
+
+    Ok(records)
+}
+
+pub fn process_records(records: &[DataRecord]) -> (f64, f64, usize) {
+    let total: f64 = records.iter().map(|r| r.value).sum();
+    let avg = if !records.is_empty() {
+        total / records.len() as f64
+    } else {
+        0.0
+    };
+    let high_value_count = records.iter().filter(|r| r.value > 1000.0).count();
+    (total, avg, high_value_count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_record_creation() {
+        let record = DataRecord::new(1, 500.0, "A".to_string());
+        assert!(record.is_ok());
+        assert_eq!(record.unwrap().id, 1);
+    }
+
+    #[test]
+    fn test_invalid_record() {
+        let record = DataRecord::new(2, -100.0, "B".to_string());
+        assert!(record.is_err());
+    }
+
+    #[test]
+    fn test_tax_calculation() {
+        let record = DataRecord::new(3, 200.0, "C".to_string()).unwrap();
+        assert_eq!(record.calculate_tax(0.1), 20.0);
+    }
+}

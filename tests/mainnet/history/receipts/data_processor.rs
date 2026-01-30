@@ -230,4 +230,99 @@ mod tests {
         assert_eq!(stats.0, 10.5);
         assert_eq!(stats.1, 20.3);
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufReader, Read};
+use std::path::Path;
+
+pub struct DataProcessor {
+    data: Vec<f64>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor { data: Vec::new() }
+    }
+
+    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn Error>> {
+        let file = File::open(path)?;
+        let mut reader = BufReader::new(file);
+        let mut contents = String::new();
+        reader.read_to_string(&mut contents)?;
+
+        self.data.clear();
+        for line in contents.lines().skip(1) {
+            if let Some(value_str) = line.split(',').nth(1) {
+                if let Ok(value) = value_str.trim().parse::<f64>() {
+                    self.data.push(value);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn calculate_mean(&self) -> Option<f64> {
+        if self.data.is_empty() {
+            return None;
+        }
+        let sum: f64 = self.data.iter().sum();
+        Some(sum / self.data.len() as f64)
+    }
+
+    pub fn calculate_std_dev(&self) -> Option<f64> {
+        if self.data.len() < 2 {
+            return None;
+        }
+        let mean = self.calculate_mean()?;
+        let variance: f64 = self.data
+            .iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>() / (self.data.len() - 1) as f64;
+        
+        Some(variance.sqrt())
+    }
+
+    pub fn get_summary(&self) -> String {
+        let mean = self.calculate_mean().unwrap_or(f64::NAN);
+        let std_dev = self.calculate_std_dev().unwrap_or(f64::NAN);
+        let count = self.data.len();
+        
+        format!(
+            "Data Summary:\nSamples: {}\nMean: {:.4}\nStd Dev: {:.4}",
+            count, mean, std_dev
+        )
+    }
+
+    pub fn filter_outliers(&mut self, threshold: f64) {
+        if let (Some(mean), Some(std_dev)) = (self.calculate_mean(), self.calculate_std_dev()) {
+            self.data.retain(|&x| {
+                let z_score = (x - mean).abs() / std_dev;
+                z_score <= threshold
+            });
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_data_processing() {
+        let mut processor = DataProcessor::new();
+        
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,value").unwrap();
+        writeln!(temp_file, "1,10.5").unwrap();
+        writeln!(temp_file, "2,20.3").unwrap();
+        writeln!(temp_file, "3,15.7").unwrap();
+        
+        processor.load_from_csv(temp_file.path()).unwrap();
+        
+        assert_eq!(processor.calculate_mean(), Some(15.5));
+        assert!(processor.calculate_std_dev().unwrap() > 0.0);
+    }
 }

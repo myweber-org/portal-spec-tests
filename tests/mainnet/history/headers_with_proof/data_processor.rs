@@ -196,3 +196,111 @@ mod tests {
         assert_eq!(standard_records.len(), 2);
     }
 }
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug)]
+pub struct ValidationError {
+    details: String,
+}
+
+impl ValidationError {
+    pub fn new(msg: &str) -> ValidationError {
+        ValidationError {
+            details: msg.to_string(),
+        }
+    }
+}
+
+impl fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.details)
+    }
+}
+
+impl Error for ValidationError {
+    fn description(&self) -> &str {
+        &self.details
+    }
+}
+
+pub struct DataRecord {
+    pub id: u32,
+    pub value: f64,
+    pub category: String,
+}
+
+impl DataRecord {
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        if self.id == 0 {
+            return Err(ValidationError::new("ID cannot be zero"));
+        }
+
+        if self.value < 0.0 || self.value > 1000.0 {
+            return Err(ValidationError::new("Value must be between 0 and 1000"));
+        }
+
+        if self.category.is_empty() {
+            return Err(ValidationError::new("Category cannot be empty"));
+        }
+
+        Ok(())
+    }
+
+    pub fn transform(&mut self, multiplier: f64) {
+        self.value *= multiplier;
+        self.category = self.category.to_uppercase();
+    }
+}
+
+pub fn process_records(records: &mut Vec<DataRecord>) -> Result<(), Box<dyn Error>> {
+    for record in records {
+        record.validate()?;
+        record.transform(1.5);
+    }
+
+    let total_value: f64 = records.iter().map(|r| r.value).sum();
+    println!("Total processed value: {:.2}", total_value);
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_record() {
+        let record = DataRecord {
+            id: 1,
+            value: 100.0,
+            category: "test".to_string(),
+        };
+
+        assert!(record.validate().is_ok());
+    }
+
+    #[test]
+    fn test_invalid_id() {
+        let record = DataRecord {
+            id: 0,
+            value: 100.0,
+            category: "test".to_string(),
+        };
+
+        assert!(record.validate().is_err());
+    }
+
+    #[test]
+    fn test_transform_record() {
+        let mut record = DataRecord {
+            id: 1,
+            value: 100.0,
+            category: "test".to_string(),
+        };
+
+        record.transform(2.0);
+        assert_eq!(record.value, 200.0);
+        assert_eq!(record.category, "TEST");
+    }
+}

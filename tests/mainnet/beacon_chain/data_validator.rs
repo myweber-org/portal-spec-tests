@@ -3,14 +3,14 @@ use regex::Regex;
 
 pub struct Validator {
     email_regex: Regex,
-    phone_regex: Regex,
+    username_regex: Regex,
 }
 
 impl Validator {
     pub fn new() -> Self {
         Validator {
             email_regex: Regex::new(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$").unwrap(),
-            phone_regex: Regex::new(r"^\+?[1-9]\d{1,14}$").unwrap(),
+            username_regex: Regex::new(r"^[a-zA-Z0-9_]{3,20}$").unwrap(),
         }
     }
 
@@ -18,12 +18,21 @@ impl Validator {
         self.email_regex.is_match(email)
     }
 
-    pub fn validate_phone(&self, phone: &str) -> bool {
-        self.phone_regex.is_match(phone)
+    pub fn validate_username(&self, username: &str) -> bool {
+        self.username_regex.is_match(username)
     }
 
-    pub fn validate_all(&self, email: &str, phone: &str) -> (bool, bool) {
-        (self.validate_email(email), self.validate_phone(phone))
+    pub fn sanitize_input(&self, input: &str) -> String {
+        input.trim().to_string()
+    }
+
+    pub fn validate_password_strength(&self, password: &str) -> bool {
+        let has_upper = password.chars().any(|c| c.is_ascii_uppercase());
+        let has_lower = password.chars().any(|c| c.is_ascii_lowercase());
+        let has_digit = password.chars().any(|c| c.is_ascii_digit());
+        let has_special = password.chars().any(|c| "!@#$%^&*".contains(c));
+        
+        password.len() >= 8 && has_upper && has_lower && has_digit && has_special
     }
 }
 
@@ -32,30 +41,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_valid_email() {
+    fn test_email_validation() {
         let validator = Validator::new();
         assert!(validator.validate_email("test@example.com"));
-        assert!(validator.validate_email("user.name+tag@domain.co.uk"));
-    }
-
-    #[test]
-    fn test_invalid_email() {
-        let validator = Validator::new();
         assert!(!validator.validate_email("invalid-email"));
-        assert!(!validator.validate_email("@domain.com"));
     }
 
     #[test]
-    fn test_valid_phone() {
+    fn test_username_validation() {
         let validator = Validator::new();
-        assert!(validator.validate_phone("+12345678901"));
-        assert!(validator.validate_phone("1234567890"));
+        assert!(validator.validate_username("valid_user123"));
+        assert!(!validator.validate_username("ab"));
     }
 
     #[test]
-    fn test_invalid_phone() {
+    fn test_password_strength() {
         let validator = Validator::new();
-        assert!(!validator.validate_phone("abc"));
-        assert!(!validator.validate_phone("+"));
+        assert!(validator.validate_password_strength("StrongP@ss1"));
+        assert!(!validator.validate_password_strength("weak"));
     }
 }

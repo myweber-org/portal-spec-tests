@@ -60,4 +60,39 @@ mod tests {
         let invalid_data = r#"{"age": 30}"#;
         assert!(validate_json(schema, invalid_data).is_err());
     }
+}use serde_json;
+
+pub fn is_valid_json(input: &str) -> bool {
+    match serde_json::from_str::<serde_json::Value>(input) {
+        Ok(_) => true,
+        Err(_) => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_json() {
+        let valid_json = r#"{"name": "Alice", "age": 30}"#;
+        assert!(is_valid_json(valid_json));
+    }
+
+    #[test]
+    fn test_invalid_json() {
+        let invalid_json = r#"{"name": "Bob", age: 25}"#;
+        assert!(!is_valid_json(invalid_json));
+    }
+
+    #[test]
+    fn test_empty_string() {
+        assert!(!is_valid_json(""));
+    }
+
+    #[test]
+    fn test_valid_array_json() {
+        let array_json = r#"[1, 2, 3, "four"]"#;
+        assert!(is_valid_json(array_json));
+    }
 }

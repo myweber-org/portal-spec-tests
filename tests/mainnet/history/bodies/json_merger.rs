@@ -162,4 +162,148 @@ pub fn merge_and_write(
     let json_string = serde_json::to_string_pretty(&merged)?;
     fs::write(output_path, json_string)?;
     Ok(())
+}use serde_json::{Map, Value};
+use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
+
+pub fn merge_json_files(file_paths: &[&str]) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut merged_map = Map::new();
+
+    for path_str in file_paths {
+        let path = Path::new(path_str);
+        if !path.exists() {
+            continue;
+        }
+
+        let content = fs::read_to_string(path)?;
+        let json_value: Value = serde_json::from_str(&content)?;
+
+        if let Value::Object(obj) = json_value {
+            for (key, value) in obj {
+                merged_map.insert(key, value);
+            }
+        }
+    }
+
+    Ok(Value::Object(merged_map))
+}
+
+pub fn merge_with_strategy(
+    file_paths: &[&str],
+    conflict_strategy: ConflictStrategy,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut accumulator: HashMap<String, Value> = HashMap::new();
+
+    for path_str in file_paths {
+        let path = Path::new(path_str);
+        if !path.exists() {
+            continue;
+        }
+
+        let content = fs::read_to_string(path)?;
+        let json_value: Value = serde_json::from_str(&content)?;
+
+        if let Value::Object(obj) = json_value {
+            for (key, value) in obj {
+                match conflict_strategy {
+                    ConflictStrategy::Overwrite => {
+                        accumulator.insert(key, value);
+                    }
+                    ConflictStrategy::Skip => {
+                        accumulator.entry(key).or_insert(value);
+                    }
+                    ConflictStrategy::MergeObjects => {
+                        if let Some(existing) = accumulator.get_mut(&key) {
+                            if let (Value::Object(existing_obj), Value::Object(new_obj)) =
+                                (existing, &value)
+                            {
+                                let mut merged_obj = existing_obj.clone();
+                                for (k, v) in new_obj {
+                                    merged_obj.insert(k.clone(), v.clone());
+                                }
+                                accumulator.insert(key, Value::Object(merged_obj));
+                            } else {
+                                accumulator.insert(key, value);
+                            }
+                        } else {
+                            accumulator.insert(key, value);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut final_map = Map::new();
+    for (key, value) in accumulator {
+        final_map.insert(key, value);
+    }
+
+    Ok(Value::Object(final_map))
+}
+
+#[derive(Clone, Copy)]
+pub enum ConflictStrategy {
+    Overwrite,
+    Skip,
+    MergeObjects,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    fn create_temp_json(content: &str) -> NamedTempFile {
+        let mut file = NamedTempFile::new().unwrap();
+        write!(file, "{}", content).unwrap();
+        file
+    }
+
+    #[test]
+    fn test_basic_merge() {
+        let file1 = create_temp_json(r#"{"a": 1, "b": 2}"#);
+        let file2 = create_temp_json(r#"{"c": 3, "d": 4}"#);
+
+        let result = merge_json_files(&[
+            file1.path().to_str().unwrap(),
+            file2.path().to_str().unwrap(),
+        ])
+        .unwrap();
+
+        let expected = json!({
+            "a": 1,
+            "b": 2,
+            "c": 3,
+            "d": 4
+        });
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_overwrite_strategy() {
+        let file1 = create_temp_json(r#"{"a": 1, "b": 2}"#);
+        let file2 = create_temp_json(r#"{"a": 99, "c": 3}"#);
+
+        let result = merge_with_strategy(
+            &[
+                file1.path().to_str().unwrap(),
+                file2.path().to_str().unwrap(),
+            ],
+            ConflictStrategy::Overwrite,
+        )
+        .unwrap();
+
+        let expected = json!({
+            "a": 99,
+            "b": 2,
+            "c": 3
+        });
+
+        assert_eq!(result, expected);
+    }
 }

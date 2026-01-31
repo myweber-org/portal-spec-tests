@@ -1,43 +1,58 @@
-use std::error::Error;
+
 use reqwest;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Deserialize, Debug)]
 struct WeatherData {
-    city: String,
-    temperature: f64,
-    condition: String,
+    name: String,
+    main: Main,
+    weather: Vec<Weather>,
 }
 
-async fn fetch_weather(city: &str) -> Result<WeatherData, Box<dyn Error>> {
-    let url = format!("https://api.mockweather.example.com/current?city={}", city);
+#[derive(Deserialize, Debug)]
+struct Main {
+    temp: f64,
+    feels_like: f64,
+    humidity: u8,
+}
+
+#[derive(Deserialize, Debug)]
+struct Weather {
+    description: String,
+}
+
+pub async fn get_current_weather(api_key: &str, city: &str) -> Result<WeatherData, reqwest::Error> {
+    let url = format!(
+        "https://api.openweathermap.org/data/2.5/weather?q={}&appid={}&units=metric",
+        city, api_key
+    );
+    
     let response = reqwest::get(&url).await?;
+    let weather_data: WeatherData = response.json().await?;
     
-    if response.status().is_success() {
-        let weather: WeatherData = response.json().await?;
-        Ok(weather)
-    } else {
-        Err(format!("Failed to fetch weather data for {}", city).into())
+    Ok(weather_data)
+}
+
+pub fn display_weather(data: &WeatherData) {
+    println!("Weather in {}:", data.name);
+    println!("Temperature: {:.1}°C", data.main.temp);
+    println!("Feels like: {:.1}°C", data.main.feels_like);
+    println!("Humidity: {}%", data.main.humidity);
+    
+    if let Some(weather) = data.weather.first() {
+        println!("Conditions: {}", weather.description);
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
-    let args: Vec<String> = std::env::args().collect();
-    if args.len() < 2 {
-        eprintln!("Usage: {} <city_name>", args[0]);
-        std::process::exit(1);
-    }
+#[cfg(test)]
+mod tests {
+    use super::*;
     
-    let city = &args[1];
-    match fetch_weather(city).await {
-        Ok(data) => {
-            println!("Weather in {}: {:.1}°C, {}", data.city, data.temperature, data.condition);
-            Ok(())
-        }
-        Err(e) => {
-            eprintln!("Error: {}", e);
-            std::process::exit(1);
-        }
+    #[tokio::test]
+    async fn test_weather_fetch() {
+        // This test requires a valid API key
+        // In practice, you'd use a mock or test API key
+        let result = get_current_weather("test_key", "London").await;
+        assert!(result.is_err()); // Should fail with invalid API key
     }
 }

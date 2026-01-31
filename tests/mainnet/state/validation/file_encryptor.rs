@@ -137,4 +137,75 @@ mod tests {
         let result = fs::read(decrypted_file.path()).unwrap();
         assert_eq!(test_data.to_vec(), result);
     }
+}use std::fs;
+use std::io::{self, Read, Write};
+use std::path::Path;
+
+const BUFFER_SIZE: usize = 8192;
+
+pub fn xor_cipher(data: &mut [u8], key: &[u8]) {
+    let key_len = key.len();
+    for (i, byte) in data.iter_mut().enumerate() {
+        *byte ^= key[i % key_len];
+    }
+}
+
+pub fn process_file(input_path: &Path, output_path: &Path, key: &[u8]) -> io::Result<()> {
+    let mut input_file = fs::File::open(input_path)?;
+    let mut output_file = fs::File::create(output_path)?;
+
+    let mut buffer = [0u8; BUFFER_SIZE];
+    loop {
+        let bytes_read = input_file.read(&mut buffer)?;
+        if bytes_read == 0 {
+            break;
+        }
+        let data_slice = &mut buffer[..bytes_read];
+        xor_cipher(data_slice, key);
+        output_file.write_all(data_slice)?;
+    }
+    output_file.flush()?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn test_xor_cipher_symmetry() {
+        let key = b"secret_key";
+        let original = b"Hello, World!";
+        let mut data = original.to_vec();
+
+        xor_cipher(&mut data, key);
+        assert_ne!(data.as_slice(), original);
+
+        xor_cipher(&mut data, key);
+        assert_eq!(data.as_slice(), original);
+    }
+
+    #[test]
+    fn test_process_file() -> io::Result<()> {
+        let test_data = b"Test file content for encryption";
+        let key = b"test_key123";
+
+        let input = Cursor::new(test_data);
+        let mut encrypted = Cursor::new(Vec::new());
+        let mut decrypted = Cursor::new(Vec::new());
+
+        let temp_input = tempfile::NamedTempFile::new()?;
+        let temp_encrypted = tempfile::NamedTempFile::new()?;
+        let temp_decrypted = tempfile::NamedTempFile::new()?;
+
+        fs::write(temp_input.path(), test_data)?;
+
+        process_file(temp_input.path(), temp_encrypted.path(), key)?;
+        process_file(temp_encrypted.path(), temp_decrypted.path(), key)?;
+
+        let result = fs::read(temp_decrypted.path())?;
+        assert_eq!(result, test_data);
+        Ok(())
+    }
 }

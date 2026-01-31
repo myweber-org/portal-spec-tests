@@ -98,4 +98,154 @@ mod tests {
         assert_eq!(stats[0].count, 3);
         assert!((stats[0].mean - 4.0).abs() < 0.001);
     }
+}use std::error::Error;
+use std::fs::File;
+use std::path::Path;
+
+pub struct CsvAnalyzer {
+    pub file_path: String,
+    pub delimiter: char,
+}
+
+impl CsvAnalyzer {
+    pub fn new(file_path: &str) -> Self {
+        CsvAnalyzer {
+            file_path: file_path.to_string(),
+            delimiter: ',',
+        }
+    }
+
+    pub fn with_delimiter(mut self, delimiter: char) -> Self {
+        self.delimiter = delimiter;
+        self
+    }
+
+    pub fn analyze(&self) -> Result<AnalysisResult, Box<dyn Error>> {
+        let path = Path::new(&self.file_path);
+        let file = File::open(path)?;
+        let mut rdr = csv::ReaderBuilder::new()
+            .delimiter(self.delimiter as u8)
+            .from_reader(file);
+
+        let mut total_rows = 0;
+        let mut total_columns = 0;
+        let mut column_names = Vec::new();
+        let mut empty_cells = 0;
+        let mut numeric_columns = Vec::new();
+
+        if let Ok(headers) = rdr.headers() {
+            total_columns = headers.len();
+            column_names = headers.iter().map(|s| s.to_string()).collect();
+            
+            for name in &column_names {
+                if name.to_lowercase().contains("id") || 
+                   name.to_lowercase().contains("count") ||
+                   name.to_lowercase().contains("amount") {
+                    numeric_columns.push(name.clone());
+                }
+            }
+        }
+
+        for result in rdr.records() {
+            let record = result?;
+            total_rows += 1;
+            
+            for field in record.iter() {
+                if field.trim().is_empty() {
+                    empty_cells += 1;
+                }
+            }
+        }
+
+        Ok(AnalysisResult {
+            total_rows,
+            total_columns,
+            column_names,
+            empty_cells,
+            numeric_columns,
+            file_size: std::fs::metadata(path)?.len(),
+        })
+    }
+
+    pub fn validate(&self) -> Result<ValidationReport, Box<dyn Error>> {
+        let analysis = self.analyze()?;
+        
+        let mut issues = Vec::new();
+        
+        if analysis.total_rows == 0 {
+            issues.push("File contains no data rows".to_string());
+        }
+        
+        if analysis.empty_cells > 0 {
+            issues.push(format!("Found {} empty cells", analysis.empty_cells));
+        }
+        
+        if analysis.total_columns == 0 {
+            issues.push("No columns detected".to_string());
+        }
+
+        Ok(ValidationReport {
+            is_valid: issues.is_empty(),
+            issues,
+            summary: analysis,
+        })
+    }
+}
+
+pub struct AnalysisResult {
+    pub total_rows: usize,
+    pub total_columns: usize,
+    pub column_names: Vec<String>,
+    pub empty_cells: usize,
+    pub numeric_columns: Vec<String>,
+    pub file_size: u64,
+}
+
+pub struct ValidationReport {
+    pub is_valid: bool,
+    pub issues: Vec<String>,
+    pub summary: AnalysisResult,
+}
+
+impl std::fmt::Display for AnalysisResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "CSV Analysis Report")?;
+        writeln!(f, "==================")?;
+        writeln!(f, "Total Rows: {}", self.total_rows)?;
+        writeln!(f, "Total Columns: {}", self.total_columns)?;
+        writeln!(f, "File Size: {} bytes", self.file_size)?;
+        writeln!(f, "Empty Cells: {}", self.empty_cells)?;
+        writeln!(f, "\nColumns:")?;
+        
+        for (i, name) in self.column_names.iter().enumerate() {
+            writeln!(f, "  {}. {}", i + 1, name)?;
+        }
+        
+        if !self.numeric_columns.is_empty() {
+            writeln!(f, "\nPotential Numeric Columns:")?;
+            for name in &self.numeric_columns {
+                writeln!(f, "  • {}", name)?;
+            }
+        }
+        
+        Ok(())
+    }
+}
+
+pub fn analyze_csv_file(path: &str) -> Result<(), Box<dyn Error>> {
+    let analyzer = CsvAnalyzer::new(path);
+    let result = analyzer.analyze()?;
+    println!("{}", result);
+    
+    let validation = analyzer.validate()?;
+    if !validation.is_valid {
+        println!("\nValidation Issues:");
+        for issue in validation.issues {
+            println!("  ⚠ {}", issue);
+        }
+    } else {
+        println!("\n✓ File validation passed");
+    }
+    
+    Ok(())
 }

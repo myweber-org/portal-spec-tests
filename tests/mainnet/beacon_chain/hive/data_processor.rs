@@ -386,3 +386,178 @@ mod tests {
         assert_eq!(average, Some(20.0));
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufReader, BufWriter};
+use std::path::Path;
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
+}
+
+pub struct DataProcessor {
+    records: Vec<Record>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<usize, Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut csv_reader = csv::Reader::from_reader(reader);
+        
+        let mut count = 0;
+        for result in csv_reader.deserialize() {
+            let record: Record = result?;
+            self.validate_record(&record)?;
+            self.records.push(record);
+            count += 1;
+        }
+        
+        Ok(count)
+    }
+
+    pub fn save_to_csv<P: AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn Error>> {
+        let file = File::create(path)?;
+        let writer = BufWriter::new(file);
+        let mut csv_writer = csv::Writer::from_writer(writer);
+        
+        for record in &self.records {
+            csv_writer.serialize(record)?;
+        }
+        
+        csv_writer.flush()?;
+        Ok(())
+    }
+
+    pub fn filter_active(&self) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|record| record.active)
+            .collect()
+    }
+
+    pub fn calculate_average(&self) -> Option<f64> {
+        if self.records.is_empty() {
+            return None;
+        }
+        
+        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        Some(sum / self.records.len() as f64)
+    }
+
+    pub fn find_by_id(&self, id: u32) -> Option<&Record> {
+        self.records.iter().find(|record| record.id == id)
+    }
+
+    pub fn add_record(&mut self, record: Record) -> Result<(), Box<dyn Error>> {
+        self.validate_record(&record)?;
+        self.records.push(record);
+        Ok(())
+    }
+
+    pub fn remove_record(&mut self, id: u32) -> bool {
+        let original_len = self.records.len();
+        self.records.retain(|record| record.id != id);
+        self.records.len() < original_len
+    }
+
+    fn validate_record(&self, record: &Record) -> Result<(), Box<dyn Error>> {
+        if record.name.is_empty() {
+            return Err("Record name cannot be empty".into());
+        }
+        
+        if record.value < 0.0 {
+            return Err("Record value cannot be negative".into());
+        }
+        
+        Ok(())
+    }
+
+    pub fn record_count(&self) -> usize {
+        self.records.len()
+    }
+
+    pub fn clear(&mut self) {
+        self.records.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_data_processor_operations() {
+        let mut processor = DataProcessor::new();
+        
+        let record = Record {
+            id: 1,
+            name: "Test Record".to_string(),
+            value: 42.5,
+            active: true,
+        };
+        
+        assert!(processor.add_record(record).is_ok());
+        assert_eq!(processor.record_count(), 1);
+        
+        let found = processor.find_by_id(1);
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().name, "Test Record");
+        
+        let avg = processor.calculate_average();
+        assert!(avg.is_some());
+        assert_eq!(avg.unwrap(), 42.5);
+        
+        let active_records = processor.filter_active();
+        assert_eq!(active_records.len(), 1);
+        
+        assert!(processor.remove_record(1));
+        assert_eq!(processor.record_count(), 0);
+    }
+
+    #[test]
+    fn test_csv_serialization() {
+        let mut processor = DataProcessor::new();
+        
+        let records = vec![
+            Record {
+                id: 1,
+                name: "First".to_string(),
+                value: 10.0,
+                active: true,
+            },
+            Record {
+                id: 2,
+                name: "Second".to_string(),
+                value: 20.0,
+                active: false,
+            },
+        ];
+        
+        for record in records {
+            processor.add_record(record).unwrap();
+        }
+        
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.path();
+        
+        assert!(processor.save_to_csv(path).is_ok());
+        
+        let mut new_processor = DataProcessor::new();
+        assert!(new_processor.load_from_csv(path).is_ok());
+        assert_eq!(new_processor.record_count(), 2);
+    }
+}

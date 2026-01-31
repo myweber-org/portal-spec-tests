@@ -382,3 +382,130 @@ mod tests {
         assert!(errors.is_empty());
     }
 }
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum ProcessingError {
+    #[error("Invalid input data")]
+    InvalidInput,
+    #[error("Transformation failed: {0}")]
+    TransformationFailed(String),
+    #[error("Validation error: {0}")]
+    ValidationError(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataRecord {
+    pub id: u64,
+    pub value: f64,
+    pub timestamp: i64,
+    pub metadata: Option<serde_json::Value>,
+}
+
+pub struct DataProcessor {
+    validation_threshold: f64,
+    transformation_factor: f64,
+}
+
+impl DataProcessor {
+    pub fn new(validation_threshold: f64, transformation_factor: f64) -> Self {
+        Self {
+            validation_threshold,
+            transformation_factor,
+        }
+    }
+
+    pub fn validate_record(&self, record: &DataRecord) -> Result<(), ProcessingError> {
+        if record.value.abs() > self.validation_threshold {
+            return Err(ProcessingError::ValidationError(
+                format!("Value {} exceeds threshold {}", record.value, self.validation_threshold)
+            ));
+        }
+
+        if record.timestamp < 0 {
+            return Err(ProcessingError::ValidationError(
+                "Timestamp cannot be negative".to_string()
+            ));
+        }
+
+        Ok(())
+    }
+
+    pub fn transform_record(&self, record: &DataRecord) -> Result<DataRecord, ProcessingError> {
+        self.validate_record(record)?;
+
+        let transformed_value = record.value * self.transformation_factor;
+        
+        if transformed_value.is_nan() || transformed_value.is_infinite() {
+            return Err(ProcessingError::TransformationFailed(
+                "Resulting value is not finite".to_string()
+            ));
+        }
+
+        Ok(DataRecord {
+            id: record.id,
+            value: transformed_value,
+            timestamp: record.timestamp,
+            metadata: record.metadata.clone(),
+        })
+    }
+
+    pub fn process_batch(&self, records: Vec<DataRecord>) -> Vec<Result<DataRecord, ProcessingError>> {
+        records
+            .into_iter()
+            .map(|record| self.transform_record(&record))
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_record_processing() {
+        let processor = DataProcessor::new(1000.0, 2.0);
+        let record = DataRecord {
+            id: 1,
+            value: 42.5,
+            timestamp: 1234567890,
+            metadata: None,
+        };
+
+        let result = processor.transform_record(&record);
+        assert!(result.is_ok());
+        let transformed = result.unwrap();
+        assert_eq!(transformed.value, 85.0);
+    }
+
+    #[test]
+    fn test_invalid_record_validation() {
+        let processor = DataProcessor::new(50.0, 1.0);
+        let record = DataRecord {
+            id: 2,
+            value: 100.0,
+            timestamp: 1234567890,
+            metadata: None,
+        };
+
+        let result = processor.validate_record(&record);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_batch_processing() {
+        let processor = DataProcessor::new(100.0, 3.0);
+        let records = vec![
+            DataRecord { id: 1, value: 10.0, timestamp: 1000, metadata: None },
+            DataRecord { id: 2, value: 200.0, timestamp: 2000, metadata: None },
+            DataRecord { id: 3, value: 30.0, timestamp: 3000, metadata: None },
+        ];
+
+        let results = processor.process_batch(records);
+        assert_eq!(results.len(), 3);
+        assert!(results[0].is_ok());
+        assert!(results[1].is_err());
+        assert!(results[2].is_ok());
+    }
+}

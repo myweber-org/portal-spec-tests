@@ -139,3 +139,111 @@ mod tests {
         assert_eq!(new_processor.get_record_count(), 2);
     }
 }
+use csv::{Reader, Writer};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
+}
+
+pub struct DataProcessor {
+    records: Vec<Record>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_csv(&mut self, path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(path)?;
+        let mut reader = Reader::from_reader(file);
+
+        for result in reader.deserialize() {
+            let record: Record = result?;
+            self.records.push(record);
+        }
+
+        Ok(())
+    }
+
+    pub fn save_to_csv(&self, path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::create(path)?;
+        let mut writer = Writer::from_writer(file);
+
+        for record in &self.records {
+            writer.serialize(record)?;
+        }
+
+        writer.flush()?;
+        Ok(())
+    }
+
+    pub fn filter_active(&self) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|record| record.active)
+            .collect()
+    }
+
+    pub fn calculate_total(&self) -> f64 {
+        self.records.iter().map(|record| record.value).sum()
+    }
+
+    pub fn add_record(&mut self, id: u32, name: String, value: f64, active: bool) {
+        let record = Record {
+            id,
+            name,
+            value,
+            active,
+        };
+        self.records.push(record);
+    }
+
+    pub fn get_record_count(&self) -> usize {
+        self.records.len()
+    }
+
+    pub fn clear(&mut self) {
+        self.records.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_data_processor() {
+        let mut processor = DataProcessor::new();
+        assert_eq!(processor.get_record_count(), 0);
+
+        processor.add_record(1, "Test1".to_string(), 10.5, true);
+        processor.add_record(2, "Test2".to_string(), 20.0, false);
+        processor.add_record(3, "Test3".to_string(), 30.5, true);
+
+        assert_eq!(processor.get_record_count(), 3);
+        assert_eq!(processor.calculate_total(), 61.0);
+
+        let active_records = processor.filter_active();
+        assert_eq!(active_records.len(), 2);
+
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.path().to_str().unwrap();
+
+        processor.save_to_csv(path).unwrap();
+
+        let mut new_processor = DataProcessor::new();
+        new_processor.load_from_csv(path).unwrap();
+        assert_eq!(new_processor.get_record_count(), 3);
+    }
+}

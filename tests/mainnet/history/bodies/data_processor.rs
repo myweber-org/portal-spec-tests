@@ -1291,3 +1291,213 @@ mod tests {
         assert!((std_dev - 2.0).abs() < 1e-10);
     }
 }
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use thiserror::Error;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataRecord {
+    pub id: u64,
+    pub timestamp: i64,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
+}
+
+#[derive(Debug, Error)]
+pub enum DataError {
+    #[error("Invalid data format")]
+    InvalidFormat,
+    #[error("Data validation failed: {0}")]
+    ValidationFailed(String),
+    #[error("Transformation error: {0}")]
+    TransformationError(String),
+}
+
+pub struct DataProcessor {
+    validation_threshold: f64,
+    max_values: usize,
+}
+
+impl DataProcessor {
+    pub fn new(validation_threshold: f64, max_values: usize) -> Self {
+        Self {
+            validation_threshold,
+            max_values,
+        }
+    }
+
+    pub fn validate_record(&self, record: &DataRecord) -> Result<(), DataError> {
+        if record.values.is_empty() {
+            return Err(DataError::ValidationFailed("Empty values array".to_string()));
+        }
+
+        if record.values.len() > self.max_values {
+            return Err(DataError::ValidationFailed(
+                format!("Exceeds maximum values limit: {}", self.max_values)
+            ));
+        }
+
+        for &value in &record.values {
+            if value.is_nan() || value.is_infinite() {
+                return Err(DataError::ValidationFailed(
+                    "Invalid numeric value detected".to_string()
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn transform_record(&self, record: &DataRecord) -> Result<DataRecord, DataError> {
+        self.validate_record(record)?;
+
+        let mut transformed = record.clone();
+        
+        transformed.values = record.values
+            .iter()
+            .map(|&v| {
+                if v.abs() < self.validation_threshold {
+                    v * 2.0
+                } else {
+                    v / 2.0
+                }
+            })
+            .collect();
+
+        transformed.metadata.insert(
+            "processed_timestamp".to_string(),
+            chrono::Utc::now().timestamp().to_string()
+        );
+
+        transformed.metadata.insert(
+            "transformation_applied".to_string(),
+            "threshold_based_scaling".to_string()
+        );
+
+        Ok(transformed)
+    }
+
+    pub fn batch_process(
+        &self,
+        records: Vec<DataRecord>
+    ) -> (Vec<DataRecord>, Vec<(usize, DataError)>) {
+        let mut successful = Vec::new();
+        let mut errors = Vec::new();
+
+        for (index, record) in records.into_iter().enumerate() {
+            match self.transform_record(&record) {
+                Ok(transformed) => successful.push(transformed),
+                Err(err) => errors.push((index, err)),
+            }
+        }
+
+        (successful, errors)
+    }
+
+    pub fn calculate_statistics(&self, records: &[DataRecord]) -> HashMap<String, f64> {
+        let mut stats = HashMap::new();
+
+        if records.is_empty() {
+            return stats;
+        }
+
+        let all_values: Vec<f64> = records
+            .iter()
+            .flat_map(|r| r.values.clone())
+            .collect();
+
+        let count = all_values.len() as f64;
+        let sum: f64 = all_values.iter().sum();
+        let mean = sum / count;
+
+        let variance: f64 = all_values
+            .iter()
+            .map(|&v| (v - mean).powi(2))
+            .sum::<f64>() / count;
+
+        stats.insert("record_count".to_string(), records.len() as f64);
+        stats.insert("value_count".to_string(), count);
+        stats.insert("mean".to_string(), mean);
+        stats.insert("variance".to_string(), variance);
+        stats.insert("sum".to_string(), sum);
+
+        if let Some(&min) = all_values.iter().min_by(|a, b| a.partial_cmp(b).unwrap()) {
+            stats.insert("min".to_string(), min);
+        }
+
+        if let Some(&max) = all_values.iter().max_by(|a, b| a.partial_cmp(b).unwrap()) {
+            stats.insert("max".to_string(), max);
+        }
+
+        stats
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validation_success() {
+        let processor = DataProcessor::new(10.0, 100);
+        let record = DataRecord {
+            id: 1,
+            timestamp: 1234567890,
+            values: vec![5.0, 15.0, 25.0],
+            metadata: HashMap::new(),
+        };
+
+        assert!(processor.validate_record(&record).is_ok());
+    }
+
+    #[test]
+    fn test_validation_empty_values() {
+        let processor = DataProcessor::new(10.0, 100);
+        let record = DataRecord {
+            id: 1,
+            timestamp: 1234567890,
+            values: vec![],
+            metadata: HashMap::new(),
+        };
+
+        assert!(processor.validate_record(&record).is_err());
+    }
+
+    #[test]
+    fn test_transformation() {
+        let processor = DataProcessor::new(10.0, 100);
+        let record = DataRecord {
+            id: 1,
+            timestamp: 1234567890,
+            values: vec![5.0, 15.0],
+            metadata: HashMap::new(),
+        };
+
+        let result = processor.transform_record(&record).unwrap();
+        assert_eq!(result.values, vec![10.0, 7.5]);
+        assert!(result.metadata.contains_key("processed_timestamp"));
+    }
+
+    #[test]
+    fn test_batch_processing() {
+        let processor = DataProcessor::new(10.0, 100);
+        let records = vec![
+            DataRecord {
+                id: 1,
+                timestamp: 1234567890,
+                values: vec![5.0],
+                metadata: HashMap::new(),
+            },
+            DataRecord {
+                id: 2,
+                timestamp: 1234567891,
+                values: vec![],
+                metadata: HashMap::new(),
+            },
+        ];
+
+        let (successful, errors) = processor.batch_process(records);
+        assert_eq!(successful.len(), 1);
+        assert_eq!(errors.len(), 1);
+    }
+}

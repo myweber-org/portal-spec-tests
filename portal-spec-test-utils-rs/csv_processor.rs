@@ -272,4 +272,103 @@ mod tests {
         fs::remove_file(test_input).unwrap();
         fs::remove_file(test_output).unwrap();
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug)]
+pub struct CsvRecord {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+}
+
+pub fn parse_csv_file<P: AsRef<Path>>(path: P) -> Result<Vec<CsvRecord>, Box<dyn Error>> {
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+    let mut records = Vec::new();
+
+    for (line_num, line) in reader.lines().enumerate() {
+        let line = line?;
+        if line.trim().is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        let fields: Vec<&str> = line.split(',').collect();
+        if fields.len() != 3 {
+            return Err(format!("Invalid field count on line {}", line_num + 1).into());
+        }
+
+        let id = fields[0].parse::<u32>()
+            .map_err(|e| format!("Invalid ID on line {}: {}", line_num + 1, e))?;
+        
+        let name = fields[1].trim().to_string();
+        if name.is_empty() {
+            return Err(format!("Empty name field on line {}", line_num + 1).into());
+        }
+
+        let value = fields[2].parse::<f64>()
+            .map_err(|e| format!("Invalid value on line {}: {}", line_num + 1, e))?;
+
+        records.push(CsvRecord { id, name, value });
+    }
+
+    Ok(records)
+}
+
+pub fn calculate_total_value(records: &[CsvRecord]) -> f64 {
+    records.iter().map(|r| r.value).sum()
+}
+
+pub fn find_max_value_record(records: &[CsvRecord]) -> Option<&CsvRecord> {
+    records.iter().max_by(|a, b| a.value.partial_cmp(&b.value).unwrap())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_valid_csv_parsing() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "1,Alice,42.5").unwrap();
+        writeln!(temp_file, "2,Bob,37.8").unwrap();
+        writeln!(temp_file, "# This is a comment").unwrap();
+        writeln!(temp_file, "").unwrap();
+        writeln!(temp_file, "3,Charlie,19.2").unwrap();
+
+        let records = parse_csv_file(temp_file.path()).unwrap();
+        assert_eq!(records.len(), 3);
+        assert_eq!(records[0].name, "Alice");
+        assert_eq!(records[1].value, 37.8);
+        assert_eq!(records[2].id, 3);
+    }
+
+    #[test]
+    fn test_calculate_total() {
+        let records = vec![
+            CsvRecord { id: 1, name: "Test1".to_string(), value: 10.0 },
+            CsvRecord { id: 2, name: "Test2".to_string(), value: 20.0 },
+            CsvRecord { id: 3, name: "Test3".to_string(), value: 30.0 },
+        ];
+        
+        let total = calculate_total_value(&records);
+        assert!((total - 60.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_find_max_value() {
+        let records = vec![
+            CsvRecord { id: 1, name: "Low".to_string(), value: 5.0 },
+            CsvRecord { id: 2, name: "High".to_string(), value: 15.0 },
+            CsvRecord { id: 3, name: "Medium".to_string(), value: 10.0 },
+        ];
+        
+        let max_record = find_max_value_record(&records).unwrap();
+        assert_eq!(max_record.id, 2);
+        assert!((max_record.value - 15.0).abs() < f64::EPSILON);
+    }
 }

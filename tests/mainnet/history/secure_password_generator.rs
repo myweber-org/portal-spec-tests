@@ -255,4 +255,125 @@ mod tests {
         let result = generator.generate();
         assert!(result.is_err());
     }
+}use rand::Rng;
+use std::io;
+
+const DEFAULT_LENGTH: usize = 16;
+const UPPERCASE: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+const LOWERCASE: &str = "abcdefghijklmnopqrstuvwxyz";
+const DIGITS: &str = "0123456789";
+const SPECIAL: &str = "!@#$%^&*()_+-=[]{}|;:,.<>?";
+
+struct PasswordConfig {
+    length: usize,
+    use_uppercase: bool,
+    use_lowercase: bool,
+    use_digits: bool,
+    use_special: bool,
+}
+
+impl Default for PasswordConfig {
+    fn default() -> Self {
+        Self {
+            length: DEFAULT_LENGTH,
+            use_uppercase: true,
+            use_lowercase: true,
+            use_digits: true,
+            use_special: true,
+        }
+    }
+}
+
+fn generate_password(config: &PasswordConfig) -> Result<String, &'static str> {
+    let mut character_pool = String::new();
+    
+    if config.use_uppercase { character_pool.push_str(UPPERCASE); }
+    if config.use_lowercase { character_pool.push_str(LOWERCASE); }
+    if config.use_digits { character_pool.push_str(DIGITS); }
+    if config.use_special { character_pool.push_str(SPECIAL); }
+    
+    if character_pool.is_empty() {
+        return Err("At least one character set must be selected");
+    }
+    
+    if config.length == 0 {
+        return Err("Password length must be greater than 0");
+    }
+    
+    let mut rng = rand::thread_rng();
+    let password: String = (0..config.length)
+        .map(|_| {
+            let idx = rng.gen_range(0..character_pool.len());
+            character_pool.chars().nth(idx).unwrap()
+        })
+        .collect();
+    
+    Ok(password)
+}
+
+fn get_user_input() -> PasswordConfig {
+    let mut config = PasswordConfig::default();
+    
+    println!("Password Generator");
+    println!("==================");
+    
+    let mut input = String::new();
+    
+    println!("Enter password length (default: {}): ", DEFAULT_LENGTH);
+    io::stdin().read_line(&mut input).unwrap();
+    if let Ok(length) = input.trim().parse::<usize>() {
+        config.length = length;
+    }
+    input.clear();
+    
+    println!("Include uppercase letters? (y/n, default: y): ");
+    io::stdin().read_line(&mut input).unwrap();
+    config.use_uppercase = !input.trim().eq_ignore_ascii_case("n");
+    input.clear();
+    
+    println!("Include lowercase letters? (y/n, default: y): ");
+    io::stdin().read_line(&mut input).unwrap();
+    config.use_lowercase = !input.trim().eq_ignore_ascii_case("n");
+    input.clear();
+    
+    println!("Include digits? (y/n, default: y): ");
+    io::stdin().read_line(&mut input).unwrap();
+    config.use_digits = !input.trim().eq_ignore_ascii_case("n");
+    input.clear();
+    
+    println!("Include special characters? (y/n, default: y): ");
+    io::stdin().read_line(&mut input).unwrap();
+    config.use_special = !input.trim().eq_ignore_ascii_case("n");
+    
+    config
+}
+
+fn main() {
+    let config = get_user_input();
+    
+    match generate_password(&config) {
+        Ok(password) => {
+            println!("\nGenerated Password: {}", password);
+            println!("Password length: {}", password.len());
+            
+            let mut has_uppercase = false;
+            let mut has_lowercase = false;
+            let mut has_digit = false;
+            let mut has_special = false;
+            
+            for ch in password.chars() {
+                if UPPERCASE.contains(ch) { has_uppercase = true; }
+                if LOWERCASE.contains(ch) { has_lowercase = true; }
+                if DIGITS.contains(ch) { has_digit = true; }
+                if SPECIAL.contains(ch) { has_special = true; }
+            }
+            
+            println!("\nCharacter set analysis:");
+            println!("Uppercase letters: {}", if has_uppercase { "✓" } else { "✗" });
+            println!("Lowercase letters: {}", if has_lowercase { "✓" } else { "✗" });
+            println!("Digits: {}", if has_digit { "✓" } else { "✗" });
+            println!("Special characters: {}", if has_special { "✓" } else { "✗" });
+        }
+        Err(e) => println!("Error: {}", e),
+    }
 }

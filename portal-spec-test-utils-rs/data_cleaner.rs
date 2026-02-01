@@ -1,5 +1,4 @@
 use std::collections::HashSet;
-use std::hash::Hash;
 
 pub struct DataCleaner<T> {
     seen: HashSet<T>,
@@ -7,7 +6,7 @@ pub struct DataCleaner<T> {
 
 impl<T> DataCleaner<T>
 where
-    T: Hash + Eq + Clone,
+    T: Eq + std::hash::Hash + Clone,
 {
     pub fn new() -> Self {
         DataCleaner {
@@ -15,26 +14,27 @@ where
         }
     }
 
-    pub fn deduplicate(&mut self, items: Vec<T>) -> Vec<T> {
-        let mut result = Vec::new();
-        for item in items {
-            if self.seen.insert(item.clone()) {
-                result.push(item);
-            }
+    pub fn process(&mut self, item: T) -> Option<T> {
+        if self.seen.insert(item.clone()) {
+            Some(item)
+        } else {
+            None
         }
-        result
     }
 
-    pub fn normalize_strings(strings: Vec<String>) -> Vec<String> {
-        strings
+    pub fn process_batch(&mut self, items: Vec<T>) -> Vec<T> {
+        items
             .into_iter()
-            .map(|s| s.trim().to_lowercase())
-            .filter(|s| !s.is_empty())
+            .filter_map(|item| self.process(item))
             .collect()
     }
 
     pub fn reset(&mut self) {
         self.seen.clear();
+    }
+
+    pub fn count_unique(&self) -> usize {
+        self.seen.len()
     }
 }
 
@@ -43,33 +43,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_deduplicate_numbers() {
+    fn test_deduplication() {
         let mut cleaner = DataCleaner::new();
-        let numbers = vec![1, 2, 2, 3, 4, 4, 5];
-        let deduped = cleaner.deduplicate(numbers);
-        assert_eq!(deduped, vec![1, 2, 3, 4, 5]);
+        let data = vec![1, 2, 2, 3, 4, 4, 4, 5];
+
+        let result = cleaner.process_batch(data);
+        assert_eq!(result, vec![1, 2, 3, 4, 5]);
+        assert_eq!(cleaner.count_unique(), 5);
     }
 
     #[test]
-    fn test_deduplicate_strings() {
+    fn test_reset() {
         let mut cleaner = DataCleaner::new();
-        let strings = vec!["apple", "banana", "apple", "orange"]
-            .into_iter()
-            .map(String::from)
-            .collect();
-        let deduped = cleaner.deduplicate(strings);
-        assert_eq!(deduped.len(), 3);
-    }
+        cleaner.process_batch(vec!["a", "b", "c"]);
+        assert_eq!(cleaner.count_unique(), 3);
 
-    #[test]
-    fn test_normalize_strings() {
-        let input = vec![
-            "  HELLO  ".to_string(),
-            "World".to_string(),
-            "".to_string(),
-            "  ".to_string(),
-        ];
-        let normalized = DataCleaner::normalize_strings(input);
-        assert_eq!(normalized, vec!["hello", "world"]);
+        cleaner.reset();
+        assert_eq!(cleaner.count_unique(), 0);
+
+        let result = cleaner.process_batch(vec!["a", "b", "c"]);
+        assert_eq!(result, vec!["a", "b", "c"]);
     }
 }

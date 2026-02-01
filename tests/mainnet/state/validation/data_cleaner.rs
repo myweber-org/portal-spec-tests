@@ -280,3 +280,73 @@ mod tests {
         assert_eq!(clean_data(""), "");
     }
 }
+use std::collections::HashSet;
+
+pub struct DataCleaner {
+    dedupe_set: HashSet<String>,
+}
+
+impl DataCleaner {
+    pub fn new() -> Self {
+        DataCleaner {
+            dedupe_set: HashSet::new(),
+        }
+    }
+
+    pub fn deduplicate(&mut self, data: &str) -> bool {
+        self.dedupe_set.insert(data.to_string())
+    }
+
+    pub fn validate_email(email: &str) -> bool {
+        let parts: Vec<&str> = email.split('@').collect();
+        if parts.len() != 2 {
+            return false;
+        }
+        
+        let domain_parts: Vec<&str> = parts[1].split('.').collect();
+        domain_parts.len() >= 2 
+            && !parts[0].is_empty() 
+            && parts[0].chars().all(|c| c.is_alphanumeric() || c == '.' || c == '_' || c == '-')
+    }
+
+    pub fn normalize_whitespace(text: &str) -> String {
+        text.split_whitespace().collect::<Vec<&str>>().join(" ")
+    }
+
+    pub fn reset(&mut self) {
+        self.dedupe_set.clear();
+    }
+
+    pub fn get_unique_count(&self) -> usize {
+        self.dedupe_set.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_deduplicate() {
+        let mut cleaner = DataCleaner::new();
+        assert!(cleaner.deduplicate("test"));
+        assert!(!cleaner.deduplicate("test"));
+        assert!(cleaner.deduplicate("another"));
+    }
+
+    #[test]
+    fn test_email_validation() {
+        assert!(DataCleaner::validate_email("user@example.com"));
+        assert!(!DataCleaner::validate_email("invalid-email"));
+        assert!(!DataCleaner::validate_email("@domain.com"));
+        assert!(!DataCleaner::validate_email("user@"));
+    }
+
+    #[test]
+    fn test_whitespace_normalization() {
+        assert_eq!(
+            DataCleaner::normalize_whitespace("  multiple   spaces   here  "),
+            "multiple spaces here"
+        );
+    }
+}

@@ -98,3 +98,150 @@ mod tests {
         assert!(result.is_err());
     }
 }
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug)]
+pub enum ProcessingError {
+    InvalidId,
+    EmptyName,
+    NegativeValue,
+    DuplicateTag,
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProcessingError::InvalidId => write!(f, "ID must be greater than zero"),
+            ProcessingError::EmptyName => write!(f, "Name cannot be empty"),
+            ProcessingError::NegativeValue => write!(f, "Value must be non-negative"),
+            ProcessingError::DuplicateTag => write!(f, "Tags must be unique"),
+        }
+    }
+}
+
+impl Error for ProcessingError {}
+
+impl DataRecord {
+    pub fn new(id: u32, name: String, value: f64, tags: Vec<String>) -> Result<Self, ProcessingError> {
+        if id == 0 {
+            return Err(ProcessingError::InvalidId);
+        }
+        
+        if name.trim().is_empty() {
+            return Err(ProcessingError::EmptyName);
+        }
+        
+        if value < 0.0 {
+            return Err(ProcessingError::NegativeValue);
+        }
+        
+        let mut seen_tags = HashMap::new();
+        for tag in &tags {
+            if seen_tags.contains_key(tag) {
+                return Err(ProcessingError::DuplicateTag);
+            }
+            seen_tags.insert(tag.clone(), true);
+        }
+        
+        Ok(Self {
+            id,
+            name,
+            value,
+            tags,
+        })
+    }
+    
+    pub fn normalize_value(&mut self, factor: f64) {
+        if factor != 0.0 {
+            self.value /= factor;
+        }
+    }
+    
+    pub fn add_tag(&mut self, tag: String) -> Result<(), ProcessingError> {
+        if self.tags.contains(&tag) {
+            return Err(ProcessingError::DuplicateTag);
+        }
+        self.tags.push(tag);
+        Ok(())
+    }
+    
+    pub fn calculate_score(&self) -> f64 {
+        let base_score = self.value * 100.0;
+        let tag_bonus = self.tags.len() as f64 * 5.0;
+        base_score + tag_bonus
+    }
+}
+
+pub fn process_records(records: &mut [DataRecord]) -> Vec<Result<f64, ProcessingError>> {
+    records.iter_mut()
+        .map(|record| {
+            record.normalize_value(10.0);
+            if record.value > 1000.0 {
+                Err(ProcessingError::NegativeValue)
+            } else {
+                Ok(record.calculate_score())
+            }
+        })
+        .collect()
+}
+
+pub fn filter_records_by_tag(records: &[DataRecord], tag_filter: &str) -> Vec<&DataRecord> {
+    records.iter()
+        .filter(|record| record.tags.iter().any(|tag| tag.contains(tag_filter)))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_valid_record_creation() {
+        let record = DataRecord::new(
+            1,
+            "Test Record".to_string(),
+            42.5,
+            vec!["alpha".to_string(), "beta".to_string()]
+        ).unwrap();
+        
+        assert_eq!(record.id, 1);
+        assert_eq!(record.name, "Test Record");
+        assert_eq!(record.value, 42.5);
+        assert_eq!(record.tags.len(), 2);
+    }
+    
+    #[test]
+    fn test_invalid_id() {
+        let result = DataRecord::new(
+            0,
+            "Test".to_string(),
+            10.0,
+            vec![]
+        );
+        
+        assert!(matches!(result, Err(ProcessingError::InvalidId)));
+    }
+    
+    #[test]
+    fn test_calculate_score() {
+        let record = DataRecord::new(
+            1,
+            "Test".to_string(),
+            5.0,
+            vec!["tag1".to_string(), "tag2".to_string()]
+        ).unwrap();
+        
+        let score = record.calculate_score();
+        assert_eq!(score, 5.0 * 100.0 + 2.0 * 5.0);
+    }
+}

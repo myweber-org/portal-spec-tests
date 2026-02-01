@@ -344,4 +344,102 @@ mod tests {
         assert_eq!(variance, 8.0);
         assert_eq!(std_dev, 2.8284271247461903);
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+
+pub struct DataProcessor {
+    file_path: String,
+    delimiter: char,
+}
+
+impl DataProcessor {
+    pub fn new(file_path: &str, delimiter: char) -> Self {
+        DataProcessor {
+            file_path: file_path.to_string(),
+            delimiter,
+        }
+    }
+
+    pub fn process_with_filter<F>(&self, filter_fn: F) -> Result<Vec<Vec<String>>, Box<dyn Error>>
+    where
+        F: Fn(&[String]) -> bool,
+    {
+        let file = File::open(&self.file_path)?;
+        let reader = BufReader::new(file);
+        let mut results = Vec::new();
+
+        for line in reader.lines() {
+            let line = line?;
+            let fields: Vec<String> = line
+                .split(self.delimiter)
+                .map(|s| s.trim().to_string())
+                .collect();
+
+            if filter_fn(&fields) {
+                results.push(fields);
+            }
+        }
+
+        Ok(results)
+    }
+
+    pub fn calculate_column_average(&self, column_index: usize) -> Result<f64, Box<dyn Error>> {
+        let file = File::open(&self.file_path)?;
+        let reader = BufReader::new(file);
+        let mut sum = 0.0;
+        let mut count = 0;
+
+        for line in reader.lines() {
+            let line = line?;
+            let fields: Vec<&str> = line.split(self.delimiter).collect();
+
+            if column_index < fields.len() {
+                if let Ok(value) = fields[column_index].trim().parse::<f64>() {
+                    sum += value;
+                    count += 1;
+                }
+            }
+        }
+
+        if count > 0 {
+            Ok(sum / count as f64)
+        } else {
+            Ok(0.0)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_process_with_filter() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,salary\nAlice,30,50000\nBob,25,45000\nCharlie,35,60000").unwrap();
+
+        let processor = DataProcessor::new(temp_file.path().to_str().unwrap(), ',');
+        let result = processor
+            .process_with_filter(|fields| {
+                fields.len() > 1 && fields[1].parse::<i32>().unwrap_or(0) > 30
+            })
+            .unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0][0], "Charlie");
+    }
+
+    #[test]
+    fn test_calculate_column_average() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "10.5\n20.0\n30.5").unwrap();
+
+        let processor = DataProcessor::new(temp_file.path().to_str().unwrap(), ',');
+        let average = processor.calculate_column_average(0).unwrap();
+
+        assert!((average - 20.333).abs() < 0.001);
+    }
 }

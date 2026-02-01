@@ -316,4 +316,132 @@ mod tests {
         let important_records = processor.filter_by_tag("important");
         assert_eq!(important_records.len(), 2);
     }
+}use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum DataError {
+    #[error("Invalid data format")]
+    InvalidFormat,
+    #[error("Missing required field: {0}")]
+    MissingField(String),
+    #[error("Value out of range: {0}")]
+    OutOfRange(String),
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub timestamp: i64,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
+}
+
+pub struct DataProcessor {
+    validation_rules: HashMap<String, ValidationRule>,
+}
+
+#[derive(Clone)]
+pub struct ValidationRule {
+    pub min_value: Option<f64>,
+    pub max_value: Option<f64>,
+    pub required_fields: Vec<String>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            validation_rules: HashMap::new(),
+        }
+    }
+
+    pub fn add_validation_rule(&mut self, key: String, rule: ValidationRule) {
+        self.validation_rules.insert(key, rule);
+    }
+
+    pub fn validate_record(&self, record: &DataRecord) -> Result<(), DataError> {
+        if record.values.is_empty() {
+            return Err(DataError::InvalidFormat);
+        }
+
+        if record.timestamp < 0 {
+            return Err(DataError::OutOfRange("timestamp".to_string()));
+        }
+
+        for value in &record.values {
+            if value.is_nan() || value.is_infinite() {
+                return Err(DataError::InvalidFormat);
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn transform_values(&self, record: &mut DataRecord, transform_fn: fn(f64) -> f64) {
+        for value in &mut record.values {
+            *value = transform_fn(*value);
+        }
+    }
+
+    pub fn calculate_statistics(&self, records: &[DataRecord]) -> HashMap<String, f64> {
+        let mut stats = HashMap::new();
+        
+        if records.is_empty() {
+            return stats;
+        }
+
+        let total_values: usize = records.iter().map(|r| r.values.len()).sum();
+        let sum: f64 = records.iter()
+            .flat_map(|r| r.values.iter())
+            .sum();
+        
+        stats.insert("total_records".to_string(), records.len() as f64);
+        stats.insert("total_values".to_string(), total_values as f64);
+        stats.insert("average_value".to_string(), sum / total_values as f64);
+
+        stats
+    }
+}
+
+impl Default for DataProcessor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn square_transform(x: f64) -> f64 {
+        x * x
+    }
+
+    #[test]
+    fn test_validation() {
+        let processor = DataProcessor::new();
+        let valid_record = DataRecord {
+            id: 1,
+            timestamp: 1625097600,
+            values: vec![1.0, 2.0, 3.0],
+            metadata: HashMap::new(),
+        };
+
+        assert!(processor.validate_record(&valid_record).is_ok());
+    }
+
+    #[test]
+    fn test_transform() {
+        let processor = DataProcessor::new();
+        let mut record = DataRecord {
+            id: 1,
+            timestamp: 1625097600,
+            values: vec![2.0, 3.0, 4.0],
+            metadata: HashMap::new(),
+        };
+
+        processor.transform_values(&mut record, square_transform);
+        assert_eq!(record.values, vec![4.0, 9.0, 16.0]);
+    }
 }

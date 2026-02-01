@@ -1,64 +1,68 @@
+
 use std::collections::HashSet;
 
-pub fn clean_string_data(strings: Vec<String>) -> Vec<String> {
-    let mut seen = HashSet::new();
-    let mut result = Vec::new();
+pub struct DataCleaner {
+    dedupe_set: HashSet<String>,
+}
 
-    for s in strings {
-        let normalized = s.trim().to_lowercase();
-        if !normalized.is_empty() && seen.insert(normalized.clone()) {
-            result.push(normalized);
+impl DataCleaner {
+    pub fn new() -> Self {
+        DataCleaner {
+            dedupe_set: HashSet::new(),
         }
     }
 
-    result.sort();
-    result
-}use csv::{ReaderBuilder, WriterBuilder};
-use serde::{Deserialize, Serialize};
-use std::error::Error;
-use std::fs::File;
-
-#[derive(Debug, Deserialize, Serialize)]
-struct Record {
-    id: u32,
-    name: String,
-    age: u8,
-    active: bool,
-}
-
-fn clean_csv(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
-    let input_file = File::open(input_path)?;
-    let mut reader = ReaderBuilder::new()
-        .has_headers(true)
-        .from_reader(input_file);
-
-    let output_file = File::create(output_path)?;
-    let mut writer = WriterBuilder::new()
-        .has_headers(true)
-        .from_writer(output_file);
-
-    for result in reader.deserialize() {
-        let mut record: Record = result?;
-        
-        if record.age > 120 {
-            record.age = 120;
+    pub fn deduplicate(&mut self, input: &str) -> Option<String> {
+        if self.dedupe_set.contains(input) {
+            None
+        } else {
+            self.dedupe_set.insert(input.to_string());
+            Some(input.to_string())
         }
-        
-        record.name = record.name.trim().to_string();
-        
-        if record.name.is_empty() {
-            record.name = "Unknown".to_string();
-        }
-
-        writer.serialize(&record)?;
     }
 
-    writer.flush()?;
-    Ok(())
+    pub fn normalize_whitespace(text: &str) -> String {
+        text.split_whitespace().collect::<Vec<&str>>().join(" ")
+    }
+
+    pub fn trim_and_lowercase(text: &str) -> String {
+        text.trim().to_lowercase()
+    }
+
+    pub fn clean_pipeline(&mut self, input: &str) -> Option<String> {
+        let normalized = Self::normalize_whitespace(input);
+        let processed = Self::trim_and_lowercase(&normalized);
+        self.deduplicate(&processed)
+    }
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
-    clean_csv("input.csv", "cleaned_output.csv")?;
-    println!("Data cleaning completed successfully");
-    Ok(())
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_deduplication() {
+        let mut cleaner = DataCleaner::new();
+        assert!(cleaner.deduplicate("test").is_some());
+        assert!(cleaner.deduplicate("test").is_none());
+        assert!(cleaner.deduplicate("another").is_some());
+    }
+
+    #[test]
+    fn test_normalization() {
+        assert_eq!(
+            DataCleaner::normalize_whitespace("  multiple   spaces   here  "),
+            "multiple spaces here"
+        );
+    }
+
+    #[test]
+    fn test_pipeline() {
+        let mut cleaner = DataCleaner::new();
+        let result = cleaner.clean_pipeline("  Hello  World  ");
+        assert_eq!(result, Some("hello world".to_string()));
+        
+        let duplicate = cleaner.clean_pipeline("  Hello  World  ");
+        assert!(duplicate.is_none());
+    }
 }

@@ -1,90 +1,115 @@
+
 use std::error::Error;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::collections::HashMap;
 
-pub struct CsvAnalyzer {
-    headers: Vec<String>,
-    records: Vec<Vec<String>>,
+#[derive(Debug)]
+pub struct CsvStats {
+    pub row_count: usize,
+    pub column_count: usize,
+    pub column_names: Vec<String>,
+    pub column_types: HashMap<String, String>,
+    pub missing_values: usize,
 }
 
-impl CsvAnalyzer {
-    pub fn new(file_path: &str) -> Result<Self, Box<dyn Error>> {
-        let file = File::open(file_path)?;
-        let reader = BufReader::new(file);
-        let mut lines = reader.lines();
+pub fn analyze_csv(file_path: &str) -> Result<CsvStats, Box<dyn Error>> {
+    let file = File::open(file_path)?;
+    let reader = BufReader::new(file);
+    let mut lines = reader.lines();
 
-        let headers = if let Some(first_line) = lines.next() {
-            first_line?
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .collect()
-        } else {
-            return Err("Empty CSV file".into());
-        };
+    let header_line = match lines.next() {
+        Some(Ok(line)) => line,
+        _ => return Err("Empty or invalid CSV file".into()),
+    };
 
-        let mut records = Vec::new();
-        for line in lines {
-            let record: Vec<String> = line?
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .collect();
-            if record.len() == headers.len() {
-                records.push(record);
+    let column_names: Vec<String> = header_line
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .collect();
+    let column_count = column_names.len();
+
+    let mut row_count = 0;
+    let mut missing_values = 0;
+    let mut column_samples: HashMap<String, Vec<String>> = HashMap::new();
+
+    for column in &column_names {
+        column_samples.insert(column.clone(), Vec::new());
+    }
+
+    for line_result in lines {
+        let line = line_result?;
+        row_count += 1;
+
+        let values: Vec<&str> = line.split(',').map(|s| s.trim()).collect();
+
+        if values.len() != column_count {
+            return Err(format!("Row {} has {} columns, expected {}", 
+                row_count, values.len(), column_count).into());
+        }
+
+        for (i, value) in values.iter().enumerate() {
+            let column_name = &column_names[i];
+            
+            if value.is_empty() {
+                missing_values += 1;
+            } else {
+                if let Some(samples) = column_samples.get_mut(column_name) {
+                    if samples.len() < 5 {
+                        samples.push(value.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    let column_types = infer_column_types(&column_samples);
+
+    Ok(CsvStats {
+        row_count,
+        column_count,
+        column_names,
+        column_types,
+        missing_values,
+    })
+}
+
+fn infer_column_types(samples: &HashMap<String, Vec<String>>) -> HashMap<String, String> {
+    let mut types = HashMap::new();
+
+    for (column, values) in samples {
+        if values.is_empty() {
+            types.insert(column.clone(), "unknown".to_string());
+            continue;
+        }
+
+        let mut is_numeric = true;
+        let mut is_integer = true;
+        let mut has_decimal = false;
+
+        for value in values {
+            if let Ok(num) = value.parse::<f64>() {
+                if num.fract() != 0.0 {
+                    has_decimal = true;
+                }
+            } else {
+                is_numeric = false;
+                break;
             }
         }
 
-        Ok(CsvAnalyzer { headers, records })
+        let type_str = if !is_numeric {
+            "string"
+        } else if is_integer && !has_decimal {
+            "integer"
+        } else {
+            "float"
+        };
+
+        types.insert(column.clone(), type_str.to_string());
     }
 
-    pub fn row_count(&self) -> usize {
-        self.records.len()
-    }
-
-    pub fn column_count(&self) -> usize {
-        self.headers.len()
-    }
-
-    pub fn column_stats(&self, column_index: usize) -> Option<HashMap<String, usize>> {
-        if column_index >= self.headers.len() {
-            return None;
-        }
-
-        let mut frequency = HashMap::new();
-        for record in &self.records {
-            let value = &record[column_index];
-            *frequency.entry(value.clone()).or_insert(0) += 1;
-        }
-
-        Some(frequency)
-    }
-
-    pub fn filter_by_column(&self, column_index: usize, value: &str) -> Vec<Vec<String>> {
-        self.records
-            .iter()
-            .filter(|record| record[column_index] == value)
-            .cloned()
-            .collect()
-    }
-
-    pub fn get_headers(&self) -> &Vec<String> {
-        &self.headers
-    }
-
-    pub fn unique_values(&self, column_index: usize) -> Option<Vec<String>> {
-        if column_index >= self.headers.len() {
-            return None;
-        }
-
-        let mut values: Vec<String> = self.records
-            .iter()
-            .map(|record| record[column_index].clone())
-            .collect();
-        
-        values.sort();
-        values.dedup();
-        Some(values)
-    }
+    types
 }
 
 #[cfg(test)]
@@ -93,53 +118,30 @@ mod tests {
     use std::io::Write;
     use tempfile::NamedTempFile;
 
-    fn create_test_csv() -> NamedTempFile {
-        let mut file = NamedTempFile::new().unwrap();
-        writeln!(file, "name,age,city").unwrap();
-        writeln!(file, "Alice,30,New York").unwrap();
-        writeln!(file, "Bob,25,London").unwrap();
-        writeln!(file, "Charlie,30,Paris").unwrap();
-        writeln!(file, "Diana,25,New York").unwrap();
-        file
+    #[test]
+    fn test_analyze_valid_csv() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,name,age,salary").unwrap();
+        writeln!(temp_file, "1,Alice,30,50000.5").unwrap();
+        writeln!(temp_file, "2,Bob,25,45000").unwrap();
+        writeln!(temp_file, "3,Charlie,35,").unwrap();
+
+        let stats = analyze_csv(temp_file.path().to_str().unwrap()).unwrap();
+        
+        assert_eq!(stats.row_count, 3);
+        assert_eq!(stats.column_count, 4);
+        assert_eq!(stats.missing_values, 1);
+        assert_eq!(stats.column_names, vec!["id", "name", "age", "salary"]);
+        assert_eq!(stats.column_types.get("id").unwrap(), "integer");
+        assert_eq!(stats.column_types.get("name").unwrap(), "string");
+        assert_eq!(stats.column_types.get("age").unwrap(), "integer");
+        assert_eq!(stats.column_types.get("salary").unwrap(), "float");
     }
 
     #[test]
-    fn test_csv_loading() {
-        let test_file = create_test_csv();
-        let analyzer = CsvAnalyzer::new(test_file.path().to_str().unwrap()).unwrap();
-        
-        assert_eq!(analyzer.row_count(), 4);
-        assert_eq!(analyzer.column_count(), 3);
-        assert_eq!(analyzer.get_headers(), &vec!["name".to_string(), "age".to_string(), "city".to_string()]);
-    }
-
-    #[test]
-    fn test_column_stats() {
-        let test_file = create_test_csv();
-        let analyzer = CsvAnalyzer::new(test_file.path().to_str().unwrap()).unwrap();
-        
-        let stats = analyzer.column_stats(1).unwrap();
-        assert_eq!(stats.get("30"), Some(&2));
-        assert_eq!(stats.get("25"), Some(&2));
-    }
-
-    #[test]
-    fn test_filtering() {
-        let test_file = create_test_csv();
-        let analyzer = CsvAnalyzer::new(test_file.path().to_str().unwrap()).unwrap();
-        
-        let filtered = analyzer.filter_by_column(2, "New York");
-        assert_eq!(filtered.len(), 2);
-        assert_eq!(filtered[0][0], "Alice");
-        assert_eq!(filtered[1][0], "Diana");
-    }
-
-    #[test]
-    fn test_unique_values() {
-        let test_file = create_test_csv();
-        let analyzer = CsvAnalyzer::new(test_file.path().to_str().unwrap()).unwrap();
-        
-        let unique_cities = analyzer.unique_values(2).unwrap();
-        assert_eq!(unique_cities, vec!["London", "New York", "Paris"]);
+    fn test_analyze_empty_file() {
+        let temp_file = NamedTempFile::new().unwrap();
+        let result = analyze_csv(temp_file.path().to_str().unwrap());
+        assert!(result.is_err());
     }
 }

@@ -306,4 +306,56 @@ mod tests {
 
         assert_eq!(result, expected);
     }
+}use serde_json::{json, Value};
+use std::fs::{self, File};
+use std::io::{BufReader, Result};
+use std::path::Path;
+
+pub fn merge_json_files<P: AsRef<Path>>(paths: &[P]) -> Result<Value> {
+    let mut merged_array = Vec::new();
+
+    for path in paths {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let json_value: Value = serde_json::from_reader(reader)?;
+
+        if let Value::Array(arr) = json_value {
+            merged_array.extend(arr);
+        } else {
+            merged_array.push(json_value);
+        }
+    }
+
+    Ok(json!(merged_array))
+}
+
+pub fn merge_and_write<P: AsRef<Path>>(input_paths: &[P], output_path: P) -> Result<()> {
+    let merged = merge_json_files(input_paths)?;
+    let output_file = File::create(output_path)?;
+    serde_json::to_writer_pretty(output_file, &merged)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_merge_json_files() {
+        let json1 = json!([{"id": 1}, {"id": 2}]);
+        let json2 = json!({"id": 3});
+
+        let file1 = NamedTempFile::new().unwrap();
+        let file2 = NamedTempFile::new().unwrap();
+
+        serde_json::to_writer(&file1, &json1).unwrap();
+        serde_json::to_writer(&file2, &json2).unwrap();
+
+        let paths = [file1.path(), file2.path()];
+        let result = merge_json_files(&paths).unwrap();
+
+        let expected = json!([{"id": 1}, {"id": 2}, {"id": 3}]);
+        assert_eq!(result, expected);
+    }
 }

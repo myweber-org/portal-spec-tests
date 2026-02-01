@@ -406,3 +406,108 @@ mod tests {
         assert_eq!(test_data.to_vec(), decrypted_data);
     }
 }
+use std::fs;
+use std::io::{Read, Write};
+use std::path::Path;
+
+pub struct XorCipher {
+    key: Vec<u8>,
+    key_position: usize,
+}
+
+impl XorCipher {
+    pub fn new(key: &str) -> Self {
+        XorCipher {
+            key: key.as_bytes().to_vec(),
+            key_position: 0,
+        }
+    }
+
+    pub fn encrypt_file(&mut self, source_path: &Path, dest_path: &Path) -> Result<(), String> {
+        self.process_file(source_path, dest_path)
+    }
+
+    pub fn decrypt_file(&mut self, source_path: &Path, dest_path: &Path) -> Result<(), String> {
+        self.process_file(source_path, dest_path)
+    }
+
+    fn process_file(&mut self, source_path: &Path, dest_path: &Path) -> Result<(), String> {
+        let mut source_file = fs::File::open(source_path)
+            .map_err(|e| format!("Failed to open source file: {}", e))?;
+
+        let mut dest_file = fs::File::create(dest_path)
+            .map_err(|e| format!("Failed to create destination file: {}", e))?;
+
+        let mut buffer = [0u8; 4096];
+        self.key_position = 0;
+
+        loop {
+            let bytes_read = source_file.read(&mut buffer)
+                .map_err(|e| format!("Failed to read from source file: {}", e))?;
+
+            if bytes_read == 0 {
+                break;
+            }
+
+            let processed_data = self.process_chunk(&buffer[..bytes_read]);
+            dest_file.write_all(&processed_data)
+                .map_err(|e| format!("Failed to write to destination file: {}", e))?;
+        }
+
+        Ok(())
+    }
+
+    fn process_chunk(&mut self, data: &[u8]) -> Vec<u8> {
+        let mut result = Vec::with_capacity(data.len());
+        
+        for &byte in data {
+            let key_byte = self.key[self.key_position];
+            result.push(byte ^ key_byte);
+            
+            self.key_position = (self.key_position + 1) % self.key.len();
+        }
+        
+        result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_xor_cipher_symmetry() {
+        let original_text = b"Hello, this is a secret message!";
+        let key = "my_secret_key_123";
+        
+        let mut cipher = XorCipher::new(key);
+        let encrypted = cipher.process_chunk(original_text);
+        
+        let mut cipher2 = XorCipher::new(key);
+        let decrypted = cipher2.process_chunk(&encrypted);
+        
+        assert_eq!(original_text.to_vec(), decrypted);
+    }
+
+    #[test]
+    fn test_file_encryption_decryption() {
+        let temp_input = NamedTempFile::new().unwrap();
+        let temp_encrypted = NamedTempFile::new().unwrap();
+        let temp_decrypted = NamedTempFile::new().unwrap();
+        
+        let test_data = b"Test file content for encryption demonstration";
+        fs::write(temp_input.path(), test_data).unwrap();
+        
+        let key = "secure_password";
+        let mut cipher = XorCipher::new(key);
+        
+        cipher.encrypt_file(temp_input.path(), temp_encrypted.path()).unwrap();
+        
+        let mut cipher2 = XorCipher::new(key);
+        cipher2.decrypt_file(temp_encrypted.path(), temp_decrypted.path()).unwrap();
+        
+        let decrypted_data = fs::read(temp_decrypted.path()).unwrap();
+        assert_eq!(test_data.to_vec(), decrypted_data);
+    }
+}

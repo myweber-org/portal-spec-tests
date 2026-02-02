@@ -139,3 +139,73 @@ fn main() {
         println!("Network connectivity: POOR");
     }
 }
+use std::process::Command;
+use std::time::Duration;
+use reqwest::blocking::Client;
+use std::thread;
+
+fn ping_host(host: &str) -> bool {
+    let output = if cfg!(target_os = "windows") {
+        Command::new("cmd")
+            .args(["/C", "ping", "-n", "1", host])
+            .output()
+    } else {
+        Command::new("ping")
+            .args(["-c", "1", host])
+            .output()
+    };
+
+    match output {
+        Ok(output) => output.status.success(),
+        Err(_) => false,
+    }
+}
+
+fn check_http_endpoint(url: &str) -> bool {
+    let client = Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build();
+
+    match client {
+        Ok(client) => match client.get(url).send() {
+            Ok(response) => response.status().is_success(),
+            Err(_) => false,
+        },
+        Err(_) => false,
+    }
+}
+
+fn monitor_service(host: &str, url: &str, interval_secs: u64) {
+    loop {
+        println!("Checking network health at {}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S"));
+        
+        let ping_result = ping_host(host);
+        let http_result = check_http_endpoint(url);
+        
+        println!("Ping to {}: {}", host, if ping_result { "OK" } else { "FAILED" });
+        println!("HTTP request to {}: {}", url, if http_result { "OK" } else { "FAILED" });
+        
+        if ping_result && http_result {
+            println!("All checks passed");
+        } else {
+            println!("Some checks failed");
+        }
+        
+        println!("---");
+        thread::sleep(Duration::from_secs(interval_secs));
+    }
+}
+
+fn main() {
+    let host = "8.8.8.8";
+    let url = "https://httpbin.org/status/200";
+    let interval = 10;
+    
+    println!("Starting network health monitor");
+    println!("Target host: {}", host);
+    println!("Target URL: {}", url);
+    println!("Check interval: {} seconds", interval);
+    println!();
+    
+    monitor_service(host, url, interval);
+}

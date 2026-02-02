@@ -1,66 +1,83 @@
-
-use std::collections::HashMap;
+use serde::Deserialize;
 use std::env;
 use std::fs;
+use std::path::Path;
 
-#[derive(Debug, Clone)]
-pub struct Config {
-    pub database_url: String,
-    pub server_port: u16,
-    pub log_level: String,
-    pub cache_ttl: u64,
-    pub features: HashMap<String, bool>,
+#[derive(Debug, Deserialize)]
+pub struct DatabaseConfig {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: String,
+    pub database_name: String,
 }
 
-impl Config {
-    pub fn new() -> Result<Self, String> {
-        let config_path = env::var("CONFIG_PATH").unwrap_or_else(|_| "config.toml".to_string());
-        
-        let config_str = fs::read_to_string(&config_path)
-            .map_err(|e| format!("Failed to read config file {}: {}", config_path, e))?;
-        
-        let config: Config = toml::from_str(&config_str)
-            .map_err(|e| format!("Failed to parse config file: {}", e))?;
-        
+#[derive(Debug, Deserialize)]
+pub struct ServerConfig {
+    pub address: String,
+    pub port: u16,
+    pub max_connections: u32,
+    pub timeout_seconds: u64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AppConfig {
+    pub database: DatabaseConfig,
+    pub server: ServerConfig,
+    pub log_level: String,
+    pub enable_cache: bool,
+}
+
+impl AppConfig {
+    pub fn from_file(config_path: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let config_content = fs::read_to_string(config_path)?;
+        let mut config: AppConfig = toml::from_str(&config_content)?;
+
+        config.apply_environment_overrides();
         config.validate()?;
+
         Ok(config)
     }
-    
+
+    fn apply_environment_overrides(&mut self) {
+        if let Ok(db_host) = env::var("DB_HOST") {
+            self.database.host = db_host;
+        }
+        if let Ok(db_port) = env::var("DB_PORT") {
+            if let Ok(port) = db_port.parse() {
+                self.database.port = port;
+            }
+        }
+        if let Ok(log_level) = env::var("LOG_LEVEL") {
+            self.log_level = log_level;
+        }
+    }
+
     fn validate(&self) -> Result<(), String> {
-        if self.server_port == 0 {
-            return Err("Server port cannot be 0".to_string());
+        if self.server.port == 0 {
+            return Err("Server port cannot be zero".to_string());
         }
-        
-        if self.database_url.is_empty() {
-            return Err("Database URL cannot be empty".to_string());
+        if self.database.port == 0 {
+            return Err("Database port cannot be zero".to_string());
         }
-        
-        let valid_log_levels = ["error", "warn", "info", "debug", "trace"];
-        if !valid_log_levels.contains(&self.log_level.as_str()) {
+        if self.server.max_connections == 0 {
+            return Err("Max connections must be greater than zero".to_string());
+        }
+        if !["error", "warn", "info", "debug", "trace"].contains(&self.log_level.as_str()) {
             return Err(format!("Invalid log level: {}", self.log_level));
         }
-        
+
         Ok(())
-    }
-    
-    pub fn is_feature_enabled(&self, feature: &str) -> bool {
-        self.features.get(feature).copied().unwrap_or(false)
     }
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        let mut features = HashMap::new();
-        features.insert("api_v2".to_string(), false);
-        features.insert("caching".to_string(), true);
-        features.insert("metrics".to_string(), false);
-        
-        Self {
-            database_url: "postgresql://localhost:5432/mydb".to_string(),
-            server_port: 8080,
-            log_level: "info".to_string(),
-            cache_ttl: 300,
-            features,
-        }
+pub fn load_config() -> Result<AppConfig, Box<dyn std::error::Error>> {
+    let config_path = env::var("CONFIG_PATH")
+        .unwrap_or_else(|_| "config.toml".to_string());
+
+    if !Path::new(&config_path).exists() {
+        return Err(format!("Configuration file not found: {}", config_path).into());
     }
+
+    AppConfig::from_file(&config_path)
 }

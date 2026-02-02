@@ -152,4 +152,61 @@ mod tests {
         assert_eq!(cleaned.len(), 2);
         assert_eq!(cleaner.get_unique_count(), 2);
     }
+}use std::collections::HashSet;
+
+pub struct DataCleaner<T> {
+    data: Vec<T>,
+}
+
+impl<T> DataCleaner<T> {
+    pub fn new(data: Vec<T>) -> Self {
+        DataCleaner { data }
+    }
+
+    pub fn remove_duplicates(&mut self) -> &mut Self {
+        let mut seen = HashSet::new();
+        self.data.retain(|item| seen.insert(item));
+        self
+    }
+
+    pub fn filter<F>(&mut self, predicate: F) -> &mut Self
+    where
+        F: Fn(&T) -> bool,
+    {
+        self.data.retain(predicate);
+        self
+    }
+
+    pub fn get_data(&self) -> &Vec<T> {
+        &self.data
+    }
+
+    pub fn into_data(self) -> Vec<T> {
+        self.data
+    }
+}
+
+impl<T: PartialEq> DataCleaner<T> {
+    pub fn remove_null_values(&mut self) -> &mut Self {
+        self.filter(|item| item != &None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_remove_duplicates() {
+        let mut cleaner = DataCleaner::new(vec![1, 2, 2, 3, 4, 4, 5]);
+        cleaner.remove_duplicates();
+        assert_eq!(cleaner.get_data(), &vec![1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn test_filter() {
+        let mut cleaner = DataCleaner::new(vec![1, 2, 3, 4, 5]);
+        cleaner.filter(|&x| x % 2 == 0);
+        assert_eq!(cleaner.get_data(), &vec![2, 4]);
+    }
 }

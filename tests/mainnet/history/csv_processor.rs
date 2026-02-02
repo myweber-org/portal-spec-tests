@@ -1,77 +1,14 @@
-use csv::{Reader, Writer};
-use serde::{Deserialize, Serialize};
 use std::error::Error;
-use std::fs::File;
-use std::path::Path;
-
-#[derive(Debug, Deserialize, Serialize)]
-struct Record {
-    id: u32,
-    name: String,
-    value: f64,
-    active: bool,
-}
-
-impl Record {
-    fn validate(&self) -> Result<(), String> {
-        if self.name.is_empty() {
-            return Err("Name cannot be empty".to_string());
-        }
-        if self.value < 0.0 {
-            return Err("Value must be non-negative".to_string());
-        }
-        Ok(())
-    }
-}
-
-fn process_csv(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
-    let input_file = File::open(Path::new(input_path))?;
-    let mut rdr = Reader::from_reader(input_file);
-    
-    let output_file = File::create(Path::new(output_path))?;
-    let mut wtr = Writer::from_writer(output_file);
-    
-    for result in rdr.deserialize() {
-        let record: Record = result?;
-        
-        match record.validate() {
-            Ok(_) => {
-                wtr.serialize(&record)?;
-                println!("Processed record: {:?}", record);
-            }
-            Err(e) => {
-                eprintln!("Validation failed for record {:?}: {}", record, e);
-            }
-        }
-    }
-    
-    wtr.flush()?;
-    Ok(())
-}
-
-fn main() {
-    let input = "data/input.csv";
-    let output = "data/output.csv";
-    
-    match process_csv(input, output) {
-        Ok(_) => println!("CSV processing completed successfully"),
-        Err(e) => eprintln!("Error processing CSV: {}", e),
-    }
-}use std::error::Error;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 #[derive(Debug)]
-pub struct CsvRecord {
-    pub columns: Vec<String>,
-}
-
-#[derive(Debug)]
 pub enum CsvError {
     IoError(std::io::Error),
-    ParseError(String),
-    InvalidHeader(usize, usize),
+    ParseError(String, usize),
+    InvalidHeader(String),
+    EmptyFile,
 }
 
 impl From<std::io::Error> for CsvError {
@@ -93,67 +30,97 @@ impl CsvProcessor {
         }
     }
 
-    pub fn process_file<P: AsRef<Path>>(&self, path: P) -> Result<Vec<CsvRecord>, CsvError> {
+    pub fn process_file<P: AsRef<Path>>(&self, path: P) -> Result<Vec<Vec<String>>, CsvError> {
         let file = File::open(path)?;
         let reader = BufReader::new(file);
         let mut records = Vec::new();
         let mut line_number = 0;
-        let mut expected_columns = None;
 
         for line in reader.lines() {
-            let line_content = line?;
             line_number += 1;
-
+            let line_content = line?;
+            
             if line_content.trim().is_empty() {
                 continue;
             }
 
-            let columns: Vec<String> = line_content
+            let fields: Vec<String> = line_content
                 .split(self.delimiter)
                 .map(|s| s.trim().to_string())
                 .collect();
 
-            if line_number == 1 && self.has_header {
-                expected_columns = Some(columns.len());
-                continue;
+            if fields.is_empty() {
+                return Err(CsvError::ParseError(
+                    "Empty record found".to_string(),
+                    line_number,
+                ));
             }
 
-            if let Some(expected) = expected_columns {
-                if columns.len() != expected {
-                    return Err(CsvError::InvalidHeader(expected, columns.len()));
-                }
-            }
-
-            records.push(CsvRecord { columns });
+            records.push(fields);
         }
 
         if records.is_empty() {
-            return Err(CsvError::ParseError("No valid records found".to_string()));
+            return Err(CsvError::EmptyFile);
+        }
+
+        if self.has_header && records.len() == 1 {
+            return Err(CsvError::InvalidHeader(
+                "File contains only header row".to_string(),
+            ));
         }
 
         Ok(records)
     }
 
-    pub fn validate_records(&self, records: &[CsvRecord]) -> Result<(), CsvError> {
+    pub fn validate_records(&self, records: &[Vec<String>]) -> Result<(), CsvError> {
+        if records.is_empty() {
+            return Err(CsvError::EmptyFile);
+        }
+
+        let expected_len = records[0].len();
         for (idx, record) in records.iter().enumerate() {
-            if record.columns.iter().any(|col| col.is_empty()) {
-                return Err(CsvError::ParseError(format!(
-                    "Record {} contains empty columns",
-                    idx + 1
-                )));
+            if record.len() != expected_len {
+                return Err(CsvError::ParseError(
+                    format!("Record has {} fields, expected {}", record.len(), expected_len),
+                    idx + 1,
+                ));
             }
         }
+
         Ok(())
     }
 }
 
-pub fn process_csv_file(
-    file_path: &str,
-    delimiter: char,
-    has_header: bool,
-) -> Result<Vec<CsvRecord>, Box<dyn Error>> {
-    let processor = CsvProcessor::new(delimiter, has_header);
-    let records = processor.process_file(file_path)?;
-    processor.validate_records(&records)?;
-    Ok(records)
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_valid_csv_processing() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,city").unwrap();
+        writeln!(temp_file, "John,30,New York").unwrap();
+        writeln!(temp_file, "Alice,25,London").unwrap();
+
+        let processor = CsvProcessor::new(',', true);
+        let result = processor.process_file(temp_file.path());
+        assert!(result.is_ok());
+        
+        let records = result.unwrap();
+        assert_eq!(records.len(), 3);
+        assert_eq!(records[0], vec!["name", "age", "city"]);
+    }
+
+    #[test]
+    fn test_invalid_record_length() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "field1,field2,field3").unwrap();
+        writeln!(temp_file, "value1,value2").unwrap();
+
+        let processor = CsvProcessor::new(',', true);
+        let result = processor.process_file(temp_file.path());
+        assert!(matches!(result, Err(CsvError::ParseError(_, _))));
+    }
 }

@@ -177,4 +177,51 @@ mod tests {
         
         Ok(())
     }
+}use std::fs;
+use std::io::{self, Read, Write};
+use std::path::Path;
+
+/// Encrypts or decrypts a file using XOR with the provided key.
+///
+/// # Arguments
+///
+/// * `input_path` - Path to the input file.
+/// * `output_path` - Path where the output (encrypted/decrypted) file will be saved.
+/// * `key` - The byte used as the XOR key.
+///
+/// # Returns
+///
+/// * `io::Result<()>` - Ok if successful, Err otherwise.
+pub fn xor_file(input_path: &Path, output_path: &Path, key: u8) -> io::Result<()> {
+    let mut input_file = fs::File::open(input_path)?;
+    let mut buffer = Vec::new();
+    input_file.read_to_end(&mut buffer)?;
+
+    // Apply XOR operation to each byte
+    for byte in &mut buffer {
+        *byte ^= key;
+    }
+
+    let mut output_file = fs::File::create(output_path)?;
+    output_file.write_all(&buffer)?;
+
+    Ok(())
+}
+
+fn main() -> io::Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() != 4 {
+        eprintln!("Usage: {} <input_file> <output_file> <key_byte>", args[0]);
+        std::process::exit(1);
+    }
+
+    let input_path = Path::new(&args[1]);
+    let output_path = Path::new(&args[2]);
+    let key_byte = args[3]
+        .parse::<u8>()
+        .expect("Key must be a number between 0 and 255");
+
+    xor_file(input_path, output_path, key_byte)?;
+    println!("Operation completed successfully.");
+    Ok(())
 }

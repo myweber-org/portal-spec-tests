@@ -905,3 +905,198 @@ mod tests {
         assert_eq!(groups.get("category_b").unwrap().len(), 1);
     }
 }
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
+}
+
+#[derive(Debug)]
+pub enum ProcessingError {
+    InvalidData(String),
+    TransformationError(String),
+    ValidationFailed(String),
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProcessingError::InvalidData(msg) => write!(f, "Invalid data: {}", msg),
+            ProcessingError::TransformationError(msg) => write!(f, "Transformation error: {}", msg),
+            ProcessingError::ValidationFailed(msg) => write!(f, "Validation failed: {}", msg),
+        }
+    }
+}
+
+impl Error for ProcessingError {}
+
+pub struct DataProcessor {
+    normalization_factor: f64,
+    validation_threshold: f64,
+}
+
+impl DataProcessor {
+    pub fn new(normalization_factor: f64, validation_threshold: f64) -> Self {
+        DataProcessor {
+            normalization_factor,
+            validation_threshold,
+        }
+    }
+
+    pub fn validate_record(&self, record: &DataRecord) -> Result<(), ProcessingError> {
+        if record.values.is_empty() {
+            return Err(ProcessingError::ValidationFailed(
+                "Record contains no values".to_string(),
+            ));
+        }
+
+        for value in &record.values {
+            if value.is_nan() || value.is_infinite() {
+                return Err(ProcessingError::InvalidData(
+                    "Record contains invalid numeric values".to_string(),
+                ));
+            }
+        }
+
+        if record.values.iter().any(|&v| v.abs() > self.validation_threshold) {
+            return Err(ProcessingError::ValidationFailed(
+                "Values exceed validation threshold".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    pub fn normalize_values(&self, record: &mut DataRecord) -> Result<(), ProcessingError> {
+        self.validate_record(record)?;
+
+        for value in &mut record.values {
+            *value /= self.normalization_factor;
+            
+            if value.is_nan() || value.is_infinite() {
+                return Err(ProcessingError::TransformationError(
+                    "Normalization produced invalid result".to_string(),
+                ));
+            }
+        }
+
+        record.metadata.insert(
+            "normalization_applied".to_string(),
+            "true".to_string(),
+        );
+        record.metadata.insert(
+            "normalization_factor".to_string(),
+            self.normalization_factor.to_string(),
+        );
+
+        Ok(())
+    }
+
+    pub fn calculate_statistics(&self, records: &[DataRecord]) -> Result<HashMap<String, f64>, ProcessingError> {
+        if records.is_empty() {
+            return Err(ProcessingError::InvalidData(
+                "No records provided for statistics calculation".to_string(),
+            ));
+        }
+
+        let mut stats = HashMap::new();
+        let total_values: usize = records.iter().map(|r| r.values.len()).sum();
+
+        if total_values == 0 {
+            return Err(ProcessingError::InvalidData(
+                "Records contain no values for statistics".to_string(),
+            ));
+        }
+
+        let sum: f64 = records
+            .iter()
+            .flat_map(|r| r.values.iter())
+            .sum();
+
+        let mean = sum / total_values as f64;
+
+        let variance: f64 = records
+            .iter()
+            .flat_map(|r| r.values.iter())
+            .map(|&v| (v - mean).powi(2))
+            .sum::<f64>()
+            / total_values as f64;
+
+        stats.insert("mean".to_string(), mean);
+        stats.insert("variance".to_string(), variance);
+        stats.insert("std_dev".to_string(), variance.sqrt());
+        stats.insert("total_records".to_string(), records.len() as f64);
+        stats.insert("total_values".to_string(), total_values as f64);
+
+        Ok(stats)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validation_success() {
+        let processor = DataProcessor::new(1.0, 1000.0);
+        let record = DataRecord {
+            id: 1,
+            values: vec![10.0, 20.0, 30.0],
+            metadata: HashMap::new(),
+        };
+
+        assert!(processor.validate_record(&record).is_ok());
+    }
+
+    #[test]
+    fn test_validation_empty_values() {
+        let processor = DataProcessor::new(1.0, 1000.0);
+        let record = DataRecord {
+            id: 1,
+            values: vec![],
+            metadata: HashMap::new(),
+        };
+
+        assert!(processor.validate_record(&record).is_err());
+    }
+
+    #[test]
+    fn test_normalization() {
+        let mut processor = DataProcessor::new(10.0, 1000.0);
+        let mut record = DataRecord {
+            id: 1,
+            values: vec![100.0, 200.0, 300.0],
+            metadata: HashMap::new(),
+        };
+
+        assert!(processor.normalize_values(&mut record).is_ok());
+        assert_eq!(record.values, vec![10.0, 20.0, 30.0]);
+        assert_eq!(record.metadata.get("normalization_applied"), Some(&"true".to_string()));
+    }
+
+    #[test]
+    fn test_statistics_calculation() {
+        let processor = DataProcessor::new(1.0, 1000.0);
+        let records = vec![
+            DataRecord {
+                id: 1,
+                values: vec![10.0, 20.0],
+                metadata: HashMap::new(),
+            },
+            DataRecord {
+                id: 2,
+                values: vec![30.0, 40.0],
+                metadata: HashMap::new(),
+            },
+        ];
+
+        let stats = processor.calculate_statistics(&records).unwrap();
+        assert_eq!(stats.get("mean"), Some(&25.0));
+        assert_eq!(stats.get("total_records"), Some(&2.0));
+    }
+}

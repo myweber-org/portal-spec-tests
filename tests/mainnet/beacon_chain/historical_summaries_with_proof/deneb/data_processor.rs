@@ -262,3 +262,142 @@ mod tests {
         assert!((avg - 15.333).abs() < 0.001);
     }
 }
+use std::collections::HashMap;
+
+pub struct DataProcessor {
+    cache: HashMap<String, Vec<f64>>,
+    validation_rules: Vec<ValidationRule>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ValidationRule {
+    pub field_name: String,
+    pub min_value: f64,
+    pub max_value: f64,
+    pub required: bool,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            cache: HashMap::new(),
+            validation_rules: Vec::new(),
+        }
+    }
+
+    pub fn add_validation_rule(&mut self, rule: ValidationRule) {
+        self.validation_rules.push(rule);
+    }
+
+    pub fn process_dataset(&mut self, dataset_name: &str, data: &[f64]) -> Result<Vec<f64>, String> {
+        if data.is_empty() {
+            return Err("Dataset cannot be empty".to_string());
+        }
+
+        for rule in &self.validation_rules {
+            if rule.required && data.iter().any(|&x| x < rule.min_value || x > rule.max_value) {
+                return Err(format!(
+                    "Validation failed for field '{}': values must be between {} and {}",
+                    rule.field_name, rule.min_value, rule.max_value
+                ));
+            }
+        }
+
+        let processed_data: Vec<f64> = data
+            .iter()
+            .map(|&value| {
+                let transformed = value * 2.5 - 1.0;
+                transformed.max(0.0).min(100.0)
+            })
+            .collect();
+
+        let normalized_data = self.normalize_values(&processed_data);
+        self.cache.insert(dataset_name.to_string(), normalized_data.clone());
+
+        Ok(normalized_data)
+    }
+
+    fn normalize_values(&self, data: &[f64]) -> Vec<f64> {
+        let max_value = data.iter().fold(0.0, |acc, &x| acc.max(x));
+        if max_value == 0.0 {
+            return data.to_vec();
+        }
+
+        data.iter().map(|&x| x / max_value * 100.0).collect()
+    }
+
+    pub fn get_cached_data(&self, dataset_name: &str) -> Option<&Vec<f64>> {
+        self.cache.get(dataset_name)
+    }
+
+    pub fn clear_cache(&mut self) {
+        self.cache.clear();
+    }
+
+    pub fn calculate_statistics(&self, data: &[f64]) -> Statistics {
+        let mean = data.iter().sum::<f64>() / data.len() as f64;
+        let variance = data.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / data.len() as f64;
+        let std_dev = variance.sqrt();
+
+        Statistics {
+            mean,
+            variance,
+            std_dev,
+            min: *data.iter().fold(&f64::INFINITY, |a, b| a.min(b)),
+            max: *data.iter().fold(&f64::NEG_INFINITY, |a, b| a.max(b)),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Statistics {
+    pub mean: f64,
+    pub variance: f64,
+    pub std_dev: f64,
+    pub min: f64,
+    pub max: f64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_data_processing() {
+        let mut processor = DataProcessor::new();
+        let test_data = vec![10.0, 20.0, 30.0, 40.0, 50.0];
+
+        let result = processor.process_dataset("test_dataset", &test_data);
+        assert!(result.is_ok());
+
+        let processed = result.unwrap();
+        assert_eq!(processed.len(), test_data.len());
+        assert!(processed.iter().all(|&x| x >= 0.0 && x <= 100.0));
+    }
+
+    #[test]
+    fn test_validation_failure() {
+        let mut processor = DataProcessor::new();
+        processor.add_validation_rule(ValidationRule {
+            field_name: "temperature".to_string(),
+            min_value: -50.0,
+            max_value: 50.0,
+            required: true,
+        });
+
+        let invalid_data = vec![-60.0, 30.0, 40.0];
+        let result = processor.process_dataset("invalid", &invalid_data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_statistics_calculation() {
+        let processor = DataProcessor::new();
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let stats = processor.calculate_statistics(&data);
+
+        assert_eq!(stats.mean, 3.0);
+        assert_eq!(stats.min, 1.0);
+        assert_eq!(stats.max, 5.0);
+    }
+}

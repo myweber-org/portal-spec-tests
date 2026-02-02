@@ -98,4 +98,135 @@ mod tests {
         assert!(filtered[0].contains("Alice"));
         assert!(filtered[1].contains("Charlie"));
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug)]
+pub enum CsvError {
+    IoError(std::io::Error),
+    ParseError(String),
+    InvalidHeader,
+    MissingColumn(String),
+}
+
+impl From<std::io::Error> for CsvError {
+    fn from(err: std::io::Error) -> Self {
+        CsvError::IoError(err)
+    }
+}
+
+pub struct CsvProcessor {
+    delimiter: char,
+    has_header: bool,
+}
+
+impl CsvProcessor {
+    pub fn new(delimiter: char, has_header: bool) -> Self {
+        CsvProcessor {
+            delimiter,
+            has_header,
+        }
+    }
+
+    pub fn process_file<P: AsRef<Path>>(
+        &self,
+        file_path: P,
+    ) -> Result<Vec<Vec<String>>, CsvError> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        let mut records = Vec::new();
+
+        for (line_num, line) in reader.lines().enumerate() {
+            let line = line?;
+            let record: Vec<String> = line
+                .split(self.delimiter)
+                .map(|s| s.trim().to_string())
+                .collect();
+
+            if line_num == 0 && self.has_header {
+                if record.is_empty() {
+                    return Err(CsvError::InvalidHeader);
+                }
+                continue;
+            }
+
+            if record.iter().any(|field| field.is_empty()) {
+                return Err(CsvError::ParseError(format!(
+                    "Empty field found at line {}",
+                    line_num + 1
+                )));
+            }
+
+            records.push(record);
+        }
+
+        if records.is_empty() {
+            return Err(CsvError::ParseError("No data records found".to_string()));
+        }
+
+        Ok(records)
+    }
+
+    pub fn validate_column_count(&self, records: &[Vec<String>]) -> Result<(), CsvError> {
+        if records.is_empty() {
+            return Ok(());
+        }
+
+        let expected_len = records[0].len();
+        for (idx, record) in records.iter().enumerate() {
+            if record.len() != expected_len {
+                return Err(CsvError::ParseError(format!(
+                    "Column count mismatch at record {}: expected {}, found {}",
+                    idx + 1,
+                    expected_len,
+                    record.len()
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
+pub fn calculate_column_averages(records: &[Vec<String>]) -> Result<Vec<f64>, CsvError> {
+    if records.is_empty() {
+        return Err(CsvError::ParseError("No records to process".to_string()));
+    }
+
+    let column_count = records[0].len();
+    let mut sums = vec![0.0; column_count];
+    let mut counts = vec![0; column_count];
+
+    for record in records {
+        for (i, field) in record.iter().enumerate() {
+            match field.parse::<f64>() {
+                Ok(value) => {
+                    sums[i] += value;
+                    counts[i] += 1;
+                }
+                Err(_) => {
+                    return Err(CsvError::ParseError(format!(
+                        "Failed to parse numeric value in column {}: '{}'",
+                        i + 1,
+                        field
+                    )));
+                }
+            }
+        }
+    }
+
+    let averages: Vec<f64> = sums
+        .iter()
+        .zip(counts.iter())
+        .map(|(&sum, &count)| {
+            if count > 0 {
+                sum / count as f64
+            } else {
+                0.0
+            }
+        })
+        .collect();
+
+    Ok(averages)
 }

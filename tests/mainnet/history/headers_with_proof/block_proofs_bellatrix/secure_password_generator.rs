@@ -118,4 +118,132 @@ mod tests {
         let result = generator.generate();
         assert!(result.is_err());
     }
+}use rand::Rng;
+use std::io;
+
+const DEFAULT_LENGTH: usize = 16;
+const UPPERCASE: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+const LOWERCASE: &str = "abcdefghijklmnopqrstuvwxyz";
+const DIGITS: &str = "0123456789";
+const SPECIAL: &str = "!@#$%^&*()_+-=[]{}|;:,.<>?";
+
+fn main() {
+    println!("Secure Password Generator");
+    
+    let length = get_password_length();
+    let char_sets = select_character_sets();
+    
+    if char_sets.is_empty() {
+        println!("Error: At least one character set must be selected");
+        return;
+    }
+    
+    let password = generate_password(length, &char_sets);
+    println!("\nGenerated Password: {}", password);
+    println!("Password Strength: {}", evaluate_strength(&password));
+}
+
+fn get_password_length() -> usize {
+    loop {
+        println!("Enter password length (default: {}): ", DEFAULT_LENGTH);
+        let mut input = String::new();
+        
+        io::stdin()
+            .read_line(&mut input)
+            .expect("Failed to read input");
+            
+        let input = input.trim();
+        
+        if input.is_empty() {
+            return DEFAULT_LENGTH;
+        }
+        
+        match input.parse::<usize>() {
+            Ok(length) if length >= 4 && length <= 128 => return length,
+            Ok(_) => println!("Length must be between 4 and 128"),
+            Err(_) => println!("Please enter a valid number"),
+        }
+    }
+}
+
+fn select_character_sets() -> Vec<String> {
+    let mut char_sets = Vec::new();
+    let mut rng = rand::thread_rng();
+    
+    println!("\nSelect character sets (at least one required):");
+    println!("1. Uppercase letters");
+    println!("2. Lowercase letters");
+    println!("3. Digits");
+    println!("4. Special characters");
+    println!("5. All of the above");
+    println!("Enter choices separated by spaces (e.g., '1 3 4'):");
+    
+    let mut input = String::new();
+    io::stdin()
+        .read_line(&mut input)
+        .expect("Failed to read input");
+        
+    let choices: Vec<&str> = input.trim().split_whitespace().collect();
+    
+    if choices.contains(&"5") {
+        char_sets.push(UPPERCASE.to_string());
+        char_sets.push(LOWERCASE.to_string());
+        char_sets.push(DIGITS.to_string());
+        char_sets.push(SPECIAL.to_string());
+        return char_sets;
+    }
+    
+    for choice in choices {
+        match choice {
+            "1" => char_sets.push(UPPERCASE.to_string()),
+            "2" => char_sets.push(LOWERCASE.to_string()),
+            "3" => char_sets.push(DIGITS.to_string()),
+            "4" => char_sets.push(SPECIAL.to_string()),
+            _ => continue,
+        }
+    }
+    
+    char_sets
+}
+
+fn generate_password(length: usize, char_sets: &[String]) -> String {
+    let mut rng = rand::thread_rng();
+    let mut password = String::with_capacity(length);
+    
+    for _ in 0..length {
+        let set_index = rng.gen_range(0..char_sets.len());
+        let char_set = &char_sets[set_index];
+        let char_index = rng.gen_range(0..char_set.len());
+        
+        if let Some(c) = char_set.chars().nth(char_index) {
+            password.push(c);
+        }
+    }
+    
+    password
+}
+
+fn evaluate_strength(password: &str) -> String {
+    let length = password.len();
+    let has_upper = password.chars().any(|c| c.is_uppercase());
+    let has_lower = password.chars().any(|c| c.is_lowercase());
+    let has_digit = password.chars().any(|c| c.is_digit(10));
+    let has_special = password.chars().any(|c| !c.is_alphanumeric());
+    
+    let mut score = 0;
+    
+    if length >= 12 { score += 2; }
+    else if length >= 8 { score += 1; }
+    
+    if has_upper { score += 1; }
+    if has_lower { score += 1; }
+    if has_digit { score += 1; }
+    if has_special { score += 2; }
+    
+    match score {
+        0..=2 => "Weak",
+        3..=4 => "Moderate",
+        5..=6 => "Strong",
+        _ => "Very Strong",
+    }.to_string()
 }

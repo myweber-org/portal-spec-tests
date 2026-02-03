@@ -229,4 +229,124 @@ pub fn calculate_column_averages(records: &[Vec<String>]) -> Result<Vec<f64>, Cs
         .collect();
 
     Ok(averages)
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug)]
+pub enum CsvError {
+    IoError(std::io::Error),
+    ParseError(String, usize),
+    InvalidHeader(String),
+}
+
+impl From<std::io::Error> for CsvError {
+    fn from(err: std::io::Error) -> Self {
+        CsvError::IoError(err)
+    }
+}
+
+pub struct CsvProcessor {
+    delimiter: char,
+    has_header: bool,
+}
+
+impl CsvProcessor {
+    pub fn new(delimiter: char, has_header: bool) -> Self {
+        CsvProcessor {
+            delimiter,
+            has_header,
+        }
+    }
+
+    pub fn process_file<P: AsRef<Path>>(&self, path: P) -> Result<Vec<Vec<String>>, CsvError> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut records = Vec::new();
+
+        for (line_num, line) in reader.lines().enumerate() {
+            let line = line?;
+            let record = self.parse_line(&line, line_num + 1)?;
+            
+            if line_num == 0 && self.has_header {
+                self.validate_header(&record)?;
+                continue;
+            }
+            
+            records.push(record);
+        }
+
+        Ok(records)
+    }
+
+    fn parse_line(&self, line: &str, line_num: usize) -> Result<Vec<String>, CsvError> {
+        let fields: Vec<String> = line
+            .split(self.delimiter)
+            .map(|s| s.trim().to_string())
+            .collect();
+
+        if fields.is_empty() {
+            return Err(CsvError::ParseError(
+                "Empty line encountered".to_string(),
+                line_num,
+            ));
+        }
+
+        Ok(fields)
+    }
+
+    fn validate_header(&self, header: &[String]) -> Result<(), CsvError> {
+        let mut seen = std::collections::HashSet::new();
+        
+        for (idx, field) in header.iter().enumerate() {
+            if field.is_empty() {
+                return Err(CsvError::InvalidHeader(
+                    format!("Header field at position {} is empty", idx + 1)
+                ));
+            }
+            
+            if !seen.insert(field) {
+                return Err(CsvError::InvalidHeader(
+                    format!("Duplicate header field: '{}'", field)
+                ));
+            }
+        }
+        
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_csv_processing() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,city").unwrap();
+        writeln!(temp_file, "Alice,30,New York").unwrap();
+        writeln!(temp_file, "Bob,25,London").unwrap();
+
+        let processor = CsvProcessor::new(',', true);
+        let result = processor.process_file(temp_file.path());
+        
+        assert!(result.is_ok());
+        let records = result.unwrap();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0], vec!["Alice", "30", "New York"]);
+    }
+
+    #[test]
+    fn test_invalid_header() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,name,city").unwrap();
+
+        let processor = CsvProcessor::new(',', true);
+        let result = processor.process_file(temp_file.path());
+        
+        assert!(matches!(result, Err(CsvError::InvalidHeader(_))));
+    }
 }

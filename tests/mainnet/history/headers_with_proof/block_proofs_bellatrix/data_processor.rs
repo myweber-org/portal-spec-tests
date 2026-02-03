@@ -1100,3 +1100,149 @@ mod tests {
         assert_eq!(stats.get("total_records"), Some(&2.0));
     }
 }
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum DataError {
+    #[error("Invalid input data: {0}")]
+    InvalidInput(String),
+    #[error("Processing timeout")]
+    Timeout,
+    #[error("Serialization error")]
+    Serialization,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataRecord {
+    pub id: u64,
+    pub timestamp: i64,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
+}
+
+impl DataRecord {
+    pub fn new(id: u64, timestamp: i64) -> Self {
+        Self {
+            id,
+            timestamp,
+            values: Vec::new(),
+            metadata: HashMap::new(),
+        }
+    }
+
+    pub fn add_value(&mut self, value: f64) -> &mut Self {
+        self.values.push(value);
+        self
+    }
+
+    pub fn add_metadata(&mut self, key: String, value: String) -> &mut Self {
+        self.metadata.insert(key, value);
+        self
+    }
+
+    pub fn validate(&self) -> Result<(), DataError> {
+        if self.id == 0 {
+            return Err(DataError::InvalidInput("ID cannot be zero".to_string()));
+        }
+        
+        if self.timestamp < 0 {
+            return Err(DataError::InvalidInput("Timestamp cannot be negative".to_string()));
+        }
+        
+        if self.values.is_empty() {
+            return Err(DataError::InvalidInput("Values cannot be empty".to_string()));
+        }
+
+        for value in &self.values {
+            if !value.is_finite() {
+                return Err(DataError::InvalidInput("Values must be finite numbers".to_string()));
+            }
+        }
+
+        Ok(())
+    }
+}
+
+pub struct DataProcessor {
+    max_records: usize,
+    records: Vec<DataRecord>,
+}
+
+impl DataProcessor {
+    pub fn new(max_records: usize) -> Self {
+        Self {
+            max_records,
+            records: Vec::with_capacity(max_records),
+        }
+    }
+
+    pub fn add_record(&mut self, record: DataRecord) -> Result<(), DataError> {
+        record.validate()?;
+        
+        if self.records.len() >= self.max_records {
+            return Err(DataError::InvalidInput("Maximum records limit reached".to_string()));
+        }
+
+        self.records.push(record);
+        Ok(())
+    }
+
+    pub fn process_records(&self) -> Result<Vec<f64>, DataError> {
+        if self.records.is_empty() {
+            return Err(DataError::InvalidInput("No records to process".to_string()));
+        }
+
+        let mut results = Vec::new();
+        for record in &self.records {
+            let sum: f64 = record.values.iter().sum();
+            let avg = sum / record.values.len() as f64;
+            results.push(avg);
+        }
+
+        Ok(results)
+    }
+
+    pub fn clear(&mut self) {
+        self.records.clear();
+    }
+
+    pub fn record_count(&self) -> usize {
+        self.records.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_record_validation() {
+        let mut record = DataRecord::new(1, 1234567890);
+        record.add_value(42.0);
+        
+        assert!(record.validate().is_ok());
+    }
+
+    #[test]
+    fn test_invalid_record() {
+        let record = DataRecord::new(0, 1234567890);
+        assert!(record.validate().is_err());
+    }
+
+    #[test]
+    fn test_data_processor() {
+        let mut processor = DataProcessor::new(10);
+        
+        let mut record = DataRecord::new(1, 1234567890);
+        record.add_value(10.0).add_value(20.0);
+        
+        assert!(processor.add_record(record).is_ok());
+        assert_eq!(processor.record_count(), 1);
+        
+        let results = processor.process_records();
+        assert!(results.is_ok());
+        assert_eq!(results.unwrap()[0], 15.0);
+    }
+}

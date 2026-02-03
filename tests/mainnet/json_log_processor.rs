@@ -109,4 +109,134 @@ mod tests {
         let result = parse_json_log(temp_file.path());
         assert!(matches!(result, Err(LogError::ParseError(_))));
     }
+}use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use chrono::{DateTime, Utc};
+
+#[derive(Debug, Serialize, Deserialize)]
+struct LogEntry {
+    timestamp: DateTime<Utc>,
+    level: String,
+    service: String,
+    message: String,
+    metadata: HashMap<String, String>,
+}
+
+struct LogProcessor {
+    min_level: String,
+    service_filter: Option<String>,
+}
+
+impl LogProcessor {
+    fn new(min_level: &str) -> Self {
+        LogProcessor {
+            min_level: min_level.to_lowercase(),
+            service_filter: None,
+        }
+    }
+
+    fn with_service_filter(mut self, service: &str) -> Self {
+        self.service_filter = Some(service.to_string());
+        self
+    }
+
+    fn process_file(&self, path: &str) -> Result<Vec<LogEntry>, Box<dyn std::error::Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut entries = Vec::new();
+
+        for line in reader.lines() {
+            let line = line?;
+            if let Ok(entry) = serde_json::from_str::<LogEntry>(&line) {
+                if self.should_include(&entry) {
+                    entries.push(entry);
+                }
+            }
+        }
+
+        Ok(entries)
+    }
+
+    fn should_include(&self, entry: &LogEntry) -> bool {
+        let level_priority = |level: &str| match level.to_lowercase().as_str() {
+            "error" => 3,
+            "warn" => 2,
+            "info" => 1,
+            "debug" => 0,
+            _ => 0,
+        };
+
+        let entry_priority = level_priority(&entry.level);
+        let min_priority = level_priority(&self.min_level);
+
+        if entry_priority < min_priority {
+            return false;
+        }
+
+        if let Some(ref service) = self.service_filter {
+            if entry.service != *service {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    fn generate_summary(&self, entries: &[LogEntry]) -> HashMap<String, usize> {
+        let mut summary = HashMap::new();
+        
+        for entry in entries {
+            *summary.entry(entry.level.clone()).or_insert(0) += 1;
+        }
+
+        summary
+    }
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let processor = LogProcessor::new("info")
+        .with_service_filter("api-service");
+
+    let entries = processor.process_file("logs/app.log")?;
+    
+    println!("Found {} log entries", entries.len());
+    
+    let summary = processor.generate_summary(&entries);
+    for (level, count) in summary {
+        println!("{}: {}", level, count);
+    }
+
+    if let Some(error_entry) = entries.iter().find(|e| e.level == "error") {
+        println!("Latest error: {} - {}", error_entry.timestamp, error_entry.message);
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_log_filtering() {
+        let log_data = r#"{"timestamp":"2024-01-15T10:30:00Z","level":"INFO","service":"api-service","message":"Request processed","metadata":{"method":"GET","path":"/api/users"}}
+{"timestamp":"2024-01-15T10:31:00Z","level":"ERROR","service":"auth-service","message":"Authentication failed","metadata":{"user_id":"123"}}
+{"timestamp":"2024-01-15T10:32:00Z","level":"WARN","service":"api-service","message":"Slow response","metadata":{"duration_ms":"1500"}}"#;
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+        write!(temp_file, "{}", log_data).unwrap();
+
+        let processor = LogProcessor::new("warn")
+            .with_service_filter("api-service");
+
+        let entries = processor.process_file(temp_file.path().to_str().unwrap()).unwrap();
+        
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].level, "WARN");
+        assert_eq!(entries[0].service, "api-service");
+    }
 }

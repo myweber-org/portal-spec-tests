@@ -152,3 +152,114 @@ mod tests {
         assert!(result.is_err());
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader, Write};
+use std::path::Path;
+
+pub struct CsvProcessor {
+    input_path: String,
+    output_path: String,
+    filter_column: usize,
+    filter_value: String,
+}
+
+impl CsvProcessor {
+    pub fn new(input_path: &str, output_path: &str, filter_column: usize, filter_value: &str) -> Self {
+        CsvProcessor {
+            input_path: input_path.to_string(),
+            output_path: output_path.to_string(),
+            filter_column,
+            filter_value: filter_value.to_string(),
+        }
+    }
+
+    pub fn process(&self) -> Result<usize, Box<dyn Error>> {
+        let input_file = File::open(&self.input_path)?;
+        let reader = BufReader::new(input_file);
+        let mut output_file = File::create(&self.output_path)?;
+        let mut processed_count = 0;
+
+        for (line_num, line) in reader.lines().enumerate() {
+            let line = line?;
+            let columns: Vec<&str> = line.split(',').collect();
+
+            if line_num == 0 {
+                writeln!(output_file, "{}", line)?;
+                continue;
+            }
+
+            if columns.get(self.filter_column).map_or(false, |&val| val == self.filter_value) {
+                let transformed_line = self.transform_row(&columns);
+                writeln!(output_file, "{}", transformed_line)?;
+                processed_count += 1;
+            }
+        }
+
+        Ok(processed_count)
+    }
+
+    fn transform_row(&self, columns: &[&str]) -> String {
+        let mut transformed = columns.to_vec();
+        if transformed.len() > 2 {
+            transformed[1] = transformed[1].to_uppercase().as_str();
+        }
+        transformed.join(",")
+    }
+}
+
+pub fn validate_csv_file(path: &str) -> Result<bool, Box<dyn Error>> {
+    let path_obj = Path::new(path);
+    if !path_obj.exists() {
+        return Err("File does not exist".into());
+    }
+
+    let extension = path_obj.extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("");
+
+    Ok(extension.eq_ignore_ascii_case("csv"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_csv_processing() {
+        let input_content = "id,name,value\n1,test,100\n2,sample,200\n3,test,300";
+        let input_file = NamedTempFile::new().unwrap();
+        fs::write(input_file.path(), input_content).unwrap();
+
+        let output_file = NamedTempFile::new().unwrap();
+
+        let processor = CsvProcessor::new(
+            input_file.path().to_str().unwrap(),
+            output_file.path().to_str().unwrap(),
+            1,
+            "test"
+        );
+
+        let result = processor.process();
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 2);
+
+        let output_content = fs::read_to_string(output_file.path()).unwrap();
+        assert!(output_content.contains("TEST"));
+        assert!(!output_content.contains("sample"));
+    }
+
+    #[test]
+    fn test_file_validation() {
+        let valid_file = NamedTempFile::new().unwrap();
+        let valid_path = valid_file.path().with_extension("csv");
+        fs::write(&valid_path, "").unwrap();
+
+        assert!(validate_csv_file(valid_path.to_str().unwrap()).unwrap());
+
+        let invalid_file = NamedTempFile::new().unwrap();
+        assert!(!validate_csv_file(invalid_file.path().to_str().unwrap()).unwrap());
+    }
+}

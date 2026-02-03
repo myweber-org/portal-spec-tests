@@ -318,3 +318,100 @@ mod tests {
         assert_eq!(processor.calculate_average(), 100.0);
     }
 }
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct ProcessingError {
+    message: String,
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Processing error: {}", self.message)
+    }
+}
+
+impl Error for ProcessingError {}
+
+impl ProcessingError {
+    pub fn new(msg: &str) -> Self {
+        ProcessingError {
+            message: msg.to_string(),
+        }
+    }
+}
+
+pub struct DataRecord {
+    id: u32,
+    value: f64,
+    timestamp: i64,
+}
+
+impl DataRecord {
+    pub fn new(id: u32, value: f64, timestamp: i64) -> Result<Self, ProcessingError> {
+        if value < 0.0 || value > 1000.0 {
+            return Err(ProcessingError::new("Value out of valid range"));
+        }
+        
+        if timestamp < 0 {
+            return Err(ProcessingError::new("Timestamp cannot be negative"));
+        }
+        
+        Ok(DataRecord {
+            id,
+            value,
+            timestamp,
+        })
+    }
+    
+    pub fn normalize(&self) -> f64 {
+        (self.value - 0.0) / (1000.0 - 0.0)
+    }
+    
+    pub fn is_anomaly(&self, threshold: f64) -> bool {
+        self.normalize() > threshold
+    }
+}
+
+pub fn process_records(records: &[DataRecord]) -> Vec<f64> {
+    records.iter()
+        .map(|r| r.normalize())
+        .collect()
+}
+
+pub fn filter_anomalies(records: &[DataRecord], threshold: f64) -> Vec<&DataRecord> {
+    records.iter()
+        .filter(|r| r.is_anomaly(threshold))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_valid_record_creation() {
+        let record = DataRecord::new(1, 500.0, 1234567890);
+        assert!(record.is_ok());
+    }
+    
+    #[test]
+    fn test_invalid_value() {
+        let record = DataRecord::new(1, 1500.0, 1234567890);
+        assert!(record.is_err());
+    }
+    
+    #[test]
+    fn test_normalization() {
+        let record = DataRecord::new(1, 500.0, 1234567890).unwrap();
+        assert_eq!(record.normalize(), 0.5);
+    }
+    
+    #[test]
+    fn test_anomaly_detection() {
+        let record = DataRecord::new(1, 900.0, 1234567890).unwrap();
+        assert!(record.is_anomaly(0.8));
+        assert!(!record.is_anomaly(0.9));
+    }
+}

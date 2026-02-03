@@ -353,4 +353,113 @@ mod tests {
         assert_eq!(grouped.get("Alpha").unwrap().len(), 2);
         assert_eq!(grouped.get("Beta").unwrap().len(), 1);
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+pub struct DataProcessor {
+    file_path: String,
+    delimiter: char,
+}
+
+impl DataProcessor {
+    pub fn new(file_path: &str, delimiter: char) -> Self {
+        DataProcessor {
+            file_path: file_path.to_string(),
+            delimiter,
+        }
+    }
+
+    pub fn process(&self) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let path = Path::new(&self.file_path);
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+
+        let mut records = Vec::new();
+        for line in reader.lines() {
+            let line = line?;
+            let fields: Vec<String> = line
+                .split(self.delimiter)
+                .map(|s| s.trim().to_string())
+                .collect();
+            
+            if !fields.is_empty() && !fields.iter().all(|f| f.is_empty()) {
+                records.push(fields);
+            }
+        }
+
+        Ok(records)
+    }
+
+    pub fn filter_by_column(&self, column_index: usize, filter_value: &str) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let records = self.process()?;
+        let filtered: Vec<Vec<String>> = records
+            .into_iter()
+            .filter(|record| {
+                if let Some(value) = record.get(column_index) {
+                    value == filter_value
+                } else {
+                    false
+                }
+            })
+            .collect();
+
+        Ok(filtered)
+    }
+
+    pub fn get_column_stats(&self, column_index: usize) -> Result<(usize, String, String), Box<dyn Error>> {
+        let records = self.process()?;
+        let mut values = Vec::new();
+        
+        for record in &records {
+            if let Some(value) = record.get(column_index) {
+                values.push(value.clone());
+            }
+        }
+
+        let count = values.len();
+        let min_value = values.iter().min().cloned().unwrap_or_default();
+        let max_value = values.iter().max().cloned().unwrap_or_default();
+
+        Ok((count, min_value, max_value))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_data_processing() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,name,age").unwrap();
+        writeln!(temp_file, "1,Alice,30").unwrap();
+        writeln!(temp_file, "2,Bob,25").unwrap();
+        writeln!(temp_file, "3,Charlie,35").unwrap();
+
+        let processor = DataProcessor::new(temp_file.path().to_str().unwrap(), ',');
+        let result = processor.process().unwrap();
+        
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0], vec!["1", "Alice", "30"]);
+    }
+
+    #[test]
+    fn test_filter_by_column() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,name,age").unwrap();
+        writeln!(temp_file, "1,Alice,30").unwrap();
+        writeln!(temp_file, "2,Bob,25").unwrap();
+        writeln!(temp_file, "3,Alice,35").unwrap();
+
+        let processor = DataProcessor::new(temp_file.path().to_str().unwrap(), ',');
+        let filtered = processor.filter_by_column(1, "Alice").unwrap();
+        
+        assert_eq!(filtered.len(), 2);
+        assert_eq!(filtered[0][1], "Alice");
+        assert_eq!(filtered[1][1], "Alice");
+    }
 }

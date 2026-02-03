@@ -524,4 +524,83 @@ mod tests {
             
         assert_eq!(original_content.to_vec(), decrypted_content);
     }
+}use std::fs;
+use std::io::{self, Read, Write};
+use std::path::Path;
+
+const DEFAULT_KEY: &[u8] = b"secret-encryption-key-2024";
+
+pub fn encrypt_file(input_path: &str, output_path: &str, key: Option<&[u8]>) -> io::Result<()> {
+    let encryption_key = key.unwrap_or(DEFAULT_KEY);
+    process_file(input_path, output_path, encryption_key)
+}
+
+pub fn decrypt_file(input_path: &str, output_path: &str, key: Option<&[u8]>) -> io::Result<()> {
+    let encryption_key = key.unwrap_or(DEFAULT_KEY);
+    process_file(input_path, output_path, encryption_key)
+}
+
+fn process_file(input_path: &str, output_path: &str, key: &[u8]) -> io::Result<()> {
+    let input_data = fs::read(input_path)?;
+    let processed_data = xor_cipher(&input_data, key);
+    fs::write(output_path, processed_data)
+}
+
+fn xor_cipher(data: &[u8], key: &[u8]) -> Vec<u8> {
+    let key_len = key.len();
+    if key_len == 0 {
+        return data.to_vec();
+    }
+    
+    data.iter()
+        .enumerate()
+        .map(|(i, &byte)| byte ^ key[i % key_len])
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_xor_cipher_symmetry() {
+        let data = b"Hello, World!";
+        let key = b"test-key";
+        
+        let encrypted = xor_cipher(data, key);
+        let decrypted = xor_cipher(&encrypted, key);
+        
+        assert_eq!(data, decrypted.as_slice());
+    }
+
+    #[test]
+    fn test_file_encryption_roundtrip() -> io::Result<()> {
+        let original_content = b"Sample data for encryption test";
+        
+        let input_file = NamedTempFile::new()?;
+        let encrypted_file = NamedTempFile::new()?;
+        let decrypted_file = NamedTempFile::new()?;
+        
+        fs::write(input_file.path(), original_content)?;
+        
+        let custom_key = b"custom-encryption-key";
+        
+        encrypt_file(
+            input_file.path().to_str().unwrap(),
+            encrypted_file.path().to_str().unwrap(),
+            Some(custom_key),
+        )?;
+        
+        decrypt_file(
+            encrypted_file.path().to_str().unwrap(),
+            decrypted_file.path().to_str().unwrap(),
+            Some(custom_key),
+        )?;
+        
+        let decrypted_content = fs::read(decrypted_file.path())?;
+        assert_eq!(original_content, decrypted_content.as_slice());
+        
+        Ok(())
+    }
 }

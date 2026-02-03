@@ -1,4 +1,3 @@
-
 use std::error::Error;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -7,24 +6,9 @@ use std::path::Path;
 #[derive(Debug, Clone)]
 pub struct DataRecord {
     pub id: u32,
+    pub name: String,
     pub value: f64,
-    pub category: String,
     pub timestamp: String,
-}
-
-impl DataRecord {
-    pub fn new(id: u32, value: f64, category: String, timestamp: String) -> Self {
-        DataRecord {
-            id,
-            value,
-            category,
-            timestamp,
-        }
-    }
-
-    pub fn is_valid(&self) -> bool {
-        !self.category.is_empty() && self.value.is_finite()
-    }
 }
 
 pub struct DataProcessor {
@@ -43,9 +27,10 @@ impl DataProcessor {
         let reader = BufReader::new(file);
         let mut count = 0;
 
-        for (index, line) in reader.lines().enumerate() {
+        for (line_num, line) in reader.lines().enumerate() {
             let line = line?;
-            if index == 0 {
+            
+            if line_num == 0 {
                 continue;
             }
 
@@ -54,25 +39,39 @@ impl DataProcessor {
                 continue;
             }
 
-            let id = parts[0].parse::<u32>().unwrap_or(0);
-            let value = parts[1].parse::<f64>().unwrap_or(0.0);
-            let category = parts[2].to_string();
+            let id = match parts[0].parse::<u32>() {
+                Ok(val) => val,
+                Err(_) => continue,
+            };
+
+            let name = parts[1].to_string();
+            
+            let value = match parts[2].parse::<f64>() {
+                Ok(val) => val,
+                Err(_) => continue,
+            };
+
             let timestamp = parts[3].to_string();
 
-            let record = DataRecord::new(id, value, category, timestamp);
-            if record.is_valid() {
-                self.records.push(record);
-                count += 1;
-            }
+            let record = DataRecord {
+                id,
+                name,
+                value,
+                timestamp,
+            };
+
+            self.records.push(record);
+            count += 1;
         }
 
         Ok(count)
     }
 
-    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
+    pub fn filter_by_threshold(&self, threshold: f64) -> Vec<DataRecord> {
         self.records
             .iter()
-            .filter(|record| record.category == category)
+            .filter(|record| record.value > threshold)
+            .cloned()
             .collect()
     }
 
@@ -85,21 +84,11 @@ impl DataProcessor {
         Some(sum / self.records.len() as f64)
     }
 
-    pub fn get_statistics(&self) -> (f64, f64, f64) {
-        let values: Vec<f64> = self.records.iter().map(|record| record.value).collect();
-        
-        if values.is_empty() {
-            return (0.0, 0.0, 0.0);
-        }
-
-        let min = values.iter().fold(f64::INFINITY, |a, &b| a.min(b));
-        let max = values.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
-        let avg = self.calculate_average().unwrap_or(0.0);
-
-        (min, max, avg)
+    pub fn find_by_id(&self, target_id: u32) -> Option<&DataRecord> {
+        self.records.iter().find(|record| record.id == target_id)
     }
 
-    pub fn count_records(&self) -> usize {
+    pub fn record_count(&self) -> usize {
         self.records.len()
     }
 
@@ -111,20 +100,34 @@ impl DataProcessor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_record_validation() {
-        let valid_record = DataRecord::new(1, 42.5, "A".to_string(), "2024-01-01".to_string());
-        assert!(valid_record.is_valid());
+    fn test_data_processor() {
+        let mut processor = DataProcessor::new();
+        
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,name,value,timestamp").unwrap();
+        writeln!(temp_file, "1,test1,10.5,2023-01-01").unwrap();
+        writeln!(temp_file, "2,test2,20.3,2023-01-02").unwrap();
+        writeln!(temp_file, "3,test3,5.7,2023-01-03").unwrap();
 
-        let invalid_record = DataRecord::new(2, f64::NAN, "".to_string(), "2024-01-01".to_string());
-        assert!(!invalid_record.is_valid());
-    }
+        let count = processor.load_from_csv(temp_file.path()).unwrap();
+        assert_eq!(count, 3);
+        assert_eq!(processor.record_count(), 3);
 
-    #[test]
-    fn test_empty_processor() {
-        let processor = DataProcessor::new();
-        assert_eq!(processor.count_records(), 0);
-        assert_eq!(processor.calculate_average(), None);
+        let avg = processor.calculate_average().unwrap();
+        assert!((avg - 12.166666).abs() < 0.0001);
+
+        let filtered = processor.filter_by_threshold(10.0);
+        assert_eq!(filtered.len(), 2);
+
+        let found = processor.find_by_id(2);
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().name, "test2");
+
+        processor.clear();
+        assert_eq!(processor.record_count(), 0);
     }
 }

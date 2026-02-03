@@ -217,4 +217,104 @@ mod tests {
         
         assert_eq!(decrypted_content, original_content);
     }
+}use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce
+};
+use argon2::{
+    password_hash::{
+        rand_core::OsRng,
+        PasswordHasher, SaltString
+    },
+    Argon2
+};
+use std::fs;
+
+pub struct FileEncryptor {
+    key: [u8; 32],
+}
+
+impl FileEncryptor {
+    pub fn new(password: &str) -> Self {
+        let salt = SaltString::generate(&mut OsRng);
+        let argon2 = Argon2::default();
+        let password_hash = argon2.hash_password(password.as_bytes(), &salt)
+            .expect("Failed to hash password");
+        
+        let mut key = [0u8; 32];
+        key.copy_from_slice(&password_hash.hash.unwrap().as_bytes()[..32]);
+        
+        FileEncryptor { key }
+    }
+    
+    pub fn encrypt_file(&self, input_path: &str, output_path: &str) -> Result<(), String> {
+        let plaintext = fs::read(input_path)
+            .map_err(|e| format!("Failed to read input file: {}", e))?;
+        
+        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&self.key));
+        let nonce = Nonce::generate(&mut OsRng);
+        
+        let ciphertext = cipher.encrypt(&nonce, plaintext.as_ref())
+            .map_err(|e| format!("Encryption failed: {}", e))?;
+        
+        let mut output_data = nonce.to_vec();
+        output_data.extend_from_slice(&ciphertext);
+        
+        fs::write(output_path, output_data)
+            .map_err(|e| format!("Failed to write output file: {}", e))?;
+        
+        Ok(())
+    }
+    
+    pub fn decrypt_file(&self, input_path: &str, output_path: &str) -> Result<(), String> {
+        let encrypted_data = fs::read(input_path)
+            .map_err(|e| format!("Failed to read encrypted file: {}", e))?;
+        
+        if encrypted_data.len() < 12 {
+            return Err("Invalid encrypted data format".to_string());
+        }
+        
+        let (nonce_bytes, ciphertext) = encrypted_data.split_at(12);
+        let nonce = Nonce::from_slice(nonce_bytes);
+        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&self.key));
+        
+        let plaintext = cipher.decrypt(nonce, ciphertext)
+            .map_err(|e| format!("Decryption failed: {}", e))?;
+        
+        fs::write(output_path, plaintext)
+            .map_err(|e| format!("Failed to write decrypted file: {}", e))?;
+        
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+    
+    #[test]
+    fn test_encryption_decryption() {
+        let encryptor = FileEncryptor::new("secure_password");
+        let test_data = b"Hello, this is a secret message!";
+        
+        let input_file = NamedTempFile::new().unwrap();
+        let encrypted_file = NamedTempFile::new().unwrap();
+        let decrypted_file = NamedTempFile::new().unwrap();
+        
+        fs::write(input_file.path(), test_data).unwrap();
+        
+        encryptor.encrypt_file(
+            input_file.path().to_str().unwrap(),
+            encrypted_file.path().to_str().unwrap()
+        ).unwrap();
+        
+        encryptor.decrypt_file(
+            encrypted_file.path().to_str().unwrap(),
+            decrypted_file.path().to_str().unwrap()
+        ).unwrap();
+        
+        let decrypted_data = fs::read(decrypted_file.path()).unwrap();
+        assert_eq!(test_data.to_vec(), decrypted_data);
+    }
 }

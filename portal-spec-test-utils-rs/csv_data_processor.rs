@@ -307,3 +307,154 @@ mod tests {
         assert!(processor.find_max_value().is_none());
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug, Clone)]
+pub struct CsvRecord {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub category: String,
+}
+
+pub struct CsvProcessor {
+    records: Vec<CsvRecord>,
+}
+
+impl CsvProcessor {
+    pub fn new() -> Self {
+        CsvProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_file<P: AsRef<Path>>(&mut self, path: P) -> Result<usize, Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        
+        let mut count = 0;
+        for (line_num, line) in reader.lines().enumerate() {
+            let line = line?;
+            
+            if line.trim().is_empty() || line.starts_with('#') {
+                continue;
+            }
+            
+            let parts: Vec<&str> = line.split(',').collect();
+            if parts.len() != 4 {
+                return Err(format!("Invalid CSV format at line {}", line_num + 1).into());
+            }
+            
+            let id = parts[0].parse::<u32>()?;
+            let name = parts[1].trim().to_string();
+            let value = parts[2].parse::<f64>()?;
+            let category = parts[3].trim().to_string();
+            
+            if !Self::validate_record(&name, value, &category) {
+                return Err(format!("Validation failed at line {}", line_num + 1).into());
+            }
+            
+            self.records.push(CsvRecord {
+                id,
+                name,
+                value,
+                category,
+            });
+            
+            count += 1;
+        }
+        
+        Ok(count)
+    }
+    
+    fn validate_record(name: &str, value: f64, category: &str) -> bool {
+        !name.is_empty() && 
+        value >= 0.0 && 
+        value <= 10000.0 && 
+        !category.is_empty()
+    }
+    
+    pub fn filter_by_category(&self, category: &str) -> Vec<CsvRecord> {
+        self.records
+            .iter()
+            .filter(|record| record.category == category)
+            .cloned()
+            .collect()
+    }
+    
+    pub fn calculate_total_value(&self) -> f64 {
+        self.records.iter().map(|record| record.value).sum()
+    }
+    
+    pub fn get_average_value(&self) -> Option<f64> {
+        if self.records.is_empty() {
+            None
+        } else {
+            Some(self.calculate_total_value() / self.records.len() as f64)
+        }
+    }
+    
+    pub fn transform_values<F>(&mut self, transform_fn: F) 
+    where
+        F: Fn(f64) -> f64,
+    {
+        for record in &mut self.records {
+            record.value = transform_fn(record.value);
+        }
+    }
+    
+    pub fn sort_by_value(&mut self) {
+        self.records.sort_by(|a, b| a.value.partial_cmp(&b.value).unwrap());
+    }
+    
+    pub fn get_records(&self) -> &[CsvRecord] {
+        &self.records
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+    
+    #[test]
+    fn test_csv_processing() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "1,Item A,100.5,Electronics").unwrap();
+        writeln!(temp_file, "2,Item B,250.0,Books").unwrap();
+        writeln!(temp_file, "3,Item C,75.25,Electronics").unwrap();
+        
+        let mut processor = CsvProcessor::new();
+        let result = processor.load_from_file(temp_file.path());
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 3);
+        
+        let electronics = processor.filter_by_category("Electronics");
+        assert_eq!(electronics.len(), 2);
+        
+        let total = processor.calculate_total_value();
+        assert!((total - 425.75).abs() < 0.001);
+        
+        let avg = processor.get_average_value();
+        assert!(avg.is_some());
+        assert!((avg.unwrap() - 141.916).abs() < 0.001);
+    }
+    
+    #[test]
+    fn test_value_transformation() {
+        let mut processor = CsvProcessor::new();
+        processor.records.push(CsvRecord {
+            id: 1,
+            name: "Test".to_string(),
+            value: 100.0,
+            category: "Test".to_string(),
+        });
+        
+        processor.transform_values(|x| x * 1.1);
+        assert!((processor.records[0].value - 110.0).abs() < 0.001);
+    }
+}

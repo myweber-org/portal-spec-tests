@@ -60,3 +60,133 @@ pub fn process_logs(file_path: &str) {
         Err(e) => eprintln!("Failed to analyze log file: {}", e),
     }
 }
+use std::fs::File;
+use std::io::{self, BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug, PartialEq)]
+pub enum LogSeverity {
+    Debug,
+    Info,
+    Warning,
+    Error,
+    Critical,
+}
+
+impl LogSeverity {
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "debug" => Some(LogSeverity::Debug),
+            "info" => Some(LogSeverity::Info),
+            "warning" => Some(LogSeverity::Warning),
+            "error" => Some(LogSeverity::Error),
+            "critical" => Some(LogSeverity::Critical),
+            _ => None,
+        }
+    }
+}
+
+pub struct LogEntry {
+    pub timestamp: String,
+    pub severity: LogSeverity,
+    pub component: String,
+    pub message: String,
+}
+
+pub struct LogAnalyzer {
+    entries: Vec<LogEntry>,
+}
+
+impl LogAnalyzer {
+    pub fn new() -> Self {
+        LogAnalyzer {
+            entries: Vec::new(),
+        }
+    }
+
+    pub fn load_from_file<P: AsRef<Path>>(&mut self, path: P) -> io::Result<()> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+
+        for line in reader.lines() {
+            let line = line?;
+            if let Some(entry) = self.parse_log_line(&line) {
+                self.entries.push(entry);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn parse_log_line(&self, line: &str) -> Option<LogEntry> {
+        let parts: Vec<&str> = line.splitn(4, '|').collect();
+        if parts.len() != 4 {
+            return None;
+        }
+
+        let severity = LogSeverity::from_str(parts[1].trim())?;
+
+        Some(LogEntry {
+            timestamp: parts[0].trim().to_string(),
+            severity,
+            component: parts[2].trim().to_string(),
+            message: parts[3].trim().to_string(),
+        })
+    }
+
+    pub fn filter_by_severity(&self, severity: LogSeverity) -> Vec<&LogEntry> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.severity == severity)
+            .collect()
+    }
+
+    pub fn count_by_severity(&self) -> Vec<(LogSeverity, usize)> {
+        let mut counts = vec![
+            (LogSeverity::Debug, 0),
+            (LogSeverity::Info, 0),
+            (LogSeverity::Warning, 0),
+            (LogSeverity::Error, 0),
+            (LogSeverity::Critical, 0),
+        ];
+
+        for entry in &self.entries {
+            for (severity, count) in &mut counts {
+                if entry.severity == *severity {
+                    *count += 1;
+                    break;
+                }
+            }
+        }
+
+        counts
+    }
+
+    pub fn get_entries(&self) -> &[LogEntry] {
+        &self.entries
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_severity_parsing() {
+        assert_eq!(LogSeverity::from_str("ERROR"), Some(LogSeverity::Error));
+        assert_eq!(LogSeverity::from_str("warning"), Some(LogSeverity::Warning));
+        assert_eq!(LogSeverity::from_str("unknown"), None);
+    }
+
+    #[test]
+    fn test_log_parsing() {
+        let analyzer = LogAnalyzer::new();
+        let line = "2023-10-05 14:30:00 | ERROR | network | Connection timeout";
+        
+        let entry = analyzer.parse_log_line(line).unwrap();
+        assert_eq!(entry.timestamp, "2023-10-05 14:30:00");
+        assert_eq!(entry.severity, LogSeverity::Error);
+        assert_eq!(entry.component, "network");
+        assert_eq!(entry.message, "Connection timeout");
+    }
+}

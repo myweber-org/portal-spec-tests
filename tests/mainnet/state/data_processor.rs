@@ -707,4 +707,132 @@ mod tests {
         assert_eq!(variance, 66.66666666666667);
         assert_eq!(std_dev, 8.16496580927726);
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+
+pub struct DataRecord {
+    pub id: u32,
+    pub value: f64,
+    pub category: String,
+}
+
+impl DataRecord {
+    pub fn is_valid(&self) -> bool {
+        self.id > 0 && self.value.is_finite() && !self.category.is_empty()
+    }
+}
+
+pub fn process_csv_file(file_path: &str) -> Result<Vec<DataRecord>, Box<dyn Error>> {
+    let file = File::open(file_path)?;
+    let reader = BufReader::new(file);
+    let mut records = Vec::new();
+    let mut line_number = 0;
+
+    for line in reader.lines() {
+        line_number += 1;
+        let line_content = line?;
+        
+        if line_content.trim().is_empty() || line_content.starts_with('#') {
+            continue;
+        }
+
+        let parts: Vec<&str> = line_content.split(',').collect();
+        if parts.len() != 3 {
+            return Err(format!("Invalid format at line {}", line_number).into());
+        }
+
+        let id = parts[0].parse::<u32>()?;
+        let value = parts[1].parse::<f64>()?;
+        let category = parts[2].to_string();
+
+        let record = DataRecord { id, value, category };
+        if record.is_valid() {
+            records.push(record);
+        } else {
+            eprintln!("Warning: Invalid record at line {}", line_number);
+        }
+    }
+
+    Ok(records)
+}
+
+pub fn calculate_statistics(records: &[DataRecord]) -> (f64, f64, f64) {
+    if records.is_empty() {
+        return (0.0, 0.0, 0.0);
+    }
+
+    let sum: f64 = records.iter().map(|r| r.value).sum();
+    let count = records.len() as f64;
+    let mean = sum / count;
+
+    let variance: f64 = records.iter()
+        .map(|r| (r.value - mean).powi(2))
+        .sum::<f64>() / count;
+    let std_dev = variance.sqrt();
+
+    (mean, variance, std_dev)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_valid_record() {
+        let record = DataRecord {
+            id: 1,
+            value: 42.5,
+            category: "test".to_string(),
+        };
+        assert!(record.is_valid());
+    }
+
+    #[test]
+    fn test_invalid_record() {
+        let record1 = DataRecord {
+            id: 0,
+            value: 42.5,
+            category: "test".to_string(),
+        };
+        assert!(!record1.is_valid());
+
+        let record2 = DataRecord {
+            id: 1,
+            value: f64::NAN,
+            category: "test".to_string(),
+        };
+        assert!(!record2.is_valid());
+    }
+
+    #[test]
+    fn test_process_csv() -> Result<(), Box<dyn Error>> {
+        let mut temp_file = NamedTempFile::new()?;
+        writeln!(temp_file, "1,42.5,category_a")?;
+        writeln!(temp_file, "2,37.8,category_b")?;
+        writeln!(temp_file, "# This is a comment")?;
+        writeln!(temp_file, "")?;
+
+        let records = process_csv_file(temp_file.path().to_str().unwrap())?;
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].id, 1);
+        assert_eq!(records[1].category, "category_b");
+        Ok(())
+    }
+
+    #[test]
+    fn test_statistics() {
+        let records = vec![
+            DataRecord { id: 1, value: 10.0, category: "a".to_string() },
+            DataRecord { id: 2, value: 20.0, category: "b".to_string() },
+            DataRecord { id: 3, value: 30.0, category: "c".to_string() },
+        ];
+        
+        let (mean, variance, std_dev) = calculate_statistics(&records);
+        assert_eq!(mean, 20.0);
+        assert_eq!(variance, 66.66666666666667);
+        assert_eq!(std_dev, 8.16496580927726);
+    }
 }

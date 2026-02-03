@@ -124,4 +124,48 @@ mod tests {
         assert_eq!(entry.message, "Database connection failed");
         assert_eq!(entry.fields.get("error_code").unwrap().as_u64().unwrap(), 500);
     }
+}use serde_json::Value;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+
+pub fn parse_log_file(file_path: &str, min_level: &str) -> Result<Vec<Value>, Box<dyn std::error::Error>> {
+    let file = File::open(file_path)?;
+    let reader = BufReader::new(file);
+    let mut filtered_logs = Vec::new();
+
+    for line in reader.lines() {
+        let line = line?;
+        if let Ok(log_entry) = serde_json::from_str::<Value>(&line) {
+            if let Some(level) = log_entry.get("level").and_then(|v| v.as_str()) {
+                if should_include_log(level, min_level) {
+                    filtered_logs.push(log_entry);
+                }
+            }
+        }
+    }
+
+    Ok(filtered_logs)
+}
+
+fn should_include_log(log_level: &str, min_level: &str) -> bool {
+    let levels = ["trace", "debug", "info", "warn", "error"];
+    let log_idx = levels.iter().position(|&l| l == log_level);
+    let min_idx = levels.iter().position(|&l| l == min_level);
+
+    match (log_idx, min_idx) {
+        (Some(l), Some(m)) => l >= m,
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_level_filtering() {
+        assert!(should_include_log("error", "info"));
+        assert!(!should_include_log("debug", "warn"));
+        assert!(should_include_log("warn", "warn"));
+    }
 }

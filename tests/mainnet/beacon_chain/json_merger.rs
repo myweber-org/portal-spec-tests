@@ -139,3 +139,85 @@ fn merge_objects(base: &mut Map<String, Value>, new: Map<String, Value>) {
         }
     }
 }
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::{BufReader, Read};
+use std::path::Path;
+
+type JsonValue = serde_json::Value;
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+
+pub struct JsonMerger {
+    data: HashMap<String, JsonValue>,
+}
+
+impl JsonMerger {
+    pub fn new() -> Self {
+        JsonMerger {
+            data: HashMap::new(),
+        }
+    }
+
+    pub fn add_file<P: AsRef<Path>>(&mut self, path: P) -> Result<()> {
+        let file = File::open(path.as_ref())?;
+        let mut reader = BufReader::new(file);
+        let mut contents = String::new();
+        reader.read_to_string(&mut contents)?;
+
+        let json_data: JsonValue = serde_json::from_str(&contents)?;
+        
+        if let JsonValue::Object(map) = json_data {
+            for (key, value) in map {
+                self.data.insert(key, value);
+            }
+        } else {
+            return Err("Root JSON element must be an object".into());
+        }
+
+        Ok(())
+    }
+
+    pub fn add_raw_json(&mut self, json_str: &str) -> Result<()> {
+        let json_data: JsonValue = serde_json::from_str(json_str)?;
+        
+        if let JsonValue::Object(map) = json_data {
+            for (key, value) in map {
+                self.data.insert(key, value);
+            }
+            Ok(())
+        } else {
+            Err("Root JSON element must be an object".into())
+        }
+    }
+
+    pub fn merge(&self) -> JsonValue {
+        let mut result_map = serde_json::Map::new();
+        for (key, value) in &self.data {
+            result_map.insert(key.clone(), value.clone());
+        }
+        JsonValue::Object(result_map)
+    }
+
+    pub fn merge_to_string(&self) -> Result<String> {
+        let merged = self.merge();
+        serde_json::to_string_pretty(&merged).map_err(|e| e.into())
+    }
+
+    pub fn clear(&mut self) {
+        self.data.clear();
+    }
+
+    pub fn key_count(&self) -> usize {
+        self.data.len()
+    }
+
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.data.contains_key(key)
+    }
+}
+
+impl Default for JsonMerger {
+    fn default() -> Self {
+        Self::new()
+    }
+}

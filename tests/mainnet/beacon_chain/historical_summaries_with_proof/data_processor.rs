@@ -333,3 +333,170 @@ mod tests {
         assert_eq!(stats.get("total_values").unwrap(), &6.0);
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+pub struct DataRecord {
+    pub id: u32,
+    pub value: f64,
+    pub category: String,
+    pub valid: bool,
+}
+
+pub struct DataProcessor {
+    records: Vec<DataRecord>,
+    total_value: f64,
+    valid_count: usize,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+            total_value: 0.0,
+            valid_count: 0,
+        }
+    }
+
+    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+
+        for (line_num, line) in reader.lines().enumerate() {
+            let line = line?;
+            
+            if line_num == 0 {
+                continue;
+            }
+
+            let parts: Vec<&str> = line.split(',').collect();
+            if parts.len() != 4 {
+                continue;
+            }
+
+            let id = match parts[0].parse::<u32>() {
+                Ok(id) => id,
+                Err(_) => continue,
+            };
+
+            let value = match parts[1].parse::<f64>() {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
+
+            let category = parts[2].to_string();
+            let valid = parts[3].parse::<bool>().unwrap_or(false);
+
+            let record = DataRecord {
+                id,
+                value,
+                category,
+                valid,
+            };
+
+            self.add_record(record);
+        }
+
+        Ok(())
+    }
+
+    pub fn add_record(&mut self, record: DataRecord) {
+        if record.valid {
+            self.total_value += record.value;
+            self.valid_count += 1;
+        }
+        self.records.push(record);
+    }
+
+    pub fn average_value(&self) -> Option<f64> {
+        if self.valid_count > 0 {
+            Some(self.total_value / self.valid_count as f64)
+        } else {
+            None
+        }
+    }
+
+    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
+        self.records
+            .iter()
+            .filter(|record| record.category == category)
+            .collect()
+    }
+
+    pub fn count_records(&self) -> usize {
+        self.records.len()
+    }
+
+    pub fn count_valid(&self) -> usize {
+        self.valid_count
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_empty_processor() {
+        let processor = DataProcessor::new();
+        assert_eq!(processor.count_records(), 0);
+        assert_eq!(processor.count_valid(), 0);
+        assert_eq!(processor.average_value(), None);
+    }
+
+    #[test]
+    fn test_add_records() {
+        let mut processor = DataProcessor::new();
+        
+        processor.add_record(DataRecord {
+            id: 1,
+            value: 10.5,
+            category: "A".to_string(),
+            valid: true,
+        });
+
+        processor.add_record(DataRecord {
+            id: 2,
+            value: 20.0,
+            category: "B".to_string(),
+            valid: false,
+        });
+
+        assert_eq!(processor.count_records(), 2);
+        assert_eq!(processor.count_valid(), 1);
+        assert_eq!(processor.average_value(), Some(10.5));
+    }
+
+    #[test]
+    fn test_filter_category() {
+        let mut processor = DataProcessor::new();
+        
+        processor.add_record(DataRecord {
+            id: 1,
+            value: 10.0,
+            category: "Type1".to_string(),
+            valid: true,
+        });
+
+        processor.add_record(DataRecord {
+            id: 2,
+            value: 20.0,
+            category: "Type2".to_string(),
+            valid: true,
+        });
+
+        processor.add_record(DataRecord {
+            id: 3,
+            value: 30.0,
+            category: "Type1".to_string(),
+            valid: true,
+        });
+
+        let filtered = processor.filter_by_category("Type1");
+        assert_eq!(filtered.len(), 2);
+        assert_eq!(filtered[0].id, 1);
+        assert_eq!(filtered[1].id, 3);
+    }
+}

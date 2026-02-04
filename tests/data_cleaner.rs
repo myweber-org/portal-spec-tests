@@ -23,4 +23,22 @@ mod tests {
         let result: Vec<i32> = filter_numbers(input);
         assert_eq!(result, vec![42, 100]);
     }
+}use regex::Regex;
+
+pub fn extract_numbers(input: &str) -> String {
+    let re = Regex::new(r"[^0-9]").unwrap();
+    re.replace_all(input, "").to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_numbers() {
+        assert_eq!(extract_numbers("abc123def456"), "123456");
+        assert_eq!(extract_numbers("phone: 555-1234"), "5551234");
+        assert_eq!(extract_numbers("no digits here"), "");
+        assert_eq!(extract_numbers(""), "");
+    }
 }

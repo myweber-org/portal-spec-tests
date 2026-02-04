@@ -262,3 +262,114 @@ mod tests {
         assert_eq!(obj.get("data").unwrap(), "test");
     }
 }
+use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
+
+pub fn merge_json_files(file_paths: &[&str], output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let mut merged_array = Vec::new();
+
+    for file_path in file_paths {
+        let content = fs::read_to_string(file_path)?;
+        let json_value: serde_json::Value = serde_json::from_str(&content)?;
+        
+        if let serde_json::Value::Array(arr) = json_value {
+            merged_array.extend(arr);
+        } else {
+            merged_array.push(json_value);
+        }
+    }
+
+    let output_json = serde_json::to_string_pretty(&merged_array)?;
+    fs::write(output_path, output_json)?;
+
+    Ok(())
+}
+
+pub fn merge_json_with_deduplication(
+    file_paths: &[&str], 
+    output_path: &str,
+    unique_key: &str
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut unique_map: HashMap<String, serde_json::Value> = HashMap::new();
+
+    for file_path in file_paths {
+        let content = fs::read_to_string(file_path)?;
+        let json_value: serde_json::Value = serde_json::from_str(&content)?;
+        
+        let items = match json_value {
+            serde_json::Value::Array(arr) => arr,
+            _ => vec![json_value],
+        };
+
+        for item in items {
+            if let Some(obj) = item.as_object() {
+                if let Some(key_value) = obj.get(unique_key) {
+                    if let Some(key_str) = key_value.as_str() {
+                        unique_map.insert(key_str.to_string(), item);
+                    }
+                }
+            }
+        }
+    }
+
+    let deduplicated: Vec<_> = unique_map.into_values().collect();
+    let output_json = serde_json::to_string_pretty(&deduplicated)?;
+    fs::write(output_path, output_json)?;
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_basic_merge() {
+        let file1 = NamedTempFile::new().unwrap();
+        let file2 = NamedTempFile::new().unwrap();
+        let output = NamedTempFile::new().unwrap();
+
+        fs::write(file1.path(), r#"[{"id": 1}, {"id": 2}]"#).unwrap();
+        fs::write(file2.path(), r#"[{"id": 3}, {"id": 4}]"#).unwrap();
+
+        merge_json_files(
+            &[file1.path().to_str().unwrap(), file2.path().to_str().unwrap()],
+            output.path().to_str().unwrap()
+        ).unwrap();
+
+        let content = fs::read_to_string(output.path()).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert!(parsed.is_array());
+        assert_eq!(parsed.as_array().unwrap().len(), 4);
+    }
+
+    #[test]
+    fn test_deduplication() {
+        let file1 = NamedTempFile::new().unwrap();
+        let file2 = NamedTempFile::new().unwrap();
+        let output = NamedTempFile::new().unwrap();
+
+        fs::write(file1.path(), r#"[{"id": "a", "value": 1}, {"id": "b", "value": 2}]"#).unwrap();
+        fs::write(file2.path(), r#"[{"id": "a", "value": 3}, {"id": "c", "value": 4}]"#).unwrap();
+
+        merge_json_with_deduplication(
+            &[file1.path().to_str().unwrap(), file2.path().to_str().unwrap()],
+            output.path().to_str().unwrap(),
+            "id"
+        ).unwrap();
+
+        let content = fs::read_to_string(output.path()).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+        let array = parsed.as_array().unwrap();
+        assert_eq!(array.len(), 3);
+        
+        let ids: Vec<&str> = array.iter()
+            .filter_map(|item| item.get("id").and_then(|id| id.as_str()))
+            .collect();
+        assert!(ids.contains(&"a"));
+        assert!(ids.contains(&"b"));
+        assert!(ids.contains(&"c"));
+    }
+}

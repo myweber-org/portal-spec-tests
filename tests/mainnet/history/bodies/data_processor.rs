@@ -172,3 +172,123 @@ mod tests {
         assert_eq!(groups.get("Group2").unwrap().len(), 1);
     }
 }
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug)]
+pub struct ProcessingError {
+    details: String,
+}
+
+impl ProcessingError {
+    fn new(msg: &str) -> ProcessingError {
+        ProcessingError {
+            details: msg.to_string(),
+        }
+    }
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.details)
+    }
+}
+
+impl Error for ProcessingError {
+    fn description(&self) -> &str {
+        &self.details
+    }
+}
+
+pub struct DataRecord {
+    pub id: u32,
+    pub value: f64,
+    pub timestamp: i64,
+}
+
+impl DataRecord {
+    pub fn new(id: u32, value: f64, timestamp: i64) -> Result<DataRecord, ProcessingError> {
+        if value < 0.0 {
+            return Err(ProcessingError::new("Value cannot be negative"));
+        }
+        if timestamp < 0 {
+            return Err(ProcessingError::new("Timestamp cannot be negative"));
+        }
+        Ok(DataRecord {
+            id,
+            value,
+            timestamp,
+        })
+    }
+}
+
+pub fn process_records(records: Vec<DataRecord>) -> Vec<f64> {
+    records
+        .into_iter()
+        .filter(|r| r.value > 10.0)
+        .map(|r| r.value * 1.5)
+        .collect()
+}
+
+pub fn calculate_statistics(values: &[f64]) -> (f64, f64, f64) {
+    if values.is_empty() {
+        return (0.0, 0.0, 0.0);
+    }
+
+    let sum: f64 = values.iter().sum();
+    let count = values.len() as f64;
+    let mean = sum / count;
+
+    let variance: f64 = values
+        .iter()
+        .map(|&x| (x - mean).powi(2))
+        .sum::<f64>()
+        / count;
+
+    let std_dev = variance.sqrt();
+
+    (mean, variance, std_dev)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_record_creation() {
+        let record = DataRecord::new(1, 25.5, 1625097600).unwrap();
+        assert_eq!(record.id, 1);
+        assert_eq!(record.value, 25.5);
+        assert_eq!(record.timestamp, 1625097600);
+    }
+
+    #[test]
+    fn test_invalid_record_negative_value() {
+        let result = DataRecord::new(1, -5.0, 1625097600);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_process_records() {
+        let records = vec![
+            DataRecord::new(1, 5.0, 1000).unwrap(),
+            DataRecord::new(2, 15.0, 2000).unwrap(),
+            DataRecord::new(3, 25.0, 3000).unwrap(),
+        ];
+
+        let processed = process_records(records);
+        assert_eq!(processed.len(), 2);
+        assert_eq!(processed[0], 22.5);
+        assert_eq!(processed[1], 37.5);
+    }
+
+    #[test]
+    fn test_calculate_statistics() {
+        let values = vec![2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0];
+        let (mean, variance, std_dev) = calculate_statistics(&values);
+        
+        assert!((mean - 5.0).abs() < 0.001);
+        assert!((variance - 4.0).abs() < 0.001);
+        assert!((std_dev - 2.0).abs() < 0.001);
+    }
+}

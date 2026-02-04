@@ -62,3 +62,44 @@ mod tests {
         assert!(!validate_email("invalid-email"));
     }
 }
+use csv::{ReaderBuilder, WriterBuilder};
+use std::error::Error;
+use std::fs::File;
+use std::io;
+
+pub fn clean_csv(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
+    let file = File::open(input_path)?;
+    let mut rdr = ReaderBuilder::new().has_headers(true).from_reader(file);
+    let mut wtr = WriterBuilder::new().from_path(output_path)?;
+
+    let headers = rdr.headers()?.clone();
+    wtr.write_record(&headers)?;
+
+    for result in rdr.records() {
+        let record = result?;
+        if record.iter().all(|field| !field.trim().is_empty()) {
+            wtr.write_record(&record)?;
+        }
+    }
+
+    wtr.flush()?;
+    Ok(())
+}
+
+pub fn clean_csv_from_stdin(output_path: &str) -> Result<(), Box<dyn Error>> {
+    let mut rdr = ReaderBuilder::new().has_headers(true).from_reader(io::stdin());
+    let mut wtr = WriterBuilder::new().from_path(output_path)?;
+
+    let headers = rdr.headers()?.clone();
+    wtr.write_record(&headers)?;
+
+    for result in rdr.records() {
+        let record = result?;
+        if record.iter().all(|field| !field.trim().is_empty()) {
+            wtr.write_record(&record)?;
+        }
+    }
+
+    wtr.flush()?;
+    Ok(())
+}

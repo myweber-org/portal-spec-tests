@@ -432,4 +432,204 @@ mod tests {
         assert_eq!(processor.get_valid_records().len(), 2);
         Ok(())
     }
+}use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
+}
+
+#[derive(Debug)]
+pub enum DataError {
+    InvalidId,
+    EmptyValues,
+    ValueOutOfRange(f64),
+    MissingMetadata(String),
+}
+
+impl fmt::Display for DataError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DataError::InvalidId => write!(f, "Invalid record ID"),
+            DataError::EmptyValues => write!(f, "Record contains no values"),
+            DataError::ValueOutOfRange(val) => write!(f, "Value {} is out of acceptable range", val),
+            DataError::MissingMetadata(key) => write!(f, "Required metadata '{}' is missing", key),
+        }
+    }
+}
+
+impl Error for DataError {}
+
+pub struct DataProcessor {
+    validation_rules: HashMap<String, ValidationRule>,
+}
+
+#[derive(Clone)]
+pub struct ValidationRule {
+    pub min_value: Option<f64>,
+    pub max_value: Option<f64>,
+    pub required_metadata: Vec<String>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            validation_rules: HashMap::new(),
+        }
+    }
+
+    pub fn add_validation_rule(&mut self, key: String, rule: ValidationRule) {
+        self.validation_rules.insert(key, rule);
+    }
+
+    pub fn process_record(&self, record: &DataRecord) -> Result<DataRecord, DataError> {
+        if record.id == 0 {
+            return Err(DataError::InvalidId);
+        }
+
+        if record.values.is_empty() {
+            return Err(DataError::EmptyValues);
+        }
+
+        for &value in &record.values {
+            if value.is_nan() || value.is_infinite() {
+                return Err(DataError::ValueOutOfRange(value));
+            }
+        }
+
+        if let Some(rule) = self.validation_rules.get("default") {
+            self.validate_against_rule(record, rule)?;
+        }
+
+        let transformed_values: Vec<f64> = record.values.iter()
+            .map(|&v| v * 2.0)
+            .collect();
+
+        let mut processed_metadata = record.metadata.clone();
+        processed_metadata.insert("processed".to_string(), "true".to_string());
+        processed_metadata.insert("original_count".to_string(), record.values.len().to_string());
+
+        Ok(DataRecord {
+            id: record.id,
+            values: transformed_values,
+            metadata: processed_metadata,
+        })
+    }
+
+    fn validate_against_rule(&self, record: &DataRecord, rule: &ValidationRule) -> Result<(), DataError> {
+        for &value in &record.values {
+            if let Some(min) = rule.min_value {
+                if value < min {
+                    return Err(DataError::ValueOutOfRange(value));
+                }
+            }
+            
+            if let Some(max) = rule.max_value {
+                if value > max {
+                    return Err(DataError::ValueOutOfRange(value));
+                }
+            }
+        }
+
+        for required_key in &rule.required_metadata {
+            if !record.metadata.contains_key(required_key) {
+                return Err(DataError::MissingMetadata(required_key.clone()));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn batch_process(&self, records: Vec<DataRecord>) -> (Vec<DataRecord>, Vec<DataError>) {
+        let mut processed = Vec::new();
+        let mut errors = Vec::new();
+
+        for record in records {
+            match self.process_record(&record) {
+                Ok(processed_record) => processed.push(processed_record),
+                Err(err) => errors.push(err),
+            }
+        }
+
+        (processed, errors)
+    }
+}
+
+impl Default for DataProcessor {
+    fn default() -> Self {
+        let mut processor = DataProcessor::new();
+        let default_rule = ValidationRule {
+            min_value: Some(0.0),
+            max_value: Some(1000.0),
+            required_metadata: vec!["source".to_string()],
+        };
+        processor.add_validation_rule("default".to_string(), default_rule);
+        processor
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_record_processing() {
+        let processor = DataProcessor::default();
+        let mut metadata = HashMap::new();
+        metadata.insert("source".to_string(), "test".to_string());
+        
+        let record = DataRecord {
+            id: 1,
+            values: vec![10.0, 20.0, 30.0],
+            metadata,
+        };
+
+        let result = processor.process_record(&record);
+        assert!(result.is_ok());
+        
+        let processed = result.unwrap();
+        assert_eq!(processed.values, vec![20.0, 40.0, 60.0]);
+        assert_eq!(processed.metadata.get("processed"), Some(&"true".to_string()));
+    }
+
+    #[test]
+    fn test_invalid_id() {
+        let processor = DataProcessor::default();
+        let record = DataRecord {
+            id: 0,
+            values: vec![10.0],
+            metadata: HashMap::new(),
+        };
+
+        let result = processor.process_record(&record);
+        assert!(matches!(result, Err(DataError::InvalidId)));
+    }
+
+    #[test]
+    fn test_batch_processing() {
+        let processor = DataProcessor::default();
+        let mut metadata = HashMap::new();
+        metadata.insert("source".to_string(), "batch".to_string());
+
+        let records = vec![
+            DataRecord {
+                id: 1,
+                values: vec![10.0],
+                metadata: metadata.clone(),
+            },
+            DataRecord {
+                id: 0,
+                values: vec![20.0],
+                metadata: metadata.clone(),
+            },
+        ];
+
+        let (processed, errors) = processor.batch_process(records);
+        assert_eq!(processed.len(), 1);
+        assert_eq!(errors.len(), 1);
+    }
 }

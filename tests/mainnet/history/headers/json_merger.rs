@@ -242,4 +242,54 @@ mod tests {
         assert_eq!(parsed["city"], "London");
         assert_eq!(parsed["active"], true);
     }
+}use serde_json::{Value, from_reader, to_writer_pretty};
+use std::fs::{File, read_dir};
+use std::io::{self, BufReader};
+use std::path::Path;
+
+pub fn merge_json_files<P: AsRef<Path>>(dir_path: P) -> io::Result<Value> {
+    let mut merged_array = Vec::new();
+
+    for entry in read_dir(dir_path)? {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path.extension().and_then(|ext| ext.to_str()) == Some("json") {
+            let file = File::open(&path)?;
+            let reader = BufReader::new(file);
+            let json_value: Value = from_reader(reader)?;
+            merged_array.push(json_value);
+        }
+    }
+
+    Ok(Value::Array(merged_array))
+}
+
+pub fn write_merged_json<P: AsRef<Path>>(output_path: P, json_value: &Value) -> io::Result<()> {
+    let output_file = File::create(output_path)?;
+    to_writer_pretty(output_file, json_value)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::fs::write;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_merge_json_files() {
+        let dir = tempdir().unwrap();
+        let file1_path = dir.path().join("data1.json");
+        let file2_path = dir.path().join("data2.json");
+
+        write(&file1_path, r#"{"id": 1, "name": "Alice"}"#).unwrap();
+        write(&file2_path, r#"{"id": 2, "name": "Bob"}"#).unwrap();
+
+        let merged = merge_json_files(dir.path()).unwrap();
+        let expected = json!([{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]);
+
+        assert_eq!(merged, expected);
+    }
 }

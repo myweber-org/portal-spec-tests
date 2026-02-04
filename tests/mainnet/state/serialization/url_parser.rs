@@ -211,3 +211,159 @@ mod tests {
         assert_eq!(absolute, "https://example.com/base/subpath");
     }
 }
+use std::collections::HashMap;
+
+pub struct UrlParser;
+
+impl UrlParser {
+    pub fn parse(url: &str) -> Option<ParsedUrl> {
+        let url = url.trim();
+        if url.is_empty() {
+            return None;
+        }
+
+        let (scheme, rest) = Self::extract_scheme(url);
+        let (host, path_and_query) = Self::extract_host(rest)?;
+        let (path, query) = Self::split_path_and_query(path_and_query);
+        let query_params = Self::parse_query_string(query);
+
+        Some(ParsedUrl {
+            scheme: scheme.to_string(),
+            host: host.to_string(),
+            path: path.to_string(),
+            query_params,
+        })
+    }
+
+    fn extract_scheme(url: &str) -> (&str, &str) {
+        if let Some(pos) = url.find("://") {
+            (&url[..pos], &url[pos + 3..])
+        } else {
+            ("https", url)
+        }
+    }
+
+    fn extract_host(rest: &str) -> Option<(&str, &str)> {
+        let end = rest.find('/').unwrap_or(rest.len());
+        let host = &rest[..end];
+        if host.is_empty() {
+            return None;
+        }
+        let remaining = if end < rest.len() { &rest[end..] } else { "" };
+        Some((host, remaining))
+    }
+
+    fn split_path_and_query(path_and_query: &str) -> (&str, Option<&str>) {
+        let query_start = path_and_query.find('?');
+        match query_start {
+            Some(pos) => (&path_and_query[..pos], Some(&path_and_query[pos + 1..])),
+            None => (path_and_query, None),
+        }
+    }
+
+    fn parse_query_string(query: Option<&str>) -> HashMap<String, String> {
+        let mut params = HashMap::new();
+        if let Some(query_str) = query {
+            for pair in query_str.split('&') {
+                if let Some(equal_pos) = pair.find('=') {
+                    let key = &pair[..equal_pos];
+                    let value = &pair[equal_pos + 1..];
+                    if !key.is_empty() {
+                        params.insert(key.to_string(), value.to_string());
+                    }
+                }
+            }
+        }
+        params
+    }
+}
+
+pub struct ParsedUrl {
+    pub scheme: String,
+    pub host: String,
+    pub path: String,
+    pub query_params: HashMap<String, String>,
+}
+
+impl ParsedUrl {
+    pub fn domain(&self) -> Option<&str> {
+        let parts: Vec<&str> = self.host.split('.').collect();
+        if parts.len() >= 2 {
+            Some(parts[parts.len() - 2])
+        } else {
+            None
+        }
+    }
+
+    pub fn tld(&self) -> Option<&str> {
+        self.host.split('.').last()
+    }
+
+    pub fn has_query_param(&self, key: &str) -> bool {
+        self.query_params.contains_key(key)
+    }
+
+    pub fn get_query_param(&self, key: &str) -> Option<&String> {
+        self.query_params.get(key)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_full_url() {
+        let url = "https://example.com/path/to/resource?param1=value1&param2=value2";
+        let parsed = UrlParser::parse(url).unwrap();
+        
+        assert_eq!(parsed.scheme, "https");
+        assert_eq!(parsed.host, "example.com");
+        assert_eq!(parsed.path, "/path/to/resource");
+        assert_eq!(parsed.query_params.len(), 2);
+        assert_eq!(parsed.get_query_param("param1"), Some(&"value1".to_string()));
+        assert_eq!(parsed.get_query_param("param2"), Some(&"value2".to_string()));
+    }
+
+    #[test]
+    fn test_parse_url_without_scheme() {
+        let url = "example.com/api";
+        let parsed = UrlParser::parse(url).unwrap();
+        
+        assert_eq!(parsed.scheme, "https");
+        assert_eq!(parsed.host, "example.com");
+        assert_eq!(parsed.path, "/api");
+        assert!(parsed.query_params.is_empty());
+    }
+
+    #[test]
+    fn test_parse_url_without_path() {
+        let url = "https://subdomain.example.co.uk";
+        let parsed = UrlParser::parse(url).unwrap();
+        
+        assert_eq!(parsed.scheme, "https");
+        assert_eq!(parsed.host, "subdomain.example.co.uk");
+        assert_eq!(parsed.path, "");
+        assert!(parsed.query_params.is_empty());
+    }
+
+    #[test]
+    fn test_domain_extraction() {
+        let parsed = UrlParser::parse("https://www.google.com/search").unwrap();
+        assert_eq!(parsed.domain(), Some("google"));
+        assert_eq!(parsed.tld(), Some("com"));
+    }
+
+    #[test]
+    fn test_empty_url() {
+        assert!(UrlParser::parse("").is_none());
+        assert!(UrlParser::parse("   ").is_none());
+    }
+
+    #[test]
+    fn test_url_with_only_host() {
+        let parsed = UrlParser::parse("localhost:8080").unwrap();
+        assert_eq!(parsed.host, "localhost:8080");
+        assert_eq!(parsed.path, "");
+    }
+}

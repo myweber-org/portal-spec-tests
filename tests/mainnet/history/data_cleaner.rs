@@ -74,4 +74,86 @@ mod tests {
         assert_eq!(result[0], vec![1, 2]);
         assert_eq!(result[1], vec![5, 6]);
     }
+}use std::io::{self, BufRead};
+
+pub struct DataCleaner {
+    threshold: f64,
+}
+
+impl DataCleaner {
+    pub fn new(threshold: f64) -> Self {
+        DataCleaner { threshold }
+    }
+
+    pub fn filter_outliers(&self, data: &[f64]) -> Vec<f64> {
+        let mean = data.iter().sum::<f64>() / data.len() as f64;
+        let variance = data.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / data.len() as f64;
+        let std_dev = variance.sqrt();
+
+        data.iter()
+            .filter(|&&value| (value - mean).abs() <= self.threshold * std_dev)
+            .cloned()
+            .collect()
+    }
+
+    pub fn normalize(&self, data: &[f64]) -> Vec<f64> {
+        let min = data.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+        let max = data.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+        let range = max - min;
+
+        if range == 0.0 {
+            return vec![0.0; data.len()];
+        }
+
+        data.iter()
+            .map(|&value| (value - min) / range)
+            .collect()
+    }
+}
+
+fn main() {
+    let cleaner = DataCleaner::new(2.0);
+    let stdin = io::stdin();
+    
+    println!("Enter numeric values separated by spaces:");
+    let mut input = String::new();
+    stdin.lock().read_line(&mut input).expect("Failed to read line");
+
+    let raw_data: Vec<f64> = input
+        .split_whitespace()
+        .filter_map(|s| s.parse().ok())
+        .collect();
+
+    if raw_data.is_empty() {
+        eprintln!("No valid numeric data provided");
+        return;
+    }
+
+    let filtered = cleaner.filter_outliers(&raw_data);
+    let normalized = cleaner.normalize(&filtered);
+
+    println!("Original data: {:?}", raw_data);
+    println!("Filtered data: {:?}", filtered);
+    println!("Normalized data: {:?}", normalized);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_filter_outliers() {
+        let cleaner = DataCleaner::new(2.0);
+        let data = vec![1.0, 2.0, 3.0, 100.0];
+        let filtered = cleaner.filter_outliers(&data);
+        assert_eq!(filtered, vec![1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn test_normalize() {
+        let cleaner = DataCleaner::new(2.0);
+        let data = vec![10.0, 20.0, 30.0];
+        let normalized = cleaner.normalize(&data);
+        assert_eq!(normalized, vec![0.0, 0.5, 1.0]);
+    }
 }

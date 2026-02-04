@@ -1,65 +1,45 @@
-use csv::{ReaderBuilder, WriterBuilder};
-use std::error::Error;
-use std::fs::File;
 
-pub fn clean_csv(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
-    let input_file = File::open(input_path)?;
-    let mut rdr = ReaderBuilder::new()
-        .has_headers(true)
-        .from_reader(input_file);
-
-    let output_file = File::create(output_path)?;
-    let mut wtr = WriterBuilder::new()
-        .has_headers(true)
-        .from_writer(output_file);
-
-    let headers = rdr.headers()?.clone();
-    wtr.write_record(&headers)?;
-
-    for result in rdr.records() {
-        let record = result?;
-        let cleaned_record: Vec<String> = record
-            .iter()
-            .map(|field| field.trim().to_lowercase())
-            .collect();
-        wtr.write_record(&cleaned_record)?;
-    }
-
-    wtr.flush()?;
-    Ok(())
-}
 use std::collections::HashSet;
-use std::io::{self, BufRead, Write};
 
-pub struct DataCleaner;
+pub struct DataCleaner {
+    unique_items: HashSet<String>,
+}
 
 impl DataCleaner {
-    pub fn clean_lines(input: &str) -> Vec<String> {
-        let lines: Vec<String> = input.lines().map(|s| s.trim().to_string()).collect();
-        let unique_lines: HashSet<String> = lines.into_iter().collect();
-        let mut sorted_lines: Vec<String> = unique_lines.into_iter().collect();
-        sorted_lines.sort();
-        sorted_lines
+    pub fn new() -> Self {
+        DataCleaner {
+            unique_items: HashSet::new(),
+        }
     }
 
-    pub fn process_stdin() -> io::Result<()> {
-        let stdin = io::stdin();
-        let mut buffer = String::new();
+    pub fn process_string(&mut self, input: &str) -> Option<String> {
+        let normalized = input.trim().to_lowercase();
         
-        for line in stdin.lock().lines() {
-            buffer.push_str(&line?);
-            buffer.push('\n');
+        if normalized.is_empty() {
+            return None;
         }
-        
-        let cleaned = Self::clean_lines(&buffer);
-        let stdout = io::stdout();
-        let mut handle = stdout.lock();
-        
-        for line in cleaned {
-            writeln!(handle, "{}", line)?;
+
+        if self.unique_items.contains(&normalized) {
+            return None;
         }
-        
-        Ok(())
+
+        self.unique_items.insert(normalized.clone());
+        Some(normalized)
+    }
+
+    pub fn process_batch(&mut self, inputs: &[&str]) -> Vec<String> {
+        inputs
+            .iter()
+            .filter_map(|&input| self.process_string(input))
+            .collect()
+    }
+
+    pub fn get_unique_count(&self) -> usize {
+        self.unique_items.len()
+    }
+
+    pub fn clear(&mut self) {
+        self.unique_items.clear();
     }
 }
 
@@ -68,64 +48,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_clean_lines() {
-        let input = "zebra\nalpha\nalpha\nbeta\nzebra";
-        let result = DataCleaner::clean_lines(input);
-        assert_eq!(result, vec!["alpha", "beta", "zebra"]);
+    fn test_basic_cleaning() {
+        let mut cleaner = DataCleaner::new();
+        
+        assert_eq!(cleaner.process_string("  HELLO  "), Some("hello".to_string()));
+        assert_eq!(cleaner.process_string("hello"), None);
+        assert_eq!(cleaner.process_string(""), None);
+        assert_eq!(cleaner.process_string("   "), None);
     }
 
     #[test]
-    fn test_empty_input() {
-        let input = "";
-        let result = DataCleaner::clean_lines(input);
-        assert!(result.is_empty());
-    }
-}use csv::{ReaderBuilder, WriterBuilder};
-use std::error::Error;
-use std::fs::File;
-
-pub fn clean_csv(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
-    let file = File::open(input_path)?;
-    let mut rdr = ReaderBuilder::new().has_headers(true).from_reader(file);
-    let mut wtr = WriterBuilder::new().from_writer(File::create(output_path)?);
-
-    if let Some(headers) = rdr.headers().ok() {
-        wtr.write_record(headers)?;
-    }
-
-    for result in rdr.records() {
-        let record = result?;
-        if record.iter().all(|field| !field.trim().is_empty()) {
-            wtr.write_record(&record)?;
-        }
-    }
-
-    wtr.flush()?;
-    Ok(())
-}use std::collections::HashSet;
-
-pub fn clean_and_sort_data<T: Ord + Clone>(data: &[T]) -> Vec<T> {
-    let unique_set: HashSet<_> = data.iter().cloned().collect();
-    let mut unique_vec: Vec<T> = unique_set.into_iter().collect();
-    unique_vec.sort();
-    unique_vec
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_clean_and_sort() {
-        let input = vec![5, 2, 8, 2, 5, 1];
-        let result = clean_and_sort_data(&input);
-        assert_eq!(result, vec![1, 2, 5, 8]);
-    }
-
-    #[test]
-    fn test_empty_input() {
-        let input: Vec<i32> = vec![];
-        let result = clean_and_sort_data(&input);
-        assert!(result.is_empty());
+    fn test_batch_processing() {
+        let mut cleaner = DataCleaner::new();
+        let inputs = vec!["Apple", "apple", "BANANA", "  banana  ", "Cherry"];
+        
+        let result = cleaner.process_batch(&inputs);
+        assert_eq!(result, vec!["apple", "banana", "cherry"]);
+        assert_eq!(cleaner.get_unique_count(), 3);
     }
 }

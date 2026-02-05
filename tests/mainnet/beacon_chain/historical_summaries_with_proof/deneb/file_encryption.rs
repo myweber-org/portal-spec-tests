@@ -282,4 +282,77 @@ pub fn decrypt_file(input_path: &str, key_path: &str, output_path: &str) -> Resu
     
     fs::write(output_path, decrypted_data)?;
     Ok(())
+}use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce,
+};
+use std::error::Error;
+
+const NONCE_SIZE: usize = 12;
+
+pub fn encrypt_data(plaintext: &[u8], key: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+    let key = Key::<Aes256Gcm>::from_slice(key);
+    let cipher = Aes256Gcm::new(key);
+    let nonce = Nonce::from_slice(&generate_nonce());
+    
+    let ciphertext = cipher.encrypt(nonce, plaintext)
+        .map_err(|e| format!("Encryption failed: {}", e))?;
+    
+    let mut result = nonce.to_vec();
+    result.extend_from_slice(&ciphertext);
+    Ok(result)
+}
+
+pub fn decrypt_data(ciphertext: &[u8], key: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+    if ciphertext.len() < NONCE_SIZE {
+        return Err("Ciphertext too short".into());
+    }
+    
+    let key = Key::<Aes256Gcm>::from_slice(key);
+    let cipher = Aes256Gcm::new(key);
+    let (nonce_bytes, encrypted_data) = ciphertext.split_at(NONCE_SIZE);
+    let nonce = Nonce::from_slice(nonce_bytes);
+    
+    cipher.decrypt(nonce, encrypted_data)
+        .map_err(|e| format!("Decryption failed: {}", e).into())
+}
+
+fn generate_nonce() -> [u8; NONCE_SIZE] {
+    let mut nonce = [0u8; NONCE_SIZE];
+    OsRng.fill_bytes(&mut nonce);
+    nonce
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hex::encode;
+
+    #[test]
+    fn test_encryption_roundtrip() {
+        let key = [0x42; 32];
+        let plaintext = b"Secret message for encryption";
+        
+        let encrypted = encrypt_data(plaintext, &key).unwrap();
+        let decrypted = decrypt_data(&encrypted, &key).unwrap();
+        
+        assert_eq!(plaintext.to_vec(), decrypted);
+        assert_ne!(plaintext, &encrypted[..]);
+    }
+    
+    #[test]
+    fn test_different_nonces() {
+        let key = [0x33; 32];
+        let plaintext = b"Same plaintext";
+        
+        let enc1 = encrypt_data(plaintext, &key).unwrap();
+        let enc2 = encrypt_data(plaintext, &key).unwrap();
+        
+        assert_ne!(enc1, enc2);
+        
+        let dec1 = decrypt_data(&enc1, &key).unwrap();
+        let dec2 = decrypt_data(&enc2, &key).unwrap();
+        
+        assert_eq!(dec1, dec2);
+    }
 }

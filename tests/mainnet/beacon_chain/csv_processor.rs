@@ -151,3 +151,117 @@ mod tests {
         assert_eq!(std_dev, 8.16496580927726);
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader, Write};
+
+pub struct CsvProcessor {
+    input_path: String,
+    output_path: String,
+    filter_column: Option<usize>,
+    filter_value: Option<String>,
+}
+
+impl CsvProcessor {
+    pub fn new(input_path: &str, output_path: &str) -> Self {
+        CsvProcessor {
+            input_path: input_path.to_string(),
+            output_path: output_path.to_string(),
+            filter_column: None,
+            filter_value: None,
+        }
+    }
+
+    pub fn set_filter(&mut self, column: usize, value: &str) -> &mut Self {
+        self.filter_column = Some(column);
+        self.filter_value = Some(value.to_string());
+        self
+    }
+
+    pub fn process(&self) -> Result<usize, Box<dyn Error>> {
+        let input_file = File::open(&self.input_path)?;
+        let reader = BufReader::new(input_file);
+        let mut output_file = File::create(&self.output_path)?;
+        let mut processed_count = 0;
+
+        for (line_num, line_result) in reader.lines().enumerate() {
+            let line = line_result?;
+            let fields: Vec<&str> = line.split(',').collect();
+
+            if line_num == 0 {
+                writeln!(output_file, "{}", line)?;
+                continue;
+            }
+
+            let should_include = match (self.filter_column, &self.filter_value) {
+                (Some(col), Some(val)) if col < fields.len() => fields[col] == val,
+                _ => true,
+            };
+
+            if should_include {
+                let transformed_line = self.transform_line(&fields);
+                writeln!(output_file, "{}", transformed_line)?;
+                processed_count += 1;
+            }
+        }
+
+        Ok(processed_count)
+    }
+
+    fn transform_line(&self, fields: &[&str]) -> String {
+        fields
+            .iter()
+            .map(|field| field.trim().to_uppercase())
+            .collect::<Vec<String>>()
+            .join(",")
+    }
+}
+
+pub fn validate_csv_format(content: &str) -> bool {
+    let lines: Vec<&str> = content.lines().collect();
+    if lines.is_empty() {
+        return false;
+    }
+
+    let column_count = lines[0].split(',').count();
+    lines.iter().all(|line| line.split(',').count() == column_count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn test_csv_processing() {
+        let test_input = "name,age,city\njohn,25,nyc\njane,30,london\njack,25,paris";
+        let input_path = "test_input.csv";
+        let output_path = "test_output.csv";
+
+        fs::write(input_path, test_input).unwrap();
+
+        let mut processor = CsvProcessor::new(input_path, output_path);
+        processor.set_filter(1, "25");
+        let result = processor.process();
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 2);
+
+        let output_content = fs::read_to_string(output_path).unwrap();
+        assert!(output_content.contains("JOHN,25,NYC"));
+        assert!(output_content.contains("JACK,25,PARIS"));
+        assert!(!output_content.contains("JANE"));
+
+        fs::remove_file(input_path).unwrap();
+        fs::remove_file(output_path).unwrap();
+    }
+
+    #[test]
+    fn test_csv_validation() {
+        let valid_csv = "a,b,c\n1,2,3\n4,5,6";
+        let invalid_csv = "a,b,c\n1,2\n3,4,5";
+
+        assert!(validate_csv_format(valid_csv));
+        assert!(!validate_csv_format(invalid_csv));
+    }
+}

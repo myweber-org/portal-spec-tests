@@ -494,3 +494,170 @@ mod tests {
         assert_eq!(new_processor.records[0].name, "Test");
     }
 }
+use std::collections::HashMap;
+
+pub struct DataProcessor {
+    cache: HashMap<String, Vec<f64>>,
+    validation_rules: Vec<ValidationRule>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ValidationRule {
+    pub field_name: String,
+    pub min_value: f64,
+    pub max_value: f64,
+    pub required: bool,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            cache: HashMap::new(),
+            validation_rules: Vec::new(),
+        }
+    }
+
+    pub fn add_validation_rule(&mut self, rule: ValidationRule) {
+        self.validation_rules.push(rule);
+    }
+
+    pub fn process_data(&mut self, dataset: &[HashMap<String, f64>]) -> Result<Vec<HashMap<String, f64>>, String> {
+        let mut processed = Vec::new();
+
+        for (index, record) in dataset.iter().enumerate() {
+            match self.validate_record(record) {
+                Ok(validated_record) => {
+                    let transformed = self.transform_record(&validated_record);
+                    self.cache_record(index, &transformed);
+                    processed.push(transformed);
+                }
+                Err(e) => return Err(format!("Validation failed at record {}: {}", index, e)),
+            }
+        }
+
+        Ok(processed)
+    }
+
+    fn validate_record(&self, record: &HashMap<String, f64>) -> Result<HashMap<String, f64>, String> {
+        for rule in &self.validation_rules {
+            match record.get(&rule.field_name) {
+                Some(&value) => {
+                    if value < rule.min_value || value > rule.max_value {
+                        return Err(format!(
+                            "Field '{}' value {} is outside allowed range [{}, {}]",
+                            rule.field_name, value, rule.min_value, rule.max_value
+                        ));
+                    }
+                }
+                None => {
+                    if rule.required {
+                        return Err(format!("Required field '{}' is missing", rule.field_name));
+                    }
+                }
+            }
+        }
+        Ok(record.clone())
+    }
+
+    fn transform_record(&self, record: &HashMap<String, f64>) -> HashMap<String, f64> {
+        let mut transformed = record.clone();
+        
+        for (key, value) in transformed.iter_mut() {
+            if key.starts_with("normalized_") {
+                *value = (*value * 100.0).round() / 100.0;
+            }
+        }
+
+        transformed
+    }
+
+    fn cache_record(&mut self, index: usize, record: &HashMap<String, f64>) {
+        let cache_key = format!("record_{}", index);
+        let values: Vec<f64> = record.values().copied().collect();
+        self.cache.insert(cache_key, values);
+    }
+
+    pub fn get_cached_data(&self, index: usize) -> Option<&Vec<f64>> {
+        let key = format!("record_{}", index);
+        self.cache.get(&key)
+    }
+
+    pub fn calculate_statistics(&self, field_name: &str, dataset: &[HashMap<String, f64>]) -> Option<Statistics> {
+        let values: Vec<f64> = dataset
+            .iter()
+            .filter_map(|record| record.get(field_name).copied())
+            .collect();
+
+        if values.is_empty() {
+            return None;
+        }
+
+        let mean = values.iter().sum::<f64>() / values.len() as f64;
+        let variance = values.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / values.len() as f64;
+        let std_dev = variance.sqrt();
+
+        Some(Statistics {
+            mean,
+            variance,
+            std_dev,
+            count: values.len(),
+            min: *values.iter().min_by(|a, b| a.partial_cmp(b).unwrap()).unwrap(),
+            max: *values.iter().max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap(),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Statistics {
+    pub mean: f64,
+    pub variance: f64,
+    pub std_dev: f64,
+    pub count: usize,
+    pub min: f64,
+    pub max: f64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_data_processing() {
+        let mut processor = DataProcessor::new();
+        
+        processor.add_validation_rule(ValidationRule {
+            field_name: "temperature".to_string(),
+            min_value: -50.0,
+            max_value: 100.0,
+            required: true,
+        });
+
+        let test_data = vec![
+            [("temperature".to_string(), 25.5)].iter().cloned().collect(),
+            [("temperature".to_string(), 30.0)].iter().cloned().collect(),
+        ];
+
+        let result = processor.process_data(&test_data);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_validation_failure() {
+        let mut processor = DataProcessor::new();
+        
+        processor.add_validation_rule(ValidationRule {
+            field_name: "pressure".to_string(),
+            min_value: 0.0,
+            max_value: 10.0,
+            required: true,
+        });
+
+        let invalid_data = vec![
+            [("pressure".to_string(), 15.0)].iter().cloned().collect(),
+        ];
+
+        let result = processor.process_data(&invalid_data);
+        assert!(result.is_err());
+    }
+}

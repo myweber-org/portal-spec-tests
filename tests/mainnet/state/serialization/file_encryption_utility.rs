@@ -217,4 +217,149 @@ mod tests {
         
         assert!(result.is_err());
     }
+}use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce,
+};
+use std::fs;
+use std::io::{self, Read, Write};
+use std::path::Path;
+
+const NONCE_SIZE: usize = 12;
+
+pub struct EncryptionResult {
+    pub ciphertext: Vec<u8>,
+    pub nonce: [u8; NONCE_SIZE],
+}
+
+pub fn encrypt_data(key: &[u8], plaintext: &[u8]) -> Result<EncryptionResult, String> {
+    if key.len() != 32 {
+        return Err("Key must be 32 bytes for AES-256".to_string());
+    }
+
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+    let mut nonce_bytes = [0u8; NONCE_SIZE];
+    OsRng.fill_bytes(&mut nonce_bytes);
+    let nonce = Nonce::from_slice(&nonce_bytes);
+
+    cipher
+        .encrypt(nonce, plaintext)
+        .map(|ciphertext| EncryptionResult {
+            ciphertext,
+            nonce: nonce_bytes,
+        })
+        .map_err(|e| format!("Encryption failed: {}", e))
+}
+
+pub fn decrypt_data(key: &[u8], ciphertext: &[u8], nonce: &[u8]) -> Result<Vec<u8>, String> {
+    if key.len() != 32 {
+        return Err("Key must be 32 bytes for AES-256".to_string());
+    }
+    if nonce.len() != NONCE_SIZE {
+        return Err(format!("Nonce must be {} bytes", NONCE_SIZE));
+    }
+
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+    let nonce = Nonce::from_slice(nonce);
+
+    cipher
+        .decrypt(nonce, ciphertext)
+        .map_err(|e| format!("Decryption failed: {}", e))
+}
+
+pub fn encrypt_file(key: &[u8], input_path: &Path, output_path: &Path) -> Result<(), String> {
+    let mut file = fs::File::open(input_path).map_err(|e| format!("Failed to open input file: {}", e))?;
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer)
+        .map_err(|e| format!("Failed to read input file: {}", e))?;
+
+    let result = encrypt_data(key, &buffer)?;
+
+    let mut output_file = fs::File::create(output_path)
+        .map_err(|e| format!("Failed to create output file: {}", e))?;
+
+    output_file
+        .write_all(&result.nonce)
+        .map_err(|e| format!("Failed to write nonce: {}", e))?;
+    output_file
+        .write_all(&result.ciphertext)
+        .map_err(|e| format!("Failed to write ciphertext: {}", e))?;
+
+    Ok(())
+}
+
+pub fn decrypt_file(key: &[u8], input_path: &Path, output_path: &Path) -> Result<(), String> {
+    let mut file = fs::File::open(input_path).map_err(|e| format!("Failed to open input file: {}", e))?;
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer)
+        .map_err(|e| format!("Failed to read input file: {}", e))?;
+
+    if buffer.len() < NONCE_SIZE {
+        return Err("File too short to contain nonce".to_string());
+    }
+
+    let (nonce_slice, ciphertext) = buffer.split_at(NONCE_SIZE);
+    let mut nonce = [0u8; NONCE_SIZE];
+    nonce.copy_from_slice(nonce_slice);
+
+    let plaintext = decrypt_data(key, ciphertext, &nonce)?;
+
+    let mut output_file = fs::File::create(output_path)
+        .map_err(|e| format!("Failed to create output file: {}", e))?;
+    output_file
+        .write_all(&plaintext)
+        .map_err(|e| format!("Failed to write plaintext: {}", e))?;
+
+    Ok(())
+}
+
+pub fn generate_random_key() -> [u8; 32] {
+    let mut key = [0u8; 32];
+    OsRng.fill_bytes(&mut key);
+    key
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_encryption_decryption() {
+        let key = generate_random_key();
+        let plaintext = b"Secret message for encryption test";
+
+        let encrypted = encrypt_data(&key, plaintext).unwrap();
+        let decrypted = decrypt_data(&key, &encrypted.ciphertext, &encrypted.nonce).unwrap();
+
+        assert_eq!(plaintext.to_vec(), decrypted);
+    }
+
+    #[test]
+    fn test_file_operations() {
+        let key = generate_random_key();
+        let test_data = b"Test file content for encryption/decryption";
+
+        let input_file = NamedTempFile::new().unwrap();
+        let encrypted_file = NamedTempFile::new().unwrap();
+        let decrypted_file = NamedTempFile::new().unwrap();
+
+        fs::write(input_file.path(), test_data).unwrap();
+
+        encrypt_file(&key, input_file.path(), encrypted_file.path()).unwrap();
+        decrypt_file(&key, encrypted_file.path(), decrypted_file.path()).unwrap();
+
+        let decrypted_content = fs::read(decrypted_file.path()).unwrap();
+        assert_eq!(test_data.to_vec(), decrypted_content);
+    }
+
+    #[test]
+    fn test_invalid_key_size() {
+        let short_key = [0u8; 16];
+        let plaintext = b"Test";
+
+        let result = encrypt_data(&short_key, plaintext);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Key must be 32 bytes"));
+    }
 }

@@ -135,4 +135,50 @@ mod tests {
         assert_eq!(stats.get("mean").unwrap(), &2.5);
         assert_eq!(stats.get("total_records").unwrap(), &2.0);
     }
+}use csv::Reader;
+use serde::Deserialize;
+use std::error::Error;
+
+#[derive(Debug, Deserialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    category: String,
+}
+
+pub fn process_data(file_path: &str) -> Result<Vec<Record>, Box<dyn Error>> {
+    let mut reader = Reader::from_path(file_path)?;
+    let mut records = Vec::new();
+
+    for result in reader.deserialize() {
+        let record: Record = result?;
+        
+        if record.value < 0.0 {
+            return Err("Negative value found in data".into());
+        }
+        
+        if !is_valid_category(&record.category) {
+            return Err(format!("Invalid category: {}", record.category).into());
+        }
+        
+        records.push(record);
+    }
+
+    Ok(records)
+}
+
+fn is_valid_category(category: &str) -> bool {
+    let valid_categories = ["A", "B", "C", "D"];
+    valid_categories.contains(&category)
+}
+
+pub fn calculate_total(records: &[Record]) -> f64 {
+    records.iter().map(|r| r.value).sum()
+}
+
+pub fn filter_by_category(records: Vec<Record>, category: &str) -> Vec<Record> {
+    records.into_iter()
+        .filter(|r| r.category == category)
+        .collect()
 }

@@ -395,4 +395,112 @@ mod tests {
         assert_eq!(config.get("NORMAL"), Some(&"plain_value".to_string()));
         assert_eq!(config.get("MISSING_ENV"), Some(&"${NONEXISTENT}".to_string()));
     }
+}use std::collections::HashMap;
+use std::env;
+use std::fs;
+
+#[derive(Debug, Clone)]
+pub struct Config {
+    pub database_url: String,
+    pub port: u16,
+    pub debug_mode: bool,
+    pub api_keys: Vec<String>,
+}
+
+impl Config {
+    pub fn from_file(path: &str) -> Result<Self, String> {
+        let content = fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read config file: {}", e))?;
+
+        let mut config_map = HashMap::new();
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+
+            let parts: Vec<&str> = trimmed.splitn(2, '=').collect();
+            if parts.len() == 2 {
+                config_map.insert(parts[0].trim().to_string(), parts[1].trim().to_string());
+            }
+        }
+
+        Self::from_map(&config_map)
+    }
+
+    pub fn from_env() -> Result<Self, String> {
+        let mut config_map = HashMap::new();
+        for (key, value) in env::vars() {
+            if key.starts_with("APP_") {
+                config_map.insert(key.trim_start_matches("APP_").to_string(), value);
+            }
+        }
+
+        Self::from_map(&config_map)
+    }
+
+    fn from_map(map: &HashMap<String, String>) -> Result<Self, String> {
+        let database_url = map
+            .get("DATABASE_URL")
+            .ok_or("DATABASE_URL not found")?
+            .to_string();
+
+        let port_str = map.get("PORT").unwrap_or(&"8080".to_string());
+        let port = port_str
+            .parse::<u16>()
+            .map_err(|_| format!("Invalid PORT value: {}", port_str))?;
+
+        let debug_mode = map
+            .get("DEBUG")
+            .map(|s| s.to_lowercase() == "true")
+            .unwrap_or(false);
+
+        let api_keys = map
+            .get("API_KEYS")
+            .map(|s| s.split(',').map(|k| k.trim().to_string()).collect())
+            .unwrap_or_else(Vec::new);
+
+        Ok(Config {
+            database_url,
+            port,
+            debug_mode,
+            api_keys,
+        })
+    }
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.database_url.is_empty() {
+            errors.push("DATABASE_URL cannot be empty".to_string());
+        }
+
+        if self.port == 0 {
+            errors.push("PORT must be greater than 0".to_string());
+        }
+
+        if self.api_keys.is_empty() {
+            errors.push("At least one API_KEY must be provided".to_string());
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+pub fn load_config() -> Result<Config, String> {
+    let config = if let Ok(config) = Config::from_file("config/app.conf") {
+        config
+    } else {
+        Config::from_env()?
+    };
+
+    config.validate().map_err(|errors| {
+        errors.join("; ")
+    })?;
+
+    Ok(config)
 }

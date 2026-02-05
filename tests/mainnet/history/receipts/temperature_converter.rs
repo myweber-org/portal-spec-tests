@@ -118,3 +118,28 @@ mod tests {
         assert_eq!(fahrenheit_to_celsius(-40.0), -40.0);
     }
 }
+use std::io;
+
+fn celsius_to_fahrenheit(celsius: f64) -> f64 {
+    (celsius * 9.0 / 5.0) + 32.0
+}
+
+fn main() {
+    println!("Enter temperature in Celsius:");
+
+    let mut input = String::new();
+    io::stdin()
+        .read_line(&mut input)
+        .expect("Failed to read line");
+
+    let celsius: f64 = match input.trim().parse() {
+        Ok(num) => num,
+        Err(_) => {
+            println!("Please enter a valid number");
+            return;
+        }
+    };
+
+    let fahrenheit = celsius_to_fahrenheit(celsius);
+    println!("{:.2}°C is equal to {:.2}°F", celsius, fahrenheit);
+}

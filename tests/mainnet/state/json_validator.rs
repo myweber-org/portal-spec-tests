@@ -173,4 +173,104 @@ mod tests {
         assert!(validate_json_schema(valid_data, &schema).unwrap());
         assert!(!validate_json_schema(invalid_data, &schema).unwrap());
     }
+}use serde_json::{Value, Map};
+use std::collections::HashSet;
+
+pub struct JsonValidator {
+    required_fields: HashSet<String>,
+    allowed_types: Map<String, String>,
+}
+
+impl JsonValidator {
+    pub fn new() -> Self {
+        JsonValidator {
+            required_fields: HashSet::new(),
+            allowed_types: Map::new(),
+        }
+    }
+
+    pub fn add_required_field(&mut self, field: &str) {
+        self.required_fields.insert(field.to_string());
+    }
+
+    pub fn define_field_type(&mut self, field: &str, type_name: &str) {
+        self.allowed_types.insert(field.to_string(), type_name.to_string());
+    }
+
+    pub fn validate(&self, json_data: &Value) -> Result<(), String> {
+        if !json_data.is_object() {
+            return Err("Input must be a JSON object".to_string());
+        }
+
+        let obj = json_data.as_object().unwrap();
+
+        for field in &self.required_fields {
+            if !obj.contains_key(field) {
+                return Err(format!("Missing required field: {}", field));
+            }
+        }
+
+        for (field, value) in obj {
+            if let Some(expected_type) = self.allowed_types.get(field) {
+                if !self.check_type(value, expected_type) {
+                    return Err(format!("Field '{}' must be of type {}", field, expected_type));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn check_type(&self, value: &Value, expected_type: &str) -> bool {
+        match expected_type {
+            "string" => value.is_string(),
+            "number" => value.is_number(),
+            "boolean" => value.is_boolean(),
+            "array" => value.is_array(),
+            "object" => value.is_object(),
+            "null" => value.is_null(),
+            _ => false,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_basic_validation() {
+        let mut validator = JsonValidator::new();
+        validator.add_required_field("name");
+        validator.define_field_type("name", "string");
+        validator.define_field_type("age", "number");
+
+        let valid_data = json!({
+            "name": "John",
+            "age": 30
+        });
+
+        let invalid_data = json!({
+            "name": 123,
+            "age": "thirty"
+        });
+
+        assert!(validator.validate(&valid_data).is_ok());
+        assert!(validator.validate(&invalid_data).is_err());
+    }
+
+    #[test]
+    fn test_missing_required_field() {
+        let mut validator = JsonValidator::new();
+        validator.add_required_field("id");
+
+        let data = json!({
+            "name": "test"
+        });
+
+        let result = validator.validate(&data);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Missing required field"));
+    }
 }

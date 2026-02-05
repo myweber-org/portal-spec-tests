@@ -1020,4 +1020,100 @@ pub fn verify_password(password: &str, hash: &str) -> Result<bool, String> {
     Ok(Argon2::default()
         .verify_password(password.as_bytes(), &parsed_hash)
         .is_ok())
+}use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce,
+};
+use argon2::{
+    password_hash::{rand_core::OsRng as ArgonRng, PasswordHasher, SaltString},
+    Argon2,
+};
+use std::fs;
+use std::io::{self, Read, Write};
+
+const NONCE_SIZE: usize = 12;
+const SALT_SIZE: usize = 16;
+
+pub fn encrypt_file(
+    input_path: &str,
+    output_path: &str,
+    password: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut file = fs::File::open(input_path)?;
+    let mut plaintext = Vec::new();
+    file.read_to_end(&mut plaintext)?;
+
+    let salt = SaltString::generate(&mut ArgonRng);
+    let argon2 = Argon2::default();
+    let password_hash = argon2.hash_password(password.as_bytes(), &salt)?;
+    let key_bytes = password_hash.hash.ok_or("Hash generation failed")?;
+
+    let key = Key::<Aes256Gcm>::from_slice(key_bytes.as_bytes());
+    let cipher = Aes256Gcm::new(key);
+    let nonce = Nonce::from_slice(&[0u8; NONCE_SIZE]);
+
+    let ciphertext = cipher
+        .encrypt(nonce, plaintext.as_ref())
+        .map_err(|e| format!("Encryption failed: {}", e))?;
+
+    let mut output = fs::File::create(output_path)?;
+    output.write_all(salt.as_str().as_bytes())?;
+    output.write_all(&[b'\n'])?;
+    output.write_all(&ciphertext)?;
+
+    Ok(())
+}
+
+pub fn decrypt_file(
+    input_path: &str,
+    output_path: &str,
+    password: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut file = fs::File::open(input_path)?;
+    let mut content = Vec::new();
+    file.read_to_end(&mut content)?;
+
+    let parts: Vec<&[u8]> = content.splitn(2, |&b| b == b'\n').collect();
+    if parts.len() != 2 {
+        return Err("Invalid file format".into());
+    }
+
+    let salt_str = std::str::from_utf8(parts[0])?;
+    let salt = SaltString::new(salt_str)?;
+    let ciphertext = parts[1];
+
+    let argon2 = Argon2::default();
+    let password_hash = argon2.hash_password(password.as_bytes(), &salt)?;
+    let key_bytes = password_hash.hash.ok_or("Hash generation failed")?;
+
+    let key = Key::<Aes256Gcm>::from_slice(key_bytes.as_bytes());
+    let cipher = Aes256Gcm::new(key);
+    let nonce = Nonce::from_slice(&[0u8; NONCE_SIZE]);
+
+    let plaintext = cipher
+        .decrypt(nonce, ciphertext)
+        .map_err(|e| format!("Decryption failed: {}", e))?;
+
+    fs::write(output_path, plaintext)?;
+    Ok(())
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() != 5 {
+        eprintln!("Usage: {} <encrypt|decrypt> <input> <output> <password>", args[0]);
+        std::process::exit(1);
+    }
+
+    match args[1].as_str() {
+        "encrypt" => encrypt_file(&args[2], &args[3], &args[4])?,
+        "decrypt" => decrypt_file(&args[2], &args[3], &args[4])?,
+        _ => {
+            eprintln!("Invalid operation. Use 'encrypt' or 'decrypt'");
+            std::process::exit(1);
+        }
+    }
+
+    println!("Operation completed successfully");
+    Ok(())
 }

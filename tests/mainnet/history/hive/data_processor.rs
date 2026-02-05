@@ -1,134 +1,138 @@
-use std::error::Error;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
-use std::path::Path;
 
-pub struct DataProcessor {
-    delimiter: char,
-    has_header: bool,
+use std::collections::HashMap;
+use std::error::Error;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub timestamp: i64,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
 }
 
-impl DataProcessor {
-    pub fn new(delimiter: char, has_header: bool) -> Self {
-        DataProcessor {
-            delimiter,
-            has_header,
+impl DataRecord {
+    pub fn new(id: u32, timestamp: i64, values: Vec<f64>) -> Self {
+        Self {
+            id,
+            timestamp,
+            values,
+            metadata: HashMap::new(),
         }
     }
 
-    pub fn process_file<P: AsRef<Path>>(
-        &self,
-        file_path: P,
-        filter_func: Option<Box<dyn Fn(&[String]) -> bool>>,
-    ) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
-        let file = File::open(file_path)?;
-        let reader = BufReader::new(file);
-        let mut lines = reader.lines();
-
-        if self.has_header {
-            lines.next();
+    pub fn validate(&self) -> Result<(), Box<dyn Error>> {
+        if self.id == 0 {
+            return Err("Invalid record ID".into());
         }
-
-        let mut results = Vec::new();
-
-        for line_result in lines {
-            let line = line_result?;
-            let fields: Vec<String> = line
-                .split(self.delimiter)
-                .map(|s| s.trim().to_string())
-                .collect();
-
-            if let Some(ref filter) = filter_func {
-                if filter(&fields) {
-                    results.push(fields);
-                }
-            } else {
-                results.push(fields);
+        
+        if self.timestamp < 0 {
+            return Err("Timestamp cannot be negative".into());
+        }
+        
+        if self.values.is_empty() {
+            return Err("Values vector cannot be empty".into());
+        }
+        
+        for value in &self.values {
+            if value.is_nan() || value.is_infinite() {
+                return Err("Invalid numeric value detected".into());
             }
         }
-
-        Ok(results)
+        
+        Ok(())
     }
 
-    pub fn calculate_average(&self, data: &[Vec<String>], column_index: usize) -> Option<f64> {
-        let mut sum = 0.0;
-        let mut count = 0;
-
-        for row in data {
-            if let Some(value_str) = row.get(column_index) {
-                if let Ok(value) = value_str.parse::<f64>() {
-                    sum += value;
-                    count += 1;
-                }
-            }
-        }
-
-        if count > 0 {
-            Some(sum / count as f64)
-        } else {
-            None
-        }
+    pub fn transform_values<F>(&mut self, transformer: F) 
+    where
+        F: Fn(f64) -> f64,
+    {
+        self.values = self.values.iter().map(|&v| transformer(v)).collect();
     }
+
+    pub fn add_metadata(&mut self, key: String, value: String) {
+        self.metadata.insert(key, value);
+    }
+
+    pub fn get_metadata(&self, key: &str) -> Option<&String> {
+        self.metadata.get(key)
+    }
+}
+
+pub fn process_records(records: &mut [DataRecord]) -> Result<Vec<DataRecord>, Box<dyn Error>> {
+    let mut processed = Vec::with_capacity(records.len());
+    
+    for record in records {
+        record.validate()?;
+        
+        let mut processed_record = record.clone();
+        processed_record.transform_values(|v| v * 2.0);
+        processed_record.add_metadata("processed".to_string(), "true".to_string());
+        
+        processed.push(processed_record);
+    }
+    
+    Ok(processed)
+}
+
+pub fn calculate_statistics(records: &[DataRecord]) -> HashMap<String, f64> {
+    let mut stats = HashMap::new();
+    
+    if records.is_empty() {
+        return stats;
+    }
+    
+    let total_values: usize = records.iter().map(|r| r.values.len()).sum();
+    let all_values: Vec<f64> = records.iter()
+        .flat_map(|r| r.values.iter().copied())
+        .collect();
+    
+    let sum: f64 = all_values.iter().sum();
+    let count = all_values.len() as f64;
+    
+    if count > 0.0 {
+        let mean = sum / count;
+        let variance: f64 = all_values.iter()
+            .map(|v| (v - mean).powi(2))
+            .sum::<f64>() / count;
+        
+        stats.insert("mean".to_string(), mean);
+        stats.insert("variance".to_string(), variance);
+        stats.insert("total_records".to_string(), records.len() as f64);
+        stats.insert("total_values".to_string(), total_values as f64);
+    }
+    
+    stats
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_process_file_with_header() {
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "name,age,city").unwrap();
-        writeln!(temp_file, "Alice,30,New York").unwrap();
-        writeln!(temp_file, "Bob,25,London").unwrap();
-        writeln!(temp_file, "Charlie,35,Paris").unwrap();
-
-        let processor = DataProcessor::new(',', true);
-        let result = processor.process_file(temp_file.path(), None).unwrap();
-
-        assert_eq!(result.len(), 3);
-        assert_eq!(result[0], vec!["Alice", "30", "New York"]);
+    fn test_record_validation() {
+        let valid_record = DataRecord::new(1, 1234567890, vec![1.0, 2.0, 3.0]);
+        assert!(valid_record.validate().is_ok());
+        
+        let invalid_record = DataRecord::new(0, 1234567890, vec![1.0, 2.0]);
+        assert!(invalid_record.validate().is_err());
     }
 
     #[test]
-    fn test_process_file_with_filter() {
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "name,age,city").unwrap();
-        writeln!(temp_file, "Alice,30,New York").unwrap();
-        writeln!(temp_file, "Bob,25,London").unwrap();
-        writeln!(temp_file, "Charlie,35,Paris").unwrap();
-
-        let processor = DataProcessor::new(',', true);
-        let filter = Box::new(|fields: &[String]| {
-            if let Some(age_str) = fields.get(1) {
-                if let Ok(age) = age_str.parse::<i32>() {
-                    return age > 30;
-                }
-            }
-            false
-        });
-
-        let result = processor
-            .process_file(temp_file.path(), Some(filter))
-            .unwrap();
-
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0], vec!["Charlie", "35", "Paris"]);
+    fn test_value_transformation() {
+        let mut record = DataRecord::new(1, 1234567890, vec![1.0, 2.0, 3.0]);
+        record.transform_values(|v| v * 2.0);
+        assert_eq!(record.values, vec![2.0, 4.0, 6.0]);
     }
 
     #[test]
-    fn test_calculate_average() {
-        let data = vec![
-            vec!["10.5".to_string(), "20.0".to_string()],
-            vec!["15.5".to_string(), "30.0".to_string()],
-            vec!["12.0".to_string(), "25.0".to_string()],
+    fn test_statistics_calculation() {
+        let records = vec![
+            DataRecord::new(1, 1000, vec![1.0, 2.0]),
+            DataRecord::new(2, 2000, vec![3.0, 4.0]),
         ];
-
-        let processor = DataProcessor::new(',', false);
-        let average = processor.calculate_average(&data, 0).unwrap();
-
-        assert!((average - 12.666).abs() < 0.001);
+        
+        let stats = calculate_statistics(&records);
+        assert_eq!(stats.get("mean").unwrap(), &2.5);
+        assert_eq!(stats.get("total_records").unwrap(), &2.0);
     }
 }

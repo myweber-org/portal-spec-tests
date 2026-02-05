@@ -37,4 +37,83 @@ mod tests {
         let expected: Vec<i32> = vec![];
         assert_eq!(remove_duplicates(&input), expected);
     }
+}use std::collections::HashSet;
+
+pub struct DataCleaner {
+    records: Vec<String>,
+    seen: HashSet<String>,
+}
+
+impl DataCleaner {
+    pub fn new() -> Self {
+        DataCleaner {
+            records: Vec::new(),
+            seen: HashSet::new(),
+        }
+    }
+
+    pub fn add_record(&mut self, record: &str) -> bool {
+        let trimmed = record.trim().to_string();
+        if trimmed.is_empty() {
+            return false;
+        }
+        
+        if self.seen.insert(trimmed.clone()) {
+            self.records.push(trimmed);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn get_unique_records(&self) -> &Vec<String> {
+        &self.records
+    }
+
+    pub fn validate_email(&self, email: &str) -> bool {
+        let parts: Vec<&str> = email.split('@').collect();
+        if parts.len() != 2 {
+            return false;
+        }
+        
+        let domain_parts: Vec<&str> = parts[1].split('.').collect();
+        domain_parts.len() >= 2 && 
+        !parts[0].is_empty() && 
+        !domain_parts.iter().any(|part| part.is_empty())
+    }
+
+    pub fn clean_whitespace(&mut self) {
+        self.records = self.records
+            .iter()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        
+        self.seen.clear();
+        for record in &self.records {
+            self.seen.insert(record.clone());
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_deduplication() {
+        let mut cleaner = DataCleaner::new();
+        assert!(cleaner.add_record("test"));
+        assert!(!cleaner.add_record("test"));
+        assert!(cleaner.add_record("another"));
+        assert_eq!(cleaner.get_unique_records().len(), 2);
+    }
+
+    #[test]
+    fn test_email_validation() {
+        let cleaner = DataCleaner::new();
+        assert!(cleaner.validate_email("user@example.com"));
+        assert!(!cleaner.validate_email("invalid-email"));
+        assert!(!cleaner.validate_email("@domain.com"));
+    }
 }

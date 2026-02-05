@@ -226,4 +226,73 @@ mod tests {
         let decrypted_content = fs::read(decrypted_file.path()).unwrap();
         assert_eq!(original_content.to_vec(), decrypted_content);
     }
+}use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce,
+};
+use std::error::Error;
+
+pub fn encrypt_file(key: &[u8; 32], plaintext: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+    let nonce = Nonce::from_slice(b"unique nonce");
+    
+    let ciphertext = cipher
+        .encrypt(nonce, plaintext)
+        .map_err(|e| format!("Encryption failed: {}", e))?;
+    
+    let mut result = Vec::with_capacity(nonce.len() + ciphertext.len());
+    result.extend_from_slice(nonce);
+    result.extend_from_slice(&ciphertext);
+    
+    Ok(result)
+}
+
+pub fn decrypt_file(key: &[u8; 32], ciphertext: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+    if ciphertext.len() < 12 {
+        return Err("Ciphertext too short".into());
+    }
+    
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+    let nonce = Nonce::from_slice(&ciphertext[0..12]);
+    let encrypted_data = &ciphertext[12..];
+    
+    let plaintext = cipher
+        .decrypt(nonce, encrypted_data)
+        .map_err(|e| format!("Decryption failed: {}", e))?;
+    
+    Ok(plaintext)
+}
+
+pub fn generate_key() -> [u8; 32] {
+    let mut key = [0u8; 32];
+    OsRng.fill_bytes(&mut key);
+    key
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_encryption_roundtrip() {
+        let key = generate_key();
+        let plaintext = b"Secret data that needs protection";
+        
+        let ciphertext = encrypt_file(&key, plaintext).unwrap();
+        let decrypted = decrypt_file(&key, &ciphertext).unwrap();
+        
+        assert_eq!(plaintext.to_vec(), decrypted);
+    }
+    
+    #[test]
+    fn test_wrong_key_fails() {
+        let key1 = generate_key();
+        let key2 = generate_key();
+        let plaintext = b"Test data";
+        
+        let ciphertext = encrypt_file(&key1, plaintext).unwrap();
+        let result = decrypt_file(&key2, &ciphertext);
+        
+        assert!(result.is_err());
+    }
 }

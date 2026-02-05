@@ -73,3 +73,44 @@ mod tests {
         assert_eq!(value, "new");
     }
 }
+use serde_json::{Value, Map};
+use std::fs;
+use std::path::Path;
+
+pub fn merge_json_files<P: AsRef<Path>>(paths: &[P], output_path: P) -> Result<(), Box<dyn std::error::Error>> {
+    let mut merged = Map::new();
+    
+    for path in paths {
+        let content = fs::read_to_string(path)?;
+        let json: Value = serde_json::from_str(&content)?;
+        
+        if let Value::Object(obj) = json {
+            merge_objects(&mut merged, obj);
+        }
+    }
+    
+    let output_json = Value::Object(merged);
+    let output_str = serde_json::to_string_pretty(&output_json)?;
+    fs::write(output_path, output_str)?;
+    
+    Ok(())
+}
+
+fn merge_objects(target: &mut Map<String, Value>, source: Map<String, Value>) {
+    for (key, source_value) in source {
+        if let Some(existing_value) = target.get_mut(&key) {
+            if let (Value::Object(existing_obj), Value::Object(source_obj)) = (existing_value, &source_value) {
+                let mut existing_map = existing_obj.clone();
+                merge_objects(&mut existing_map, source_obj.clone());
+                *existing_value = Value::Object(existing_map);
+            } else if existing_value != &source_value {
+                let mut array = Vec::new();
+                array.push(existing_value.clone());
+                array.push(source_value);
+                *existing_value = Value::Array(array);
+            }
+        } else {
+            target.insert(key, source_value);
+        }
+    }
+}

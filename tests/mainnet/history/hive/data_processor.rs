@@ -182,3 +182,130 @@ pub fn filter_by_category(records: Vec<Record>, category: &str) -> Vec<Record> {
         .filter(|r| r.category == category)
         .collect()
 }
+use csv::{Reader, Writer};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
+}
+
+pub struct DataProcessor {
+    records: Vec<Record>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let mut rdr = Reader::from_reader(file);
+        
+        for result in rdr.deserialize() {
+            let record: Record = result?;
+            self.records.push(record);
+        }
+        
+        Ok(())
+    }
+
+    pub fn filter_active(&self) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|record| record.active)
+            .collect()
+    }
+
+    pub fn calculate_total(&self) -> f64 {
+        self.records
+            .iter()
+            .map(|record| record.value)
+            .sum()
+    }
+
+    pub fn save_to_csv(&self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::create(file_path)?;
+        let mut wtr = Writer::from_writer(file);
+        
+        for record in &self.records {
+            wtr.serialize(record)?;
+        }
+        
+        wtr.flush()?;
+        Ok(())
+    }
+
+    pub fn add_record(&mut self, id: u32, name: String, value: f64, active: bool) {
+        self.records.push(Record {
+            id,
+            name,
+            value,
+            active,
+        });
+    }
+
+    pub fn get_statistics(&self) -> (usize, f64, f64) {
+        let count = self.records.len();
+        let total = self.calculate_total();
+        let average = if count > 0 {
+            total / count as f64
+        } else {
+            0.0
+        };
+        
+        (count, total, average)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_data_processor() {
+        let mut processor = DataProcessor::new();
+        
+        processor.add_record(1, "Test1".to_string(), 10.5, true);
+        processor.add_record(2, "Test2".to_string(), 20.0, false);
+        processor.add_record(3, "Test3".to_string(), 30.5, true);
+        
+        let active_records = processor.filter_active();
+        assert_eq!(active_records.len(), 2);
+        
+        let total = processor.calculate_total();
+        assert_eq!(total, 61.0);
+        
+        let stats = processor.get_statistics();
+        assert_eq!(stats.0, 3);
+        assert_eq!(stats.1, 61.0);
+        assert_eq!(stats.2, 61.0 / 3.0);
+    }
+
+    #[test]
+    fn test_csv_operations() -> Result<(), Box<dyn Error>> {
+        let mut processor = DataProcessor::new();
+        processor.add_record(1, "Alpha".to_string(), 100.0, true);
+        processor.add_record(2, "Beta".to_string(), 200.0, false);
+        
+        let temp_file = NamedTempFile::new()?;
+        let temp_path = temp_file.path().to_str().unwrap();
+        
+        processor.save_to_csv(temp_path)?;
+        
+        let mut new_processor = DataProcessor::new();
+        new_processor.load_from_csv(temp_path)?;
+        
+        assert_eq!(new_processor.records.len(), 2);
+        Ok(())
+    }
+}

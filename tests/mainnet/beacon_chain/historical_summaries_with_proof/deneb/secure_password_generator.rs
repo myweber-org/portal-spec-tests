@@ -414,4 +414,46 @@ mod tests {
         assert!(!is_strong);
         assert!(!issues.is_empty());
     }
+}use rand::Rng;
+use rand::rngs::OsRng;
+
+pub fn generate_password(length: usize, include_uppercase: bool, include_numbers: bool, include_symbols: bool) -> String {
+    let mut charset = "abcdefghijklmnopqrstuvwxyz".to_string();
+    
+    if include_uppercase {
+        charset.push_str("ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+    }
+    if include_numbers {
+        charset.push_str("0123456789");
+    }
+    if include_symbols {
+        charset.push_str("!@#$%^&*()_+-=[]{}|;:,.<>?");
+    }
+    
+    let charset_bytes: Vec<u8> = charset.bytes().collect();
+    let mut rng = OsRng;
+    
+    (0..length)
+        .map(|_| {
+            let idx = rng.gen_range(0..charset_bytes.len());
+            charset_bytes[idx] as char
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_password_length() {
+        let password = generate_password(12, true, true, true);
+        assert_eq!(password.len(), 12);
+    }
+
+    #[test]
+    fn test_password_charset() {
+        let password = generate_password(20, false, false, false);
+        assert!(password.chars().all(|c| c.is_ascii_lowercase()));
+    }
 }

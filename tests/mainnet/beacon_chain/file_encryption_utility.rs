@@ -515,3 +515,89 @@ mod tests {
         assert_eq!(test_content.to_vec(), decrypted_content);
     }
 }
+use std::fs;
+use std::io::{self, Read, Write};
+use std::path::Path;
+
+const DEFAULT_KEY: &[u8] = b"secret-encryption-key-2024";
+
+pub struct FileEncryptor {
+    key: Vec<u8>,
+}
+
+impl FileEncryptor {
+    pub fn new(key: Option<&[u8]>) -> Self {
+        let key = match key {
+            Some(k) => k.to_vec(),
+            None => DEFAULT_KEY.to_vec(),
+        };
+        FileEncryptor { key }
+    }
+
+    pub fn encrypt_file(&self, source_path: &Path, dest_path: &Path) -> io::Result<()> {
+        let mut source_file = fs::File::open(source_path)?;
+        let mut dest_file = fs::File::create(dest_path)?;
+        
+        let mut buffer = [0u8; 4096];
+        let key_len = self.key.len();
+        let mut key_index = 0;
+        
+        loop {
+            let bytes_read = source_file.read(&mut buffer)?;
+            if bytes_read == 0 {
+                break;
+            }
+            
+            for i in 0..bytes_read {
+                buffer[i] ^= self.key[key_index];
+                key_index = (key_index + 1) % key_len;
+            }
+            
+            dest_file.write_all(&buffer[..bytes_read])?;
+        }
+        
+        Ok(())
+    }
+
+    pub fn decrypt_file(&self, source_path: &Path, dest_path: &Path) -> io::Result<()> {
+        self.encrypt_file(source_path, dest_path)
+    }
+}
+
+pub fn validate_key(key: &[u8]) -> bool {
+    !key.is_empty() && key.len() <= 256
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+    
+    #[test]
+    fn test_encryption_decryption() {
+        let test_data = b"Hello, this is a secret message!";
+        let key = b"test-key-123";
+        
+        let encryptor = FileEncryptor::new(Some(key));
+        
+        let source_file = NamedTempFile::new().unwrap();
+        let encrypted_file = NamedTempFile::new().unwrap();
+        let decrypted_file = NamedTempFile::new().unwrap();
+        
+        fs::write(source_file.path(), test_data).unwrap();
+        
+        encryptor.encrypt_file(source_file.path(), encrypted_file.path()).unwrap();
+        encryptor.decrypt_file(encrypted_file.path(), decrypted_file.path()).unwrap();
+        
+        let decrypted_data = fs::read(decrypted_file.path()).unwrap();
+        assert_eq!(test_data, decrypted_data.as_slice());
+    }
+    
+    #[test]
+    fn test_key_validation() {
+        assert!(validate_key(b"valid-key"));
+        assert!(!validate_key(b""));
+        assert!(validate_key(&[0u8; 256]));
+        assert!(!validate_key(&[0u8; 257]));
+    }
+}

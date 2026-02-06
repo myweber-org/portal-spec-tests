@@ -154,3 +154,101 @@ mod tests {
         assert!(result.unwrap_err().contains("Invalid config line"));
     }
 }
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::env;
+use std::fs;
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DatabaseConfig {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: String,
+    pub database: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ServerConfig {
+    pub address: String,
+    pub port: u16,
+    pub workers: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AppConfig {
+    pub server: ServerConfig,
+    pub database: DatabaseConfig,
+    pub features: HashMap<String, bool>,
+    pub log_level: String,
+}
+
+impl AppConfig {
+    pub fn from_file(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let content = fs::read_to_string(path)?;
+        let mut config: AppConfig = serde_yaml::from_str(&content)?;
+        
+        config.apply_environment_overrides();
+        Ok(config)
+    }
+    
+    fn apply_environment_overrides(&mut self) {
+        if let Ok(host) = env::var("DB_HOST") {
+            self.database.host = host;
+        }
+        
+        if let Ok(port) = env::var("DB_PORT") {
+            if let Ok(port_num) = port.parse::<u16>() {
+                self.database.port = port_num;
+            }
+        }
+        
+        if let Ok(log_level) = env::var("LOG_LEVEL") {
+            self.log_level = log_level;
+        }
+        
+        if let Ok(server_port) = env::var("SERVER_PORT") {
+            if let Ok(port_num) = server_port.parse::<u16>() {
+                self.server.port = port_num;
+            }
+        }
+    }
+    
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+        
+        if self.server.port == 0 {
+            errors.push("Server port cannot be zero".to_string());
+        }
+        
+        if self.database.host.is_empty() {
+            errors.push("Database host cannot be empty".to_string());
+        }
+        
+        if self.database.port == 0 {
+            errors.push("Database port cannot be zero".to_string());
+        }
+        
+        let valid_log_levels = ["error", "warn", "info", "debug", "trace"];
+        if !valid_log_levels.contains(&self.log_level.as_str()) {
+            errors.push(format!("Invalid log level: {}", self.log_level));
+        }
+        
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+pub fn load_config_with_fallback(paths: &[&str]) -> Result<AppConfig, Box<dyn std::error::Error>> {
+    for path in paths {
+        match AppConfig::from_file(path) {
+            Ok(config) => return Ok(config),
+            Err(e) => eprintln!("Failed to load config from {}: {}", path, e),
+        }
+    }
+    
+    Err("Could not load configuration from any provided path".into())
+}

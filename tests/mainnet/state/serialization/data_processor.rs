@@ -848,4 +848,128 @@ mod tests {
         let grouped = processor.group_by_category();
         assert_eq!(grouped.get("Alpha").unwrap().len(), 1);
     }
+}use csv::{Reader, Writer};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::path::Path;
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct DataRecord {
+    id: u32,
+    name: String,
+    value: f64,
+    category: String,
+}
+
+impl DataRecord {
+    pub fn new(id: u32, name: String, value: f64, category: String) -> Self {
+        Self {
+            id,
+            name,
+            value,
+            category,
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.name.is_empty() {
+            return Err("Name cannot be empty".to_string());
+        }
+        if self.value < 0.0 {
+            return Err("Value must be non-negative".to_string());
+        }
+        if self.category.is_empty() {
+            return Err("Category cannot be empty".to_string());
+        }
+        Ok(())
+    }
+}
+
+pub struct DataProcessor;
+
+impl DataProcessor {
+    pub fn load_from_csv<P: AsRef<Path>>(path: P) -> Result<Vec<DataRecord>, Box<dyn Error>> {
+        let mut reader = Reader::from_path(path)?;
+        let mut records = Vec::new();
+
+        for result in reader.deserialize() {
+            let record: DataRecord = result?;
+            record.validate()?;
+            records.push(record);
+        }
+
+        Ok(records)
+    }
+
+    pub fn save_to_csv<P: AsRef<Path>>(
+        records: &[DataRecord],
+        path: P,
+    ) -> Result<(), Box<dyn Error>> {
+        let mut writer = Writer::from_path(path)?;
+
+        for record in records {
+            record.validate()?;
+            writer.serialize(record)?;
+        }
+
+        writer.flush()?;
+        Ok(())
+    }
+
+    pub fn filter_by_category(records: &[DataRecord], category: &str) -> Vec<DataRecord> {
+        records
+            .iter()
+            .filter(|r| r.category == category)
+            .cloned()
+            .collect()
+    }
+
+    pub fn calculate_average(records: &[DataRecord]) -> Option<f64> {
+        if records.is_empty() {
+            return None;
+        }
+
+        let sum: f64 = records.iter().map(|r| r.value).sum();
+        Some(sum / records.len() as f64)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_record_validation() {
+        let valid_record = DataRecord::new(1, "Test".to_string(), 10.5, "A".to_string());
+        assert!(valid_record.validate().is_ok());
+
+        let invalid_record = DataRecord::new(2, "".to_string(), -5.0, "".to_string());
+        assert!(invalid_record.validate().is_err());
+    }
+
+    #[test]
+    fn test_csv_operations() -> Result<(), Box<dyn Error>> {
+        let records = vec![
+            DataRecord::new(1, "Item1".to_string(), 10.0, "CategoryA".to_string()),
+            DataRecord::new(2, "Item2".to_string(), 20.0, "CategoryB".to_string()),
+            DataRecord::new(3, "Item3".to_string(), 30.0, "CategoryA".to_string()),
+        ];
+
+        let temp_file = NamedTempFile::new()?;
+        let path = temp_file.path();
+
+        DataProcessor::save_to_csv(&records, path)?;
+        let loaded_records = DataProcessor::load_from_csv(path)?;
+
+        assert_eq!(records.len(), loaded_records.len());
+
+        let filtered = DataProcessor::filter_by_category(&loaded_records, "CategoryA");
+        assert_eq!(filtered.len(), 2);
+
+        let avg = DataProcessor::calculate_average(&filtered);
+        assert_eq!(avg, Some(20.0));
+
+        Ok(())
+    }
 }

@@ -275,3 +275,106 @@ mod tests {
         assert_eq!(batch_results, vec!["ONE", "THREE"]);
     }
 }
+use std::collections::HashMap;
+use std::error::Error;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub timestamp: i64,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
+}
+
+impl DataRecord {
+    pub fn new(id: u32, timestamp: i64, values: Vec<f64>) -> Self {
+        Self {
+            id,
+            timestamp,
+            values,
+            metadata: HashMap::new(),
+        }
+    }
+
+    pub fn add_metadata(&mut self, key: String, value: String) {
+        self.metadata.insert(key, value);
+    }
+
+    pub fn validate(&self) -> Result<(), Box<dyn Error>> {
+        if self.id == 0 {
+            return Err("Invalid record ID".into());
+        }
+        if self.timestamp < 0 {
+            return Err("Invalid timestamp".into());
+        }
+        if self.values.is_empty() {
+            return Err("Empty values array".into());
+        }
+        Ok(())
+    }
+}
+
+pub fn process_records(records: Vec<DataRecord>) -> Result<Vec<DataRecord>, Box<dyn Error>> {
+    let mut processed = Vec::new();
+    
+    for mut record in records {
+        record.validate()?;
+        
+        // Normalize values
+        let sum: f64 = record.values.iter().sum();
+        if sum != 0.0 {
+            for value in record.values.iter_mut() {
+                *value /= sum;
+            }
+        }
+        
+        // Add processing metadata
+        record.add_metadata(
+            "processed_timestamp".to_string(),
+            chrono::Utc::now().timestamp().to_string()
+        );
+        
+        processed.push(record);
+    }
+    
+    Ok(processed)
+}
+
+pub fn filter_records(
+    records: Vec<DataRecord>,
+    predicate: impl Fn(&DataRecord) -> bool
+) -> Vec<DataRecord> {
+    records.into_iter().filter(predicate).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_record_validation() {
+        let valid_record = DataRecord::new(1, 1234567890, vec![1.0, 2.0, 3.0]);
+        assert!(valid_record.validate().is_ok());
+
+        let invalid_record = DataRecord::new(0, 1234567890, vec![1.0, 2.0]);
+        assert!(invalid_record.validate().is_err());
+    }
+
+    #[test]
+    fn test_process_records() {
+        let records = vec![
+            DataRecord::new(1, 1000, vec![1.0, 2.0, 3.0]),
+            DataRecord::new(2, 2000, vec![4.0, 5.0, 6.0]),
+        ];
+        
+        let result = process_records(records);
+        assert!(result.is_ok());
+        let processed = result.unwrap();
+        assert_eq!(processed.len(), 2);
+        
+        for record in processed {
+            let sum: f64 = record.values.iter().sum();
+            assert!((sum - 1.0).abs() < 0.0001 || sum == 0.0);
+        }
+    }
+}

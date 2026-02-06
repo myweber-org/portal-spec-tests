@@ -362,3 +362,161 @@ mod tests {
         assert!(generator.generate().is_err());
     }
 }
+use rand::Rng;
+use std::collections::HashSet;
+
+#[derive(Debug, Clone)]
+pub struct PasswordGenerator {
+    length: usize,
+    use_lowercase: bool,
+    use_uppercase: bool,
+    use_digits: bool,
+    use_special: bool,
+}
+
+impl PasswordGenerator {
+    pub fn new(length: usize) -> Self {
+        Self {
+            length,
+            use_lowercase: true,
+            use_uppercase: true,
+            use_digits: true,
+            use_special: true,
+        }
+    }
+
+    pub fn with_lowercase(mut self, enable: bool) -> Self {
+        self.use_lowercase = enable;
+        self
+    }
+
+    pub fn with_uppercase(mut self, enable: bool) -> Self {
+        self.use_uppercase = enable;
+        self
+    }
+
+    pub fn with_digits(mut self, enable: bool) -> Self {
+        self.use_digits = enable;
+        self
+    }
+
+    pub fn with_special(mut self, enable: bool) -> Self {
+        self.use_special = enable;
+        self
+    }
+
+    pub fn generate(&self) -> Result<String, String> {
+        if self.length == 0 {
+            return Err("Password length must be greater than 0".to_string());
+        }
+
+        let character_sets = self.build_character_sets();
+        if character_sets.is_empty() {
+            return Err("At least one character set must be enabled".to_string());
+        }
+
+        let mut rng = rand::thread_rng();
+        let mut password_chars = Vec::with_capacity(self.length);
+        let mut used_sets = HashSet::new();
+
+        for i in 0..self.length {
+            let set_index = rng.gen_range(0..character_sets.len());
+            let charset = &character_sets[set_index];
+            let char_index = rng.gen_range(0..charset.len());
+            
+            password_chars.push(charset.chars().nth(char_index).unwrap());
+            used_sets.insert(set_index);
+        }
+
+        if used_sets.len() < character_sets.len() {
+            return self.generate();
+        }
+
+        Ok(password_chars.into_iter().collect())
+    }
+
+    fn build_character_sets(&self) -> Vec<String> {
+        let mut sets = Vec::new();
+        
+        if self.use_lowercase {
+            sets.push("abcdefghijklmnopqrstuvwxyz".to_string());
+        }
+        if self.use_uppercase {
+            sets.push("ABCDEFGHIJKLMNOPQRSTUVWXYZ".to_string());
+        }
+        if self.use_digits {
+            sets.push("0123456789".to_string());
+        }
+        if self.use_special {
+            sets.push("!@#$%^&*()-_=+[]{}|;:,.<>?".to_string());
+        }
+        
+        sets
+    }
+
+    pub fn calculate_entropy(&self) -> f64 {
+        let mut pool_size = 0;
+        
+        if self.use_lowercase {
+            pool_size += 26;
+        }
+        if self.use_uppercase {
+            pool_size += 26;
+        }
+        if self.use_digits {
+            pool_size += 10;
+        }
+        if self.use_special {
+            pool_size += 32;
+        }
+
+        if pool_size == 0 {
+            return 0.0;
+        }
+
+        (self.length as f64) * (pool_size as f64).log2()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_password_generation() {
+        let generator = PasswordGenerator::new(12);
+        let password = generator.generate().unwrap();
+        assert_eq!(password.len(), 12);
+    }
+
+    #[test]
+    fn test_custom_character_sets() {
+        let generator = PasswordGenerator::new(10)
+            .with_special(false)
+            .with_digits(false);
+        
+        let password = generator.generate().unwrap();
+        assert!(password.chars().all(|c| c.is_alphabetic()));
+    }
+
+    #[test]
+    fn test_entropy_calculation() {
+        let generator = PasswordGenerator::new(16);
+        let entropy = generator.calculate_entropy();
+        assert!(entropy > 80.0);
+    }
+
+    #[test]
+    fn test_invalid_configuration() {
+        let generator = PasswordGenerator::new(0);
+        assert!(generator.generate().is_err());
+        
+        let generator = PasswordGenerator::new(10)
+            .with_lowercase(false)
+            .with_uppercase(false)
+            .with_digits(false)
+            .with_special(false);
+        
+        assert!(generator.generate().is_err());
+    }
+}

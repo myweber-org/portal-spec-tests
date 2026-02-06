@@ -1,99 +1,135 @@
+use std::collections::HashMap;
 
-use std::error::Error;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
-use std::path::Path;
-
-pub struct DataProcessor {
-    delimiter: char,
-    has_header: bool,
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u64,
+    pub timestamp: i64,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
 }
 
-impl DataProcessor {
-    pub fn new(delimiter: char, has_header: bool) -> Self {
-        DataProcessor {
-            delimiter,
-            has_header,
+impl DataRecord {
+    pub fn new(id: u64, timestamp: i64) -> Self {
+        Self {
+            id,
+            timestamp,
+            values: Vec::new(),
+            metadata: HashMap::new(),
         }
     }
 
-    pub fn process_file<P: AsRef<Path>>(&self, file_path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
-        let file = File::open(file_path)?;
-        let reader = BufReader::new(file);
-        let mut records = Vec::new();
-        let mut lines = reader.lines();
+    pub fn add_value(&mut self, value: f64) -> &mut Self {
+        self.values.push(value);
+        self
+    }
 
-        if self.has_header {
-            lines.next();
+    pub fn add_metadata(&mut self, key: &str, value: &str) -> &mut Self {
+        self.metadata.insert(key.to_string(), value.to_string());
+        self
+    }
+
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.id == 0 {
+            return Err("Invalid record ID");
+        }
+        if self.timestamp < 0 {
+            return Err("Timestamp cannot be negative");
+        }
+        if self.values.is_empty() {
+            return Err("Record must contain at least one value");
+        }
+        Ok(())
+    }
+
+    pub fn calculate_statistics(&self) -> Option<DataStatistics> {
+        if self.values.is_empty() {
+            return None;
         }
 
-        for line_result in lines {
-            let line = line_result?;
-            let fields: Vec<String> = line
-                .split(self.delimiter)
-                .map(|s| s.trim().to_string())
-                .collect();
-            
-            if !fields.is_empty() {
-                records.push(fields);
+        let count = self.values.len();
+        let sum: f64 = self.values.iter().sum();
+        let mean = sum / count as f64;
+        let variance: f64 = self.values.iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>() / count as f64;
+        let std_dev = variance.sqrt();
+
+        Some(DataStatistics {
+            count,
+            sum,
+            mean,
+            variance,
+            std_dev,
+        })
+    }
+}
+
+#[derive(Debug)]
+pub struct DataStatistics {
+    pub count: usize,
+    pub sum: f64,
+    pub mean: f64,
+    pub variance: f64,
+    pub std_dev: f64,
+}
+
+pub fn process_records(records: &[DataRecord]) -> Vec<DataRecord> {
+    records.iter()
+        .filter(|record| record.validate().is_ok())
+        .filter(|record| {
+            if let Some(stats) = record.calculate_statistics() {
+                stats.std_dev > 0.0 && stats.mean.is_finite()
+            } else {
+                false
             }
-        }
+        })
+        .cloned()
+        .collect()
+}
 
-        Ok(records)
-    }
-
-    pub fn validate_record(&self, record: &[String]) -> bool {
-        !record.is_empty() && record.iter().all(|field| !field.is_empty())
-    }
-
-    pub fn extract_column(&self, records: &[Vec<String>], column_index: usize) -> Vec<String> {
-        records
-            .iter()
-            .filter_map(|record| record.get(column_index).cloned())
-            .collect()
-    }
+pub fn transform_values(record: &mut DataRecord, transformer: fn(f64) -> f64) {
+    record.values = record.values.iter()
+        .map(|&value| transformer(value))
+        .collect();
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_process_csv() {
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "name,age,city").unwrap();
-        writeln!(temp_file, "Alice,30,New York").unwrap();
-        writeln!(temp_file, "Bob,25,London").unwrap();
+    fn test_record_validation() {
+        let mut record = DataRecord::new(1, 1234567890);
+        record.add_value(42.0);
+        assert!(record.validate().is_ok());
 
-        let processor = DataProcessor::new(',', true);
-        let result = processor.process_file(temp_file.path()).unwrap();
-
-        assert_eq!(result.len(), 2);
-        assert_eq!(result[0], vec!["Alice", "30", "New York"]);
-        assert_eq!(result[1], vec!["Bob", "25", "London"]);
+        let invalid_record = DataRecord::new(0, 1234567890);
+        assert!(invalid_record.validate().is_err());
     }
 
     #[test]
-    fn test_validate_record() {
-        let processor = DataProcessor::new(',', false);
-        let valid_record = vec!["data".to_string(), "value".to_string()];
-        let invalid_record = vec!["".to_string(), "value".to_string()];
+    fn test_statistics_calculation() {
+        let mut record = DataRecord::new(1, 1234567890);
+        record.add_value(10.0).add_value(20.0).add_value(30.0);
 
-        assert!(processor.validate_record(&valid_record));
-        assert!(!processor.validate_record(&invalid_record));
+        let stats = record.calculate_statistics().unwrap();
+        assert_eq!(stats.count, 3);
+        assert_eq!(stats.mean, 20.0);
+        assert_eq!(stats.sum, 60.0);
     }
 
     #[test]
-    fn test_extract_column() {
-        let processor = DataProcessor::new(',', false);
-        let records = vec![
-            vec!["a".to_string(), "b".to_string(), "c".to_string()],
-            vec!["d".to_string(), "e".to_string(), "f".to_string()],
-        ];
+    fn test_process_records() {
+        let mut valid_record = DataRecord::new(1, 1234567890);
+        valid_record.add_value(5.0).add_value(15.0);
 
-        let column = processor.extract_column(&records, 1);
-        assert_eq!(column, vec!["b".to_string(), "e".to_string()]);
+        let mut invalid_record = DataRecord::new(0, 1234567890);
+        invalid_record.add_value(10.0);
+
+        let records = vec![valid_record.clone(), invalid_record];
+        let processed = process_records(&records);
+
+        assert_eq!(processed.len(), 1);
+        assert_eq!(processed[0].id, valid_record.id);
     }
 }

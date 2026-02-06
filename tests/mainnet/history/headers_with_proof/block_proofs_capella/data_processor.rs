@@ -1,120 +1,98 @@
-
+use csv::Reader;
+use serde::Deserialize;
 use std::error::Error;
 use std::fs::File;
-use std::path::Path;
 
-pub struct DataSet {
-    values: Vec<f64>,
+#[derive(Debug, Deserialize)]
+struct Record {
+    id: u32,
+    value: f64,
+    category: String,
 }
 
-impl DataSet {
+pub struct DataProcessor {
+    records: Vec<Record>,
+}
+
+impl DataProcessor {
     pub fn new() -> Self {
-        DataSet { values: Vec::new() }
-    }
-
-    pub fn from_csv<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn Error>> {
-        let file = File::open(path)?;
-        let mut rdr = csv::Reader::from_reader(file);
-        let mut values = Vec::new();
-
-        for result in rdr.records() {
-            let record = result?;
-            for field in record.iter() {
-                if let Ok(num) = field.parse::<f64>() {
-                    values.push(num);
-                }
-            }
+        DataProcessor {
+            records: Vec::new(),
         }
-
-        Ok(DataSet { values })
     }
 
-    pub fn add_value(&mut self, value: f64) {
-        self.values.push(value);
+    pub fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let mut rdr = Reader::from_reader(file);
+        
+        for result in rdr.deserialize() {
+            let record: Record = result?;
+            self.records.push(record);
+        }
+        
+        Ok(())
     }
 
     pub fn calculate_mean(&self) -> Option<f64> {
-        if self.values.is_empty() {
+        if self.records.is_empty() {
             return None;
         }
-        let sum: f64 = self.values.iter().sum();
-        Some(sum / self.values.len() as f64)
+        
+        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        Some(sum / self.records.len() as f64)
     }
 
-    pub fn calculate_std_dev(&self) -> Option<f64> {
-        if self.values.len() < 2 {
-            return None;
-        }
-        let mean = self.calculate_mean()?;
-        let variance: f64 = self.values
+    pub fn filter_by_category(&self, category: &str) -> Vec<&Record> {
+        self.records
             .iter()
-            .map(|&x| (x - mean).powi(2))
-            .sum::<f64>() / (self.values.len() - 1) as f64;
-        Some(variance.sqrt())
+            .filter(|r| r.category == category)
+            .collect()
     }
 
-    pub fn get_summary(&self) -> SummaryStats {
-        SummaryStats {
-            count: self.values.len(),
-            mean: self.calculate_mean(),
-            std_dev: self.calculate_std_dev(),
-            min: self.values.iter().copied().reduce(f64::min),
-            max: self.values.iter().copied().reduce(f64::max),
-        }
+    pub fn get_max_value(&self) -> Option<&Record> {
+        self.records.iter().max_by(|a, b| {
+            a.value.partial_cmp(&b.value).unwrap()
+        })
     }
-}
 
-pub struct SummaryStats {
-    pub count: usize,
-    pub mean: Option<f64>,
-    pub std_dev: Option<f64>,
-    pub min: Option<f64>,
-    pub max: Option<f64>,
-}
+    pub fn count_records(&self) -> usize {
+        self.records.len()
+    }
 
-impl std::fmt::Display for SummaryStats {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Data Summary:")?;
-        writeln!(f, "  Count: {}", self.count)?;
-        writeln!(f, "  Mean: {:.4}", self.mean.unwrap_or(f64::NAN))?;
-        writeln!(f, "  Std Dev: {:.4}", self.std_dev.unwrap_or(f64::NAN))?;
-        writeln!(f, "  Min: {:.4}", self.min.unwrap_or(f64::NAN))?;
-        write!(f, "  Max: {:.4}", self.max.unwrap_or(f64::NAN))
+    pub fn export_summary(&self) -> String {
+        let mean = self.calculate_mean().unwrap_or(0.0);
+        let count = self.count_records();
+        let max = self.get_max_value()
+            .map(|r| r.value)
+            .unwrap_or(0.0);
+        
+        format!(
+            "Records: {}, Mean: {:.2}, Max: {:.2}",
+            count, mean, max
+        )
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::NamedTempFile;
     use std::io::Write;
+    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_empty_dataset() {
-        let ds = DataSet::new();
-        assert_eq!(ds.calculate_mean(), None);
-        assert_eq!(ds.calculate_std_dev(), None);
-    }
-
-    #[test]
-    fn test_basic_statistics() {
-        let mut ds = DataSet::new();
-        ds.add_value(1.0);
-        ds.add_value(2.0);
-        ds.add_value(3.0);
+    fn test_data_processing() {
+        let mut processor = DataProcessor::new();
         
-        assert_eq!(ds.calculate_mean(), Some(2.0));
-        assert!(ds.calculate_std_dev().unwrap() - 1.0 < 0.0001);
-    }
-
-    #[test]
-    fn test_csv_parsing() -> Result<(), Box<dyn Error>> {
-        let mut temp_file = NamedTempFile::new()?;
-        writeln!(temp_file, "1.5,2.3,3.7\n4.1,5.9")?;
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,value,category").unwrap();
+        writeln!(temp_file, "1,10.5,A").unwrap();
+        writeln!(temp_file, "2,20.3,B").unwrap();
+        writeln!(temp_file, "3,15.7,A").unwrap();
         
-        let ds = DataSet::from_csv(temp_file.path())?;
-        assert_eq!(ds.values.len(), 5);
-        assert!(ds.calculate_mean().unwrap() - 3.5 < 0.0001);
-        Ok(())
+        processor.load_from_csv(temp_file.path().to_str().unwrap()).unwrap();
+        
+        assert_eq!(processor.count_records(), 3);
+        assert_eq!(processor.filter_by_category("A").len(), 2);
+        assert!(processor.calculate_mean().unwrap() > 0.0);
     }
 }

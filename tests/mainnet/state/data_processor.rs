@@ -1302,4 +1302,136 @@ mod tests {
         assert!(processor.process_record(&record).is_ok());
         assert!(matches!(processor.process_record(&record), Err(DataError::Timeout)));
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+pub struct DataRecord {
+    id: u32,
+    value: f64,
+    timestamp: String,
+}
+
+impl DataRecord {
+    pub fn new(id: u32, value: f64, timestamp: String) -> Self {
+        DataRecord {
+            id,
+            value,
+            timestamp,
+        }
+    }
+
+    pub fn is_valid(&self) -> bool {
+        self.id > 0 && self.value.is_finite() && !self.timestamp.is_empty()
+    }
+
+    pub fn display(&self) {
+        println!("Record {}: {} at {}", self.id, self.value, self.timestamp);
+    }
+}
+
+pub fn process_csv_file(file_path: &str) -> Result<Vec<DataRecord>, Box<dyn Error>> {
+    let path = Path::new(file_path);
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+    let mut records = Vec::new();
+
+    for (line_num, line) in reader.lines().enumerate() {
+        let line = line?;
+        if line.trim().is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        let parts: Vec<&str> = line.split(',').collect();
+        if parts.len() != 3 {
+            return Err(format!("Invalid format at line {}", line_num + 1).into());
+        }
+
+        let id = parts[0].parse::<u32>()?;
+        let value = parts[1].parse::<f64>()?;
+        let timestamp = parts[2].to_string();
+
+        let record = DataRecord::new(id, value, timestamp);
+        if record.is_valid() {
+            records.push(record);
+        } else {
+            eprintln!("Warning: Invalid record at line {}", line_num + 1);
+        }
+    }
+
+    Ok(records)
+}
+
+pub fn calculate_statistics(records: &[DataRecord]) -> (f64, f64, f64) {
+    if records.is_empty() {
+        return (0.0, 0.0, 0.0);
+    }
+
+    let sum: f64 = records.iter().map(|r| r.value).sum();
+    let count = records.len() as f64;
+    let mean = sum / count;
+
+    let variance: f64 = records.iter()
+        .map(|r| (r.value - mean).powi(2))
+        .sum::<f64>() / count;
+    let std_dev = variance.sqrt();
+
+    (mean, variance, std_dev)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_valid_record() {
+        let record = DataRecord::new(1, 42.5, "2023-10-01T12:00:00Z".to_string());
+        assert!(record.is_valid());
+    }
+
+    #[test]
+    fn test_invalid_record() {
+        let record1 = DataRecord::new(0, 42.5, "2023-10-01T12:00:00Z".to_string());
+        let record2 = DataRecord::new(1, f64::INFINITY, "2023-10-01T12:00:00Z".to_string());
+        let record3 = DataRecord::new(1, 42.5, "".to_string());
+        
+        assert!(!record1.is_valid());
+        assert!(!record2.is_valid());
+        assert!(!record3.is_valid());
+    }
+
+    #[test]
+    fn test_process_csv() -> Result<(), Box<dyn Error>> {
+        let mut temp_file = NamedTempFile::new()?;
+        writeln!(temp_file, "1,42.5,2023-10-01T12:00:00Z")?;
+        writeln!(temp_file, "2,37.8,2023-10-01T12:05:00Z")?;
+        writeln!(temp_file, "# Comment line")?;
+        writeln!(temp_file, "")?;
+        writeln!(temp_file, "3,29.1,2023-10-01T12:10:00Z")?;
+
+        let records = process_csv_file(temp_file.path().to_str().unwrap())?;
+        assert_eq!(records.len(), 3);
+        assert_eq!(records[0].id, 1);
+        assert_eq!(records[1].value, 37.8);
+        assert_eq!(records[2].timestamp, "2023-10-01T12:10:00Z");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_statistics() {
+        let records = vec![
+            DataRecord::new(1, 10.0, "timestamp1".to_string()),
+            DataRecord::new(2, 20.0, "timestamp2".to_string()),
+            DataRecord::new(3, 30.0, "timestamp3".to_string()),
+        ];
+
+        let (mean, variance, std_dev) = calculate_statistics(&records);
+        assert_eq!(mean, 20.0);
+        assert_eq!(variance, 66.66666666666667);
+        assert_eq!(std_dev, 8.16496580927726);
+    }
 }

@@ -1,3 +1,4 @@
+
 use std::collections::HashMap;
 use std::env;
 use std::fs;
@@ -18,30 +19,33 @@ impl Config {
             }
 
             if let Some((key, value)) = trimmed.split_once('=') {
-                let key = key.trim().to_string();
-                let processed_value = Self::process_value(value.trim());
-                values.insert(key, processed_value);
+                let processed_value = Self::substitute_env_vars(value.trim());
+                values.insert(key.trim().to_string(), processed_value);
             }
         }
 
         Ok(Config { values })
     }
 
-    fn process_value(value: &str) -> String {
-        if value.starts_with('$') {
-            let var_name = &value[1..];
-            env::var(var_name).unwrap_or_else(|_| value.to_string())
-        } else {
-            value.to_string()
+    fn substitute_env_vars(input: &str) -> String {
+        let mut result = input.to_string();
+        for (key, value) in env::vars() {
+            let placeholder = format!("${{{}}}", key);
+            result = result.replace(&placeholder, &value);
         }
+        result
     }
 
     pub fn get(&self, key: &str) -> Option<&String> {
         self.values.get(key)
     }
 
-    pub fn contains_key(&self, key: &str) -> bool {
-        self.values.contains_key(key)
+    pub fn get_or_default(&self, key: &str, default: &str) -> String {
+        self.values
+            .get(key)
+            .map(|s| s.as_str())
+            .unwrap_or(default)
+            .to_string()
     }
 }
 
@@ -69,23 +73,23 @@ mod tests {
 
     #[test]
     fn test_env_substitution() {
-        env::set_var("DB_PASSWORD", "secret123");
-        
+        env::set_var("APP_ENV", "production");
         let mut file = NamedTempFile::new().unwrap();
-        writeln!(file, "PASSWORD=$DB_PASSWORD").unwrap();
-        writeln!(file, "OTHER=plain_value").unwrap();
+        writeln!(file, "ENVIRONMENT=${{APP_ENV}}").unwrap();
+        writeln!(file, "PATH=/opt/${APP_ENV}/bin").unwrap();
 
         let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
-        assert_eq!(config.get("PASSWORD"), Some(&"secret123".to_string()));
-        assert_eq!(config.get("OTHER"), Some(&"plain_value".to_string()));
+        assert_eq!(config.get("ENVIRONMENT"), Some(&"production".to_string()));
+        assert_eq!(config.get("PATH"), Some(&"/opt/${APP_ENV}/bin".to_string()));
     }
 
     #[test]
-    fn test_missing_env_var() {
+    fn test_get_or_default() {
         let mut file = NamedTempFile::new().unwrap();
-        writeln!(file, "VALUE=$NONEXISTENT_VAR").unwrap();
+        writeln!(file, "EXISTING=value").unwrap();
 
         let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
-        assert_eq!(config.get("VALUE"), Some(&"$NONEXISTENT_VAR".to_string()));
+        assert_eq!(config.get_or_default("EXISTING", "default"), "value");
+        assert_eq!(config.get_or_default("MISSING", "default"), "default");
     }
 }

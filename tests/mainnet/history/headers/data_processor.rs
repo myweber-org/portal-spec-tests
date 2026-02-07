@@ -1,95 +1,55 @@
-
 use std::error::Error;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
-#[derive(Debug)]
-pub struct DataRecord {
-    pub id: u32,
-    pub value: f64,
-    pub category: String,
-}
-
 pub struct DataProcessor {
-    records: Vec<DataRecord>,
+    delimiter: char,
+    has_header: bool,
 }
 
 impl DataProcessor {
-    pub fn new() -> Self {
+    pub fn new(delimiter: char, has_header: bool) -> Self {
         DataProcessor {
-            records: Vec::new(),
+            delimiter,
+            has_header,
         }
     }
 
-    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<usize, Box<dyn Error>> {
-        let file = File::open(path)?;
+    pub fn process_file<P: AsRef<Path>>(&self, file_path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let file = File::open(file_path)?;
         let reader = BufReader::new(file);
-        let mut count = 0;
+        let mut records = Vec::new();
+        let mut lines = reader.lines();
 
-        for (line_num, line) in reader.lines().enumerate() {
-            let line = line?;
+        if self.has_header {
+            lines.next();
+        }
+
+        for line_result in lines {
+            let line = line_result?;
+            let record: Vec<String> = line
+                .split(self.delimiter)
+                .map(|field| field.trim().to_string())
+                .collect();
             
-            if line_num == 0 {
-                continue;
+            if !record.is_empty() {
+                records.push(record);
             }
-
-            let parts: Vec<&str> = line.split(',').collect();
-            if parts.len() != 3 {
-                continue;
-            }
-
-            let id = match parts[0].parse::<u32>() {
-                Ok(id) => id,
-                Err(_) => continue,
-            };
-
-            let value = match parts[1].parse::<f64>() {
-                Ok(value) => value,
-                Err(_) => continue,
-            };
-
-            let category = parts[2].trim().to_string();
-
-            if value < 0.0 {
-                continue;
-            }
-
-            self.records.push(DataRecord {
-                id,
-                value,
-                category,
-            });
-            count += 1;
         }
 
-        Ok(count)
+        Ok(records)
     }
 
-    pub fn calculate_average(&self) -> Option<f64> {
-        if self.records.is_empty() {
-            return None;
-        }
-
-        let sum: f64 = self.records.iter().map(|r| r.value).sum();
-        Some(sum / self.records.len() as f64)
+    pub fn validate_record(&self, record: &[String], expected_fields: usize) -> bool {
+        record.len() == expected_fields && record.iter().all(|field| !field.is_empty())
     }
 
-    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
-        self.records
-            .iter()
-            .filter(|record| record.category == category)
+    pub fn extract_column(&self, data: &[Vec<String>], column_index: usize) -> Vec<String> {
+        data.iter()
+            .filter_map(|record| record.get(column_index))
+            .cloned()
             .collect()
-    }
-
-    pub fn get_max_value(&self) -> Option<&DataRecord> {
-        self.records.iter().max_by(|a, b| {
-            a.value.partial_cmp(&b.value).unwrap_or(std::cmp::Ordering::Equal)
-        })
-    }
-
-    pub fn record_count(&self) -> usize {
-        self.records.len()
     }
 }
 
@@ -100,78 +60,39 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_data_processor() {
-        let mut processor = DataProcessor::new();
-        assert_eq!(processor.record_count(), 0);
-        assert_eq!(processor.calculate_average(), None);
+    fn test_process_csv() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,city").unwrap();
+        writeln!(temp_file, "Alice,30,New York").unwrap();
+        writeln!(temp_file, "Bob,25,London").unwrap();
+
+        let processor = DataProcessor::new(',', true);
+        let result = processor.process_file(temp_file.path()).unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], vec!["Alice", "30", "New York"]);
+        assert_eq!(result[1], vec!["Bob", "25", "London"]);
     }
 
     #[test]
-    fn test_load_csv() {
-        let mut file = NamedTempFile::new().unwrap();
-        writeln!(file, "id,value,category").unwrap();
-        writeln!(file, "1,10.5,type_a").unwrap();
-        writeln!(file, "2,20.3,type_b").unwrap();
-        writeln!(file, "3,15.7,type_a").unwrap();
+    fn test_validate_record() {
+        let processor = DataProcessor::new(',', false);
+        let valid_record = vec!["field1".to_string(), "field2".to_string()];
+        let invalid_record = vec!["".to_string(), "field2".to_string()];
 
-        let mut processor = DataProcessor::new();
-        let result = processor.load_from_csv(file.path());
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), 3);
-        assert_eq!(processor.record_count(), 3);
-        
-        let avg = processor.calculate_average();
-        assert!(avg.is_some());
-        assert!((avg.unwrap() - 15.5).abs() < 0.1);
+        assert!(processor.validate_record(&valid_record, 2));
+        assert!(!processor.validate_record(&invalid_record, 2));
     }
 
     #[test]
-    fn test_filter_category() {
-        let mut processor = DataProcessor::new();
-        processor.records.push(DataRecord {
-            id: 1,
-            value: 10.0,
-            category: "A".to_string(),
-        });
-        processor.records.push(DataRecord {
-            id: 2,
-            value: 20.0,
-            category: "B".to_string(),
-        });
-        processor.records.push(DataRecord {
-            id: 3,
-            value: 30.0,
-            category: "A".to_string(),
-        });
+    fn test_extract_column() {
+        let data = vec![
+            vec!["a".to_string(), "b".to_string()],
+            vec!["c".to_string(), "d".to_string()],
+        ];
+        let processor = DataProcessor::new(',', false);
+        let column = processor.extract_column(&data, 0);
 
-        let filtered = processor.filter_by_category("A");
-        assert_eq!(filtered.len(), 2);
-        assert_eq!(filtered[0].id, 1);
-        assert_eq!(filtered[1].id, 3);
-    }
-
-    #[test]
-    fn test_max_value() {
-        let mut processor = DataProcessor::new();
-        processor.records.push(DataRecord {
-            id: 1,
-            value: 10.0,
-            category: "A".to_string(),
-        });
-        processor.records.push(DataRecord {
-            id: 2,
-            value: 30.0,
-            category: "B".to_string(),
-        });
-        processor.records.push(DataRecord {
-            id: 3,
-            value: 20.0,
-            category: "A".to_string(),
-        });
-
-        let max_record = processor.get_max_value();
-        assert!(max_record.is_some());
-        assert_eq!(max_record.unwrap().id, 2);
-        assert_eq!(max_record.unwrap().value, 30.0);
+        assert_eq!(column, vec!["a".to_string(), "c".to_string()]);
     }
 }

@@ -139,4 +139,81 @@ mod tests {
         assert_eq!(counts.get(&LogLevel::ERROR), Some(&1));
         assert_eq!(counts.get(&LogLevel::DEBUG), None);
     }
+}use serde::Deserialize;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+
+#[derive(Debug, Deserialize)]
+struct LogEntry {
+    timestamp: String,
+    level: String,
+    message: String,
+    component: Option<String>,
+}
+
+#[derive(Debug)]
+struct LogFilter {
+    level_filter: Option<String>,
+    component_filter: Option<String>,
+}
+
+impl LogFilter {
+    fn new(level: Option<&str>, component: Option<&str>) -> Self {
+        LogFilter {
+            level_filter: level.map(|s| s.to_lowercase()),
+            component_filter: component.map(|s| s.to_string()),
+        }
+    }
+
+    fn matches(&self, entry: &LogEntry) -> bool {
+        if let Some(ref level_filter) = self.level_filter {
+            if entry.level.to_lowercase() != *level_filter {
+                return false;
+            }
+        }
+
+        if let Some(ref component_filter) = self.component_filter {
+            match entry.component {
+                Some(ref component) if component == component_filter => (),
+                _ => return false,
+            }
+        }
+
+        true
+    }
+}
+
+fn parse_log_file(path: &str, filter: &LogFilter) -> Result<Vec<LogEntry>, Box<dyn std::error::Error>> {
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+    let mut entries = Vec::new();
+
+    for line in reader.lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        match serde_json::from_str::<LogEntry>(&line) {
+            Ok(entry) if filter.matches(&entry) => entries.push(entry),
+            Ok(_) => continue,
+            Err(e) => eprintln!("Failed to parse line: {} - {}", line, e),
+        }
+    }
+
+    Ok(entries)
+}
+
+fn main() {
+    let filter = LogFilter::new(Some("error"), Some("database"));
+    
+    match parse_log_file("logs/app.log", &filter) {
+        Ok(entries) => {
+            println!("Found {} matching log entries:", entries.len());
+            for entry in entries {
+                println!("[{}] {}: {}", entry.timestamp, entry.level, entry.message);
+            }
+        }
+        Err(e) => eprintln!("Error processing log file: {}", e),
+    }
 }

@@ -178,3 +178,71 @@ pub fn process_encryption() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
+use std::fs;
+use std::io::{self, Read, Write};
+use std::path::Path;
+
+const DEFAULT_KEY: u8 = 0xAA;
+
+pub fn encrypt_file(input_path: &Path, output_path: &Path, key: Option<u8>) -> io::Result<()> {
+    let key = key.unwrap_or(DEFAULT_KEY);
+    
+    let mut input_file = fs::File::open(input_path)?;
+    let mut buffer = Vec::new();
+    input_file.read_to_end(&mut buffer)?;
+    
+    let encrypted_data: Vec<u8> = buffer.iter()
+        .map(|&byte| byte ^ key)
+        .collect();
+    
+    let mut output_file = fs::File::create(output_path)?;
+    output_file.write_all(&encrypted_data)?;
+    
+    Ok(())
+}
+
+pub fn decrypt_file(input_path: &Path, output_path: &Path, key: Option<u8>) -> io::Result<()> {
+    encrypt_file(input_path, output_path, key)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+    
+    #[test]
+    fn test_encryption_decryption() {
+        let original_data = b"Hello, World! This is a test message.";
+        
+        let input_file = NamedTempFile::new().unwrap();
+        let encrypted_file = NamedTempFile::new().unwrap();
+        let decrypted_file = NamedTempFile::new().unwrap();
+        
+        fs::write(input_file.path(), original_data).unwrap();
+        
+        encrypt_file(input_file.path(), encrypted_file.path(), Some(0x55)).unwrap();
+        decrypt_file(encrypted_file.path(), decrypted_file.path(), Some(0x55)).unwrap();
+        
+        let decrypted_data = fs::read(decrypted_file.path()).unwrap();
+        assert_eq!(original_data.as_slice(), decrypted_data.as_slice());
+    }
+    
+    #[test]
+    fn test_different_keys_produce_different_results() {
+        let data = b"Test data";
+        
+        let file1 = NamedTempFile::new().unwrap();
+        let file2 = NamedTempFile::new().unwrap();
+        
+        let temp_input = NamedTempFile::new().unwrap();
+        fs::write(temp_input.path(), data).unwrap();
+        
+        encrypt_file(temp_input.path(), file1.path(), Some(0x10)).unwrap();
+        encrypt_file(temp_input.path(), file2.path(), Some(0x20)).unwrap();
+        
+        let result1 = fs::read(file1.path()).unwrap();
+        let result2 = fs::read(file2.path()).unwrap();
+        
+        assert_ne!(result1, result2);
+    }
+}

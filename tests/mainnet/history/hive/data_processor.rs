@@ -475,3 +475,200 @@ mod tests {
         assert!(not_found.is_none());
     }
 }
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    id: u32,
+    name: String,
+    value: f64,
+    tags: Vec<String>,
+}
+
+#[derive(Debug)]
+pub enum ValidationError {
+    InvalidId,
+    EmptyName,
+    NegativeValue,
+    DuplicateTag,
+}
+
+impl fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ValidationError::InvalidId => write!(f, "ID must be greater than zero"),
+            ValidationError::EmptyName => write!(f, "Name cannot be empty"),
+            ValidationError::NegativeValue => write!(f, "Value must be non-negative"),
+            ValidationError::DuplicateTag => write!(f, "Tags contain duplicates"),
+        }
+    }
+}
+
+impl Error for ValidationError {}
+
+impl DataRecord {
+    pub fn new(id: u32, name: String, value: f64, tags: Vec<String>) -> Self {
+        DataRecord {
+            id,
+            name,
+            value,
+            tags,
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        if self.id == 0 {
+            return Err(ValidationError::InvalidId);
+        }
+        
+        if self.name.trim().is_empty() {
+            return Err(ValidationError::EmptyName);
+        }
+        
+        if self.value < 0.0 {
+            return Err(ValidationError::NegativeValue);
+        }
+        
+        let mut seen_tags = std::collections::HashSet::new();
+        for tag in &self.tags {
+            if !seen_tags.insert(tag) {
+                return Err(ValidationError::DuplicateTag);
+            }
+        }
+        
+        Ok(())
+    }
+
+    pub fn transform(&mut self, multiplier: f64) {
+        self.value *= multiplier;
+        self.name = self.name.to_uppercase();
+    }
+
+    pub fn add_tag(&mut self, tag: String) {
+        if !self.tags.contains(&tag) {
+            self.tags.push(tag);
+        }
+    }
+}
+
+pub struct DataProcessor {
+    records: HashMap<u32, DataRecord>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: HashMap::new(),
+        }
+    }
+
+    pub fn add_record(&mut self, record: DataRecord) -> Result<(), ValidationError> {
+        record.validate()?;
+        
+        if self.records.contains_key(&record.id) {
+            return Err(ValidationError::InvalidId);
+        }
+        
+        self.records.insert(record.id, record);
+        Ok(())
+    }
+
+    pub fn process_records(&mut self, multiplier: f64) {
+        for record in self.records.values_mut() {
+            record.transform(multiplier);
+        }
+    }
+
+    pub fn get_statistics(&self) -> (f64, f64, f64) {
+        let count = self.records.len() as f64;
+        if count == 0.0 {
+            return (0.0, 0.0, 0.0);
+        }
+
+        let sum: f64 = self.records.values().map(|r| r.value).sum();
+        let avg = sum / count;
+        
+        let variance: f64 = self.records.values()
+            .map(|r| (r.value - avg).powi(2))
+            .sum::<f64>() / count;
+        
+        (sum, avg, variance.sqrt())
+    }
+
+    pub fn filter_by_tag(&self, tag: &str) -> Vec<&DataRecord> {
+        self.records.values()
+            .filter(|record| record.tags.contains(&tag.to_string()))
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_record() {
+        let record = DataRecord::new(
+            1,
+            "test".to_string(),
+            100.0,
+            vec!["tag1".to_string(), "tag2".to_string()],
+        );
+        assert!(record.validate().is_ok());
+    }
+
+    #[test]
+    fn test_invalid_id() {
+        let record = DataRecord::new(
+            0,
+            "test".to_string(),
+            100.0,
+            vec!["tag1".to_string()],
+        );
+        assert!(matches!(record.validate(), Err(ValidationError::InvalidId)));
+    }
+
+    #[test]
+    fn test_duplicate_tags() {
+        let record = DataRecord::new(
+            1,
+            "test".to_string(),
+            100.0,
+            vec!["tag1".to_string(), "tag1".to_string()],
+        );
+        assert!(matches!(record.validate(), Err(ValidationError::DuplicateTag)));
+    }
+
+    #[test]
+    fn test_data_processor() {
+        let mut processor = DataProcessor::new();
+        
+        let record1 = DataRecord::new(
+            1,
+            "record1".to_string(),
+            10.0,
+            vec!["important".to_string()],
+        );
+        
+        let record2 = DataRecord::new(
+            2,
+            "record2".to_string(),
+            20.0,
+            vec!["important".to_string(), "urgent".to_string()],
+        );
+        
+        assert!(processor.add_record(record1).is_ok());
+        assert!(processor.add_record(record2).is_ok());
+        
+        processor.process_records(2.0);
+        
+        let (sum, avg, _) = processor.get_statistics();
+        assert_eq!(sum, 60.0);
+        assert_eq!(avg, 30.0);
+        
+        let important_records = processor.filter_by_tag("important");
+        assert_eq!(important_records.len(), 2);
+    }
+}

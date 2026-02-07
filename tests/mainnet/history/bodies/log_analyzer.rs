@@ -207,4 +207,129 @@ pub fn analyze_logs(path: &str) -> Result<HashMap<String, usize>, Box<dyn std::e
     let mut analyzer = LogAnalyzer::new();
     analyzer.parse_log_file(path)?;
     Ok(analyzer.get_statistics())
+}use std::collections::HashMap;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug)]
+pub struct LogSummary {
+    pub total_lines: usize,
+    pub error_count: usize,
+    pub warning_count: usize,
+    pub info_count: usize,
+    pub ip_addresses: HashMap<String, usize>,
+    pub top_endpoints: HashMap<String, usize>,
+}
+
+impl LogSummary {
+    pub fn new() -> Self {
+        LogSummary {
+            total_lines: 0,
+            error_count: 0,
+            warning_count: 0,
+            info_count: 0,
+            ip_addresses: HashMap::new(),
+            top_endpoints: HashMap::new(),
+        }
+    }
+
+    pub fn analyze_file<P: AsRef<Path>>(path: P) -> std::io::Result<Self> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut summary = LogSummary::new();
+
+        for line in reader.lines() {
+            let line = line?;
+            summary.process_line(&line);
+        }
+
+        Ok(summary)
+    }
+
+    fn process_line(&mut self, line: &str) {
+        self.total_lines += 1;
+
+        if line.contains("[ERROR]") {
+            self.error_count += 1;
+        } else if line.contains("[WARN]") {
+            self.warning_count += 1;
+        } else if line.contains("[INFO]") {
+            self.info_count += 1;
+        }
+
+        if let Some(ip) = extract_ip_address(line) {
+            *self.ip_addresses.entry(ip).or_insert(0) += 1;
+        }
+
+        if let Some(endpoint) = extract_endpoint(line) {
+            *self.top_endpoints.entry(endpoint).or_insert(0) += 1;
+        }
+    }
+
+    pub fn print_summary(&self) {
+        println!("Log Analysis Summary:");
+        println!("Total lines: {}", self.total_lines);
+        println!("Errors: {}", self.error_count);
+        println!("Warnings: {}", self.warning_count);
+        println!("Info messages: {}", self.info_count);
+        
+        if !self.ip_addresses.is_empty() {
+            println!("\nTop IP addresses:");
+            let mut ips: Vec<_> = self.ip_addresses.iter().collect();
+            ips.sort_by(|a, b| b.1.cmp(a.1));
+            for (ip, count) in ips.iter().take(5) {
+                println!("  {}: {}", ip, count);
+            }
+        }
+
+        if !self.top_endpoints.is_empty() {
+            println!("\nTop endpoints:");
+            let mut endpoints: Vec<_> = self.top_endpoints.iter().collect();
+            endpoints.sort_by(|a, b| b.1.cmp(a.1));
+            for (endpoint, count) in endpoints.iter().take(5) {
+                println!("  {}: {}", endpoint, count);
+            }
+        }
+    }
+}
+
+fn extract_ip_address(line: &str) -> Option<String> {
+    let ip_pattern = regex::Regex::new(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b").unwrap();
+    ip_pattern.find(line).map(|m| m.as_str().to_string())
+}
+
+fn extract_endpoint(line: &str) -> Option<String> {
+    let endpoint_pattern = regex::Regex::new(r#""(GET|POST|PUT|DELETE)\s+([^"\s]+)"#).unwrap();
+    endpoint_pattern.captures(line)
+        .and_then(|caps| caps.get(2))
+        .map(|m| m.as_str().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_log_summary_creation() {
+        let summary = LogSummary::new();
+        assert_eq!(summary.total_lines, 0);
+        assert_eq!(summary.error_count, 0);
+        assert_eq!(summary.warning_count, 0);
+        assert_eq!(summary.info_count, 0);
+    }
+
+    #[test]
+    fn test_ip_extraction() {
+        let line = "192.168.1.1 - - [10/Oct/2023:13:55:36 +0000] \"GET /api/users HTTP/1.1\"";
+        let ip = extract_ip_address(line);
+        assert_eq!(ip, Some("192.168.1.1".to_string()));
+    }
+
+    #[test]
+    fn test_endpoint_extraction() {
+        let line = "192.168.1.1 - - [10/Oct/2023:13:55:36 +0000] \"GET /api/users HTTP/1.1\"";
+        let endpoint = extract_endpoint(line);
+        assert_eq!(endpoint, Some("/api/users".to_string()));
+    }
 }

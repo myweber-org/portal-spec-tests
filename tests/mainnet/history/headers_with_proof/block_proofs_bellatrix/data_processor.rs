@@ -1,56 +1,66 @@
-
+use csv::Reader;
+use serde::Deserialize;
 use std::error::Error;
 use std::fs::File;
-use std::io::{BufRead, BufReader};
-use std::path::Path;
+
+#[derive(Debug, Deserialize)]
+struct Record {
+    id: u32,
+    value: f64,
+    category: String,
+}
 
 pub struct DataProcessor {
-    delimiter: char,
-    has_header: bool,
+    records: Vec<Record>,
 }
 
 impl DataProcessor {
-    pub fn new(delimiter: char, has_header: bool) -> Self {
+    pub fn new() -> Self {
         DataProcessor {
-            delimiter,
-            has_header,
+            records: Vec::new(),
         }
     }
 
-    pub fn process_file<P: AsRef<Path>>(&self, file_path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+    pub fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
         let file = File::open(file_path)?;
-        let reader = BufReader::new(file);
+        let mut rdr = Reader::from_reader(file);
         
-        let mut records = Vec::new();
-        let mut lines = reader.lines();
-        
-        if self.has_header {
-            lines.next();
+        for result in rdr.deserialize() {
+            let record: Record = result?;
+            self.records.push(record);
         }
         
-        for line_result in lines {
-            let line = line_result?;
-            let fields: Vec<String> = line
-                .split(self.delimiter)
-                .map(|s| s.trim().to_string())
-                .collect();
-            
-            if !fields.is_empty() {
-                records.push(fields);
-            }
+        Ok(())
+    }
+
+    pub fn calculate_statistics(&self) -> (f64, f64, f64) {
+        if self.records.is_empty() {
+            return (0.0, 0.0, 0.0);
         }
-        
-        Ok(records)
+
+        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        let count = self.records.len() as f64;
+        let mean = sum / count;
+
+        let variance: f64 = self.records
+            .iter()
+            .map(|r| (r.value - mean).powi(2))
+            .sum::<f64>() / count;
+
+        let std_dev = variance.sqrt();
+
+        (mean, variance, std_dev)
     }
-    
-    pub fn validate_record(&self, record: &[String]) -> bool {
-        !record.is_empty() && record.iter().all(|field| !field.is_empty())
-    }
-    
-    pub fn extract_column(&self, data: &[Vec<String>], column_index: usize) -> Vec<String> {
-        data.iter()
-            .filter_map(|record| record.get(column_index).cloned())
+
+    pub fn filter_by_category(&self, category: &str) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|r| r.category == category)
             .collect()
+    }
+
+    pub fn get_record_count(&self) -> usize {
+        self.records.len()
     }
 }
 
@@ -59,42 +69,25 @@ mod tests {
     use super::*;
     use std::io::Write;
     use tempfile::NamedTempFile;
-    
+
     #[test]
-    fn test_process_csv() {
+    fn test_data_processing() {
+        let mut processor = DataProcessor::new();
+        
         let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "name,age,city").unwrap();
-        writeln!(temp_file, "Alice,30,New York").unwrap();
-        writeln!(temp_file, "Bob,25,London").unwrap();
+        writeln!(temp_file, "id,value,category").unwrap();
+        writeln!(temp_file, "1,10.5,A").unwrap();
+        writeln!(temp_file, "2,20.3,B").unwrap();
+        writeln!(temp_file, "3,15.7,A").unwrap();
         
-        let processor = DataProcessor::new(',', true);
-        let result = processor.process_file(temp_file.path()).unwrap();
+        let result = processor.load_from_csv(temp_file.path().to_str().unwrap());
+        assert!(result.is_ok());
+        assert_eq!(processor.get_record_count(), 3);
         
-        assert_eq!(result.len(), 2);
-        assert_eq!(result[0], vec!["Alice", "30", "New York"]);
-        assert_eq!(result[1], vec!["Bob", "25", "London"]);
-    }
-    
-    #[test]
-    fn test_validate_record() {
-        let processor = DataProcessor::new(',', false);
-        let valid_record = vec!["data".to_string(), "value".to_string()];
-        let invalid_record = vec!["".to_string(), "value".to_string()];
+        let stats = processor.calculate_statistics();
+        assert!((stats.0 - 15.5).abs() < 0.001);
         
-        assert!(processor.validate_record(&valid_record));
-        assert!(!processor.validate_record(&invalid_record));
-    }
-    
-    #[test]
-    fn test_extract_column() {
-        let data = vec![
-            vec!["a".to_string(), "b".to_string(), "c".to_string()],
-            vec!["d".to_string(), "e".to_string(), "f".to_string()],
-        ];
-        
-        let processor = DataProcessor::new(',', false);
-        let column = processor.extract_column(&data, 1);
-        
-        assert_eq!(column, vec!["b".to_string(), "e".to_string()]);
+        let category_a = processor.filter_by_category("A");
+        assert_eq!(category_a.len(), 2);
     }
 }

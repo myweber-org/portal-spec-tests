@@ -113,3 +113,28 @@ mod tests {
         assert_eq!(fahrenheit_to_celsius(-40.0), -40.0);
     }
 }
+pub fn fahrenheit_to_celsius(f: f64) -> f64 {
+    (f - 32.0) * 5.0 / 9.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_freezing_point() {
+        assert_eq!(fahrenheit_to_celsius(32.0), 0.0);
+    }
+
+    #[test]
+    fn test_boiling_point() {
+        let result = fahrenheit_to_celsius(212.0);
+        assert!((result - 100.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_negative_temperature() {
+        let result = fahrenheit_to_celsius(-40.0);
+        assert!((result + 40.0).abs() < 1e-10);
+    }
+}

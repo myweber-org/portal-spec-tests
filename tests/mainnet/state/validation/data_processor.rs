@@ -898,3 +898,117 @@ mod tests {
         assert_eq!(stats, (10.0, 30.0, 20.0));
     }
 }
+use std::collections::HashMap;
+
+pub struct DataProcessor {
+    data: HashMap<String, Vec<f64>>,
+    validation_rules: ValidationRules,
+}
+
+pub struct ValidationRules {
+    min_value: f64,
+    max_value: f64,
+    required_keys: Vec<String>,
+}
+
+impl DataProcessor {
+    pub fn new(rules: ValidationRules) -> Self {
+        DataProcessor {
+            data: HashMap::new(),
+            validation_rules: rules,
+        }
+    }
+
+    pub fn add_dataset(&mut self, key: String, values: Vec<f64>) -> Result<(), String> {
+        if !self.validation_rules.required_keys.contains(&key) {
+            return Err(format!("Key '{}' is not in required keys list", key));
+        }
+
+        for &value in &values {
+            if value < self.validation_rules.min_value || value > self.validation_rules.max_value {
+                return Err(format!("Value {} is out of allowed range [{}, {}]", 
+                    value, self.validation_rules.min_value, self.validation_rules.max_value));
+            }
+        }
+
+        self.data.insert(key, values);
+        Ok(())
+    }
+
+    pub fn calculate_statistics(&self, key: &str) -> Option<Statistics> {
+        self.data.get(key).map(|values| {
+            let sum: f64 = values.iter().sum();
+            let count = values.len() as f64;
+            let mean = sum / count;
+            
+            let variance: f64 = values.iter()
+                .map(|&x| (x - mean).powi(2))
+                .sum::<f64>() / count;
+            
+            Statistics {
+                mean,
+                variance,
+                count: values.len(),
+                min: *values.iter().fold(&f64::INFINITY, |a, b| a.min(b)),
+                max: *values.iter().fold(&f64::NEG_INFINITY, |a, b| a.max(b)),
+            }
+        })
+    }
+
+    pub fn transform_data<F>(&self, key: &str, transformer: F) -> Option<Vec<f64>>
+    where
+        F: Fn(f64) -> f64,
+    {
+        self.data.get(key).map(|values| {
+            values.iter().map(|&x| transformer(x)).collect()
+        })
+    }
+}
+
+pub struct Statistics {
+    pub mean: f64,
+    pub variance: f64,
+    pub count: usize,
+    pub min: f64,
+    pub max: f64,
+}
+
+impl ValidationRules {
+    pub fn new(min: f64, max: f64, required: Vec<String>) -> Self {
+        ValidationRules {
+            min_value: min,
+            max_value: max,
+            required_keys: required,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_data_processor() {
+        let rules = ValidationRules::new(
+            0.0,
+            100.0,
+            vec!["temperature".to_string(), "humidity".to_string()]
+        );
+        
+        let mut processor = DataProcessor::new(rules);
+        
+        assert!(processor.add_dataset(
+            "temperature".to_string(),
+            vec![20.5, 22.3, 19.8, 25.1]
+        ).is_ok());
+        
+        assert!(processor.add_dataset(
+            "pressure".to_string(),
+            vec![1013.25]
+        ).is_err());
+        
+        let stats = processor.calculate_statistics("temperature").unwrap();
+        assert!(stats.mean > 0.0);
+        assert_eq!(stats.count, 4);
+    }
+}

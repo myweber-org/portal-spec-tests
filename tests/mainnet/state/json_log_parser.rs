@@ -119,4 +119,121 @@ mod tests {
         let network_errors = parser.get_component_errors("network");
         assert_eq!(network_errors.len(), 0);
     }
+}use serde::{Deserialize, Serialize};
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
+pub enum LogSeverity {
+    DEBUG,
+    INFO,
+    WARN,
+    ERROR,
+    CRITICAL,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct LogEntry {
+    pub timestamp: String,
+    pub severity: LogSeverity,
+    pub service: String,
+    pub message: String,
+    pub metadata: Option<serde_json::Value>,
+}
+
+pub struct LogParser {
+    min_severity: LogSeverity,
+}
+
+impl LogParser {
+    pub fn new(min_severity: LogSeverity) -> Self {
+        LogParser { min_severity }
+    }
+
+    pub fn parse_file<P: AsRef<Path>>(&self, path: P) -> Result<Vec<LogEntry>, Box<dyn std::error::Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut entries = Vec::new();
+
+        for line in reader.lines() {
+            let line = line?;
+            if line.trim().is_empty() {
+                continue;
+            }
+
+            match serde_json::from_str::<LogEntry>(&line) {
+                Ok(entry) => {
+                    if self.should_include(&entry.severity) {
+                        entries.push(entry);
+                    }
+                }
+                Err(e) => eprintln!("Failed to parse line: {} - Error: {}", line, e),
+            }
+        }
+
+        Ok(entries)
+    }
+
+    fn should_include(&self, severity: &LogSeverity) -> bool {
+        let severity_value = match severity {
+            LogSeverity::DEBUG => 0,
+            LogSeverity::INFO => 1,
+            LogSeverity::WARN => 2,
+            LogSeverity::ERROR => 3,
+            LogSeverity::CRITICAL => 4,
+        };
+
+        let min_value = match self.min_severity {
+            LogSeverity::DEBUG => 0,
+            LogSeverity::INFO => 1,
+            LogSeverity::WARN => 2,
+            LogSeverity::ERROR => 3,
+            LogSeverity::CRITICAL => 4,
+        };
+
+        severity_value >= min_value
+    }
+
+    pub fn filter_by_service(&self, entries: &[LogEntry], service: &str) -> Vec<LogEntry> {
+        entries
+            .iter()
+            .filter(|entry| entry.service == service)
+            .cloned()
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_parse_and_filter() {
+        let log_data = r#"
+            {"timestamp": "2023-10-01T12:00:00Z", "severity": "INFO", "service": "api", "message": "Request received"}
+            {"timestamp": "2023-10-01T12:00:01Z", "severity": "ERROR", "service": "db", "message": "Connection failed", "metadata": {"attempt": 3}}
+            {"timestamp": "2023-10-01T12:00:02Z", "severity": "DEBUG", "service": "api", "message": "Processing data"}
+            {"timestamp": "2023-10-01T12:00:03Z", "severity": "WARN", "service": "cache", "message": "High memory usage"}
+        "#;
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+        write!(temp_file, "{}", log_data).unwrap();
+
+        let parser = LogParser::new(LogSeverity::WARN);
+        let entries = parser.parse_file(temp_file.path()).unwrap();
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].severity, LogSeverity::ERROR);
+        assert_eq!(entries[1].severity, LogSeverity::WARN);
+
+        let api_logs = parser.filter_by_service(&entries, "api");
+        assert_eq!(api_logs.len(), 0);
+
+        let db_logs = parser.filter_by_service(&entries, "db");
+        assert_eq!(db_logs.len(), 1);
+        assert_eq!(db_logs[0].service, "db");
+    }
 }

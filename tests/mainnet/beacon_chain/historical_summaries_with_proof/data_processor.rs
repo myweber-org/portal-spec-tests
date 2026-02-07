@@ -216,3 +216,148 @@ mod tests {
         assert!(!processor.validate_record(&["".to_string(), "b".to_string()]));
     }
 }
+use std::collections::HashMap;
+
+pub struct DataProcessor {
+    cache: HashMap<String, Vec<f64>>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            cache: HashMap::new(),
+        }
+    }
+
+    pub fn validate_numeric_data(&self, data: &[f64]) -> Result<(), String> {
+        if data.is_empty() {
+            return Err("Empty data set provided".to_string());
+        }
+
+        for &value in data {
+            if !value.is_finite() {
+                return Err(format!("Invalid numeric value detected: {}", value));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn calculate_statistics(&mut self, key: &str, data: &[f64]) -> Result<Statistics, String> {
+        self.validate_numeric_data(data)?;
+
+        let mean = data.iter().sum::<f64>() / data.len() as f64;
+        let variance = data.iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>() / data.len() as f64;
+        let std_dev = variance.sqrt();
+
+        let sorted_data = {
+            let mut sorted = data.to_vec();
+            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            sorted
+        };
+
+        let median = if sorted_data.len() % 2 == 0 {
+            let mid = sorted_data.len() / 2;
+            (sorted_data[mid - 1] + sorted_data[mid]) / 2.0
+        } else {
+            sorted_data[sorted_data.len() / 2]
+        };
+
+        let stats = Statistics {
+            mean,
+            median,
+            std_dev,
+            min: *sorted_data.first().unwrap(),
+            max: *sorted_data.last().unwrap(),
+            count: data.len(),
+        };
+
+        self.cache.insert(key.to_string(), data.to_vec());
+
+        Ok(stats)
+    }
+
+    pub fn normalize_data(&self, data: &[f64]) -> Vec<f64> {
+        if data.len() < 2 {
+            return data.to_vec();
+        }
+
+        let min = data.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+        let max = data.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+        let range = max - min;
+
+        if range.abs() < f64::EPSILON {
+            return vec![0.5; data.len()];
+        }
+
+        data.iter()
+            .map(|&x| (x - min) / range)
+            .collect()
+    }
+
+    pub fn get_cached_data(&self, key: &str) -> Option<&Vec<f64>> {
+        self.cache.get(key)
+    }
+
+    pub fn clear_cache(&mut self) {
+        self.cache.clear();
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Statistics {
+    pub mean: f64,
+    pub median: f64,
+    pub std_dev: f64,
+    pub min: f64,
+    pub max: f64,
+    pub count: usize,
+}
+
+impl std::fmt::Display for Statistics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Statistics: n={}, mean={:.4}, median={:.4}, std={:.4}, range=[{:.4}, {:.4}]",
+            self.count, self.mean, self.median, self.std_dev, self.min, self.max
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validation() {
+        let processor = DataProcessor::new();
+        assert!(processor.validate_numeric_data(&[1.0, 2.0, 3.0]).is_ok());
+        assert!(processor.validate_numeric_data(&[]).is_err());
+    }
+
+    #[test]
+    fn test_statistics_calculation() {
+        let mut processor = DataProcessor::new();
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let stats = processor.calculate_statistics("test", &data).unwrap();
+
+        assert_eq!(stats.mean, 3.0);
+        assert_eq!(stats.median, 3.0);
+        assert_eq!(stats.min, 1.0);
+        assert_eq!(stats.max, 5.0);
+        assert_eq!(stats.count, 5);
+    }
+
+    #[test]
+    fn test_normalization() {
+        let processor = DataProcessor::new();
+        let data = vec![10.0, 20.0, 30.0];
+        let normalized = processor.normalize_data(&data);
+
+        assert_eq!(normalized[0], 0.0);
+        assert_eq!(normalized[1], 0.5);
+        assert_eq!(normalized[2], 1.0);
+    }
+}

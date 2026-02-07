@@ -158,4 +158,93 @@ mod tests {
 
         assert_eq!(processor.calculate_total(), 20.0);
     }
+}use std::error::Error;
+use std::fs::File;
+use std::path::Path;
+
+pub struct DataRecord {
+    id: u32,
+    value: f64,
+    category: String,
+}
+
+impl DataRecord {
+    pub fn new(id: u32, value: f64, category: String) -> Result<Self, &'static str> {
+        if value < 0.0 {
+            return Err("Value cannot be negative");
+        }
+        if category.trim().is_empty() {
+            return Err("Category cannot be empty");
+        }
+        Ok(Self { id, value, category })
+    }
+
+    pub fn calculate_tax(&self, rate: f64) -> f64 {
+        self.value * rate.max(0.0)
+    }
+}
+
+pub fn load_csv_data(file_path: &str) -> Result<Vec<DataRecord>, Box<dyn Error>> {
+    let path = Path::new(file_path);
+    let file = File::open(path)?;
+    let mut rdr = csv::Reader::from_reader(file);
+    let mut records = Vec::new();
+
+    for result in rdr.deserialize() {
+        let raw_record: (u32, f64, String) = result?;
+        match DataRecord::new(raw_record.0, raw_record.1, raw_record.2) {
+            Ok(record) => records.push(record),
+            Err(e) => eprintln!("Skipping invalid record: {}", e),
+        }
+    }
+
+    if records.is_empty() {
+        return Err("No valid records found".into());
+    }
+
+    Ok(records)
+}
+
+pub fn process_records(records: &[DataRecord]) -> (f64, f64, usize) {
+    let total: f64 = records.iter().map(|r| r.value).sum();
+    let avg = total / records.len() as f64;
+    let valid_count = records.len();
+    (total, avg, valid_count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+    use std::io::Write;
+
+    #[test]
+    fn test_valid_record_creation() {
+        let record = DataRecord::new(1, 100.0, "Electronics".to_string());
+        assert!(record.is_ok());
+        let record = record.unwrap();
+        assert_eq!(record.id, 1);
+        assert_eq!(record.value, 100.0);
+        assert_eq!(record.calculate_tax(0.1), 10.0);
+    }
+
+    #[test]
+    fn test_invalid_record() {
+        assert!(DataRecord::new(2, -50.0, "Books".to_string()).is_err());
+        assert!(DataRecord::new(3, 50.0, "".to_string()).is_err());
+    }
+
+    #[test]
+    fn test_csv_loading() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,value,category").unwrap();
+        writeln!(temp_file, "1,100.0,Electronics").unwrap();
+        writeln!(temp_file, "2,50.5,Books").unwrap();
+        
+        let records = load_csv_data(temp_file.path().to_str().unwrap());
+        assert!(records.is_ok());
+        let records = records.unwrap();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].category, "Electronics");
+    }
 }

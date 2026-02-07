@@ -377,4 +377,108 @@ mod tests {
             assert!((sum - 1.0).abs() < 0.0001 || sum == 0.0);
         }
     }
+}use csv::Reader;
+use serde::Deserialize;
+use std::error::Error;
+use std::fs::File;
+
+#[derive(Debug, Deserialize)]
+struct Record {
+    id: u32,
+    value: f64,
+    category: String,
+}
+
+pub struct DataProcessor {
+    records: Vec<Record>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let mut reader = Reader::from_reader(file);
+        
+        for result in reader.deserialize() {
+            let record: Record = result?;
+            self.records.push(record);
+        }
+        
+        Ok(())
+    }
+
+    pub fn calculate_mean(&self) -> Option<f64> {
+        if self.records.is_empty() {
+            return None;
+        }
+        
+        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        Some(sum / self.records.len() as f64)
+    }
+
+    pub fn filter_by_category(&self, category: &str) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|r| r.category == category)
+            .collect()
+    }
+
+    pub fn find_max_value(&self) -> Option<&Record> {
+        self.records.iter().max_by(|a, b| {
+            a.value.partial_cmp(&b.value).unwrap()
+        })
+    }
+
+    pub fn get_summary(&self) -> Summary {
+        let count = self.records.len();
+        let mean = self.calculate_mean();
+        let max_record = self.find_max_value();
+        
+        Summary {
+            record_count: count,
+            average_value: mean,
+            max_value: max_record.map(|r| r.value),
+            categories: self.get_unique_categories(),
+        }
+    }
+
+    fn get_unique_categories(&self) -> Vec<String> {
+        let mut categories: Vec<String> = self.records
+            .iter()
+            .map(|r| r.category.clone())
+            .collect();
+        
+        categories.sort();
+        categories.dedup();
+        categories
+    }
+}
+
+pub struct Summary {
+    pub record_count: usize,
+    pub average_value: Option<f64>,
+    pub max_value: Option<f64>,
+    pub categories: Vec<String>,
+}
+
+impl std::fmt::Display for Summary {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "Data Summary:")?;
+        writeln!(f, "  Total records: {}", self.record_count)?;
+        
+        if let Some(avg) = self.average_value {
+            writeln!(f, "  Average value: {:.2}", avg)?;
+        }
+        
+        if let Some(max) = self.max_value {
+            writeln!(f, "  Maximum value: {:.2}", max)?;
+        }
+        
+        writeln!(f, "  Categories: {}", self.categories.join(", "))
+    }
 }

@@ -251,4 +251,103 @@ pub fn load_config_with_fallback(paths: &[&str]) -> Result<AppConfig, Box<dyn st
     }
     
     Err("Could not load configuration from any provided path".into())
+}use std::collections::HashMap;
+use std::env;
+use regex::Regex;
+
+pub struct ConfigParser {
+    values: HashMap<String, String>,
+}
+
+impl ConfigParser {
+    pub fn new() -> Self {
+        ConfigParser {
+            values: HashMap::new(),
+        }
+    }
+
+    pub fn load_from_str(&mut self, content: &str) -> Result<(), String> {
+        let re = Regex::new(r"^\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*(.*?)\s*$").unwrap();
+        
+        for (line_num, line) in content.lines().enumerate() {
+            if line.trim().is_empty() || line.trim().starts_with('#') {
+                continue;
+            }
+            
+            if let Some(caps) = re.captures(line) {
+                let key = caps[1].to_string();
+                let mut value = caps[2].to_string();
+                
+                value = self.substitute_env_vars(&value)?;
+                self.values.insert(key, value);
+            } else {
+                return Err(format!("Invalid syntax at line {}", line_num + 1));
+            }
+        }
+        
+        Ok(())
+    }
+    
+    fn substitute_env_vars(&self, input: &str) -> Result<String, String> {
+        let re = Regex::new(r"\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}").unwrap();
+        let mut result = input.to_string();
+        
+        for caps in re.captures_iter(input) {
+            let var_name = &caps[1];
+            match env::var(var_name) {
+                Ok(val) => {
+                    result = result.replace(&caps[0], &val);
+                }
+                Err(_) => {
+                    return Err(format!("Environment variable '{}' not found", var_name));
+                }
+            }
+        }
+        
+        Ok(result)
+    }
+    
+    pub fn get(&self, key: &str) -> Option<&String> {
+        self.values.get(key)
+    }
+    
+    pub fn get_or_default(&self, key: &str, default: &str) -> String {
+        self.values.get(key).map(|s| s.as_str()).unwrap_or(default).to_string()
+    }
+    
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.values.contains_key(key)
+    }
+    
+    pub fn keys(&self) -> impl Iterator<Item = &String> {
+        self.values.keys()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_basic_parsing() {
+        let mut parser = ConfigParser::new();
+        let config = "APP_NAME=MyApp\nVERSION=1.0.0\nDEBUG=true";
+        
+        assert!(parser.load_from_str(config).is_ok());
+        assert_eq!(parser.get("APP_NAME"), Some(&"MyApp".to_string()));
+        assert_eq!(parser.get("VERSION"), Some(&"1.0.0".to_string()));
+        assert_eq!(parser.get("DEBUG"), Some(&"true".to_string()));
+    }
+    
+    #[test]
+    fn test_env_substitution() {
+        env::set_var("HOME_DIR", "/home/user");
+        
+        let mut parser = ConfigParser::new();
+        let config = "DATA_PATH=${HOME_DIR}/data\nCACHE=${HOME_DIR}/cache";
+        
+        assert!(parser.load_from_str(config).is_ok());
+        assert_eq!(parser.get("DATA_PATH"), Some(&"/home/user/data".to_string()));
+        assert_eq!(parser.get("CACHE"), Some(&"/home/user/cache".to_string()));
+    }
 }

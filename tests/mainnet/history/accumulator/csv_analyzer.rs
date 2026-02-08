@@ -182,4 +182,149 @@ mod tests {
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0][1], "Alice");
     }
+}use std::error::Error;
+use std::fs::File;
+use std::path::Path;
+
+pub struct CsvAnalyzer {
+    headers: Vec<String>,
+    rows: Vec<Vec<String>>,
+}
+
+impl CsvAnalyzer {
+    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn Error>> {
+        let file = File::open(path)?;
+        let mut rdr = csv::Reader::from_reader(file);
+        
+        let headers: Vec<String> = rdr.headers()?.iter().map(|s| s.to_string()).collect();
+        let mut rows = Vec::new();
+        
+        for result in rdr.records() {
+            let record = result?;
+            rows.push(record.iter().map(|s| s.to_string()).collect());
+        }
+        
+        Ok(CsvAnalyzer { headers, rows })
+    }
+    
+    pub fn column_stats(&self, column_index: usize) -> Option<ColumnStatistics> {
+        if column_index >= self.headers.len() {
+            return None;
+        }
+        
+        let mut numeric_values = Vec::new();
+        let mut text_values = Vec::new();
+        
+        for row in &self.rows {
+            if column_index < row.len() {
+                let value = &row[column_index];
+                if let Ok(num) = value.parse::<f64>() {
+                    numeric_values.push(num);
+                } else {
+                    text_values.push(value.clone());
+                }
+            }
+        }
+        
+        Some(ColumnStatistics {
+            column_name: self.headers[column_index].clone(),
+            total_count: self.rows.len(),
+            numeric_count: numeric_values.len(),
+            text_count: text_values.len(),
+            numeric_stats: if !numeric_values.is_empty() {
+                Some(NumericStats::from_values(&numeric_values))
+            } else {
+                None
+            },
+            unique_text_values: if !text_values.is_empty() {
+                Some(text_values.iter().collect::<std::collections::HashSet<_>>().len())
+            } else {
+                None
+            },
+        })
+    }
+    
+    pub fn summary(&self) -> CsvSummary {
+        CsvSummary {
+            column_count: self.headers.len(),
+            row_count: self.rows.len(),
+            headers: self.headers.clone(),
+        }
+    }
+}
+
+pub struct ColumnStatistics {
+    column_name: String,
+    total_count: usize,
+    numeric_count: usize,
+    text_count: usize,
+    numeric_stats: Option<NumericStats>,
+    unique_text_values: Option<usize>,
+}
+
+pub struct NumericStats {
+    min: f64,
+    max: f64,
+    mean: f64,
+    median: f64,
+}
+
+impl NumericStats {
+    fn from_values(values: &[f64]) -> Self {
+        let mut sorted = values.to_vec();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        
+        let min = sorted[0];
+        let max = sorted[sorted.len() - 1];
+        let sum: f64 = sorted.iter().sum();
+        let mean = sum / sorted.len() as f64;
+        
+        let median = if sorted.len() % 2 == 0 {
+            let mid = sorted.len() / 2;
+            (sorted[mid - 1] + sorted[mid]) / 2.0
+        } else {
+            sorted[sorted.len() / 2]
+        };
+        
+        NumericStats { min, max, mean, median }
+    }
+}
+
+pub struct CsvSummary {
+    column_count: usize,
+    row_count: usize,
+    headers: Vec<String>,
+}
+
+impl std::fmt::Display for ColumnStatistics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "Column: {}", self.column_name)?;
+        writeln!(f, "  Total values: {}", self.total_count)?;
+        writeln!(f, "  Numeric values: {}", self.numeric_count)?;
+        writeln!(f, "  Text values: {}", self.text_count)?;
+        
+        if let Some(stats) = &self.numeric_stats {
+            writeln!(f, "  Numeric statistics:")?;
+            writeln!(f, "    Min: {:.2}", stats.min)?;
+            writeln!(f, "    Max: {:.2}", stats.max)?;
+            writeln!(f, "    Mean: {:.2}", stats.mean)?;
+            writeln!(f, "    Median: {:.2}", stats.median)?;
+        }
+        
+        if let Some(unique) = self.unique_text_values {
+            writeln!(f, "  Unique text values: {}", unique)?;
+        }
+        
+        Ok(())
+    }
+}
+
+impl std::fmt::Display for CsvSummary {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "CSV Summary:")?;
+        writeln!(f, "  Columns: {}", self.column_count)?;
+        writeln!(f, "  Rows: {}", self.row_count)?;
+        writeln!(f, "  Headers: {}", self.headers.join(", "))?;
+        Ok(())
+    }
 }

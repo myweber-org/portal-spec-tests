@@ -141,3 +141,90 @@ mod tests {
         Ok(())
     }
 }
+use std::fs;
+use std::io::{self, Read, Write};
+use std::path::Path;
+
+pub struct FileEncryptor {
+    key: Vec<u8>,
+}
+
+impl FileEncryptor {
+    pub fn new(key: &str) -> Self {
+        FileEncryptor {
+            key: key.as_bytes().to_vec(),
+        }
+    }
+
+    pub fn encrypt_file(&self, input_path: &Path, output_path: &Path) -> io::Result<()> {
+        let mut input_file = fs::File::open(input_path)?;
+        let mut output_file = fs::File::create(output_path)?;
+        
+        let mut buffer = [0; 4096];
+        let mut key_index = 0;
+        
+        loop {
+            let bytes_read = input_file.read(&mut buffer)?;
+            if bytes_read == 0 {
+                break;
+            }
+            
+            let mut encrypted_buffer = buffer[..bytes_read].to_vec();
+            self.xor_transform(&mut encrypted_buffer, &mut key_index);
+            
+            output_file.write_all(&encrypted_buffer)?;
+        }
+        
+        Ok(())
+    }
+
+    pub fn decrypt_file(&self, input_path: &Path, output_path: &Path) -> io::Result<()> {
+        self.encrypt_file(input_path, output_path)
+    }
+
+    fn xor_transform(&self, data: &mut [u8], key_index: &mut usize) {
+        if self.key.is_empty() {
+            return;
+        }
+        
+        for byte in data.iter_mut() {
+            *byte ^= self.key[*key_index];
+            *key_index = (*key_index + 1) % self.key.len();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+    use std::io::Write;
+
+    #[test]
+    fn test_encryption_decryption() {
+        let encryptor = FileEncryptor::new("secret_key");
+        let original_content = b"Hello, this is a test message for encryption!";
+        
+        let mut input_file = NamedTempFile::new().unwrap();
+        input_file.write_all(original_content).unwrap();
+        
+        let encrypted_file = NamedTempFile::new().unwrap();
+        let decrypted_file = NamedTempFile::new().unwrap();
+        
+        encryptor.encrypt_file(input_file.path(), encrypted_file.path()).unwrap();
+        encryptor.decrypt_file(encrypted_file.path(), decrypted_file.path()).unwrap();
+        
+        let decrypted_content = fs::read(decrypted_file.path()).unwrap();
+        assert_eq!(original_content.to_vec(), decrypted_content);
+    }
+
+    #[test]
+    fn test_empty_key() {
+        let encryptor = FileEncryptor::new("");
+        let mut data = vec![1, 2, 3, 4, 5];
+        let mut key_index = 0;
+        
+        encryptor.xor_transform(&mut data, &mut key_index);
+        assert_eq!(data, vec![1, 2, 3, 4, 5]);
+    }
+}

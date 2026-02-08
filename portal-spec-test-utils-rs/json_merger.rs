@@ -79,3 +79,66 @@ mod tests {
         assert_eq!(parsed["city"], Value::String("London".to_string()));
     }
 }
+use serde_json::{json, Value};
+use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
+
+pub fn merge_json_files<P: AsRef<Path>>(
+    input_paths: &[P],
+    output_path: P,
+    dedup_key: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut merged_map = HashMap::new();
+    let mut merged_array = Vec::new();
+
+    for path in input_paths {
+        let content = fs::read_to_string(path)?;
+        let json_data: Value = serde_json::from_str(&content)?;
+
+        if let Value::Array(arr) = json_data {
+            for item in arr {
+                if let Some(key_value) = item.get(dedup_key) {
+                    if let Some(key_str) = key_value.as_str() {
+                        merged_map.insert(key_str.to_string(), item.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    for (_, value) in merged_map {
+        merged_array.push(value);
+    }
+
+    let output_json = json!(merged_array);
+    fs::write(output_path, output_json.to_string())?;
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_merge_json_files() {
+        let file1 = NamedTempFile::new().unwrap();
+        let file2 = NamedTempFile::new().unwrap();
+        let output_file = NamedTempFile::new().unwrap();
+
+        let data1 = r#"[{"id": "1", "name": "Alice"}, {"id": "2", "name": "Bob"}]"#;
+        let data2 = r#"[{"id": "2", "name": "Robert"}, {"id": "3", "name": "Charlie"}]"#;
+
+        fs::write(&file1, data1).unwrap();
+        fs::write(&file2, data2).unwrap();
+
+        merge_json_files(&[&file1, &file2], &output_file, "id").unwrap();
+
+        let result = fs::read_to_string(output_file).unwrap();
+        let parsed: Value = serde_json::from_str(&result).unwrap();
+
+        assert_eq!(parsed.as_array().unwrap().len(), 3);
+    }
+}

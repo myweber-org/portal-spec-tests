@@ -1183,4 +1183,128 @@ mod tests {
         let result = processor.process_dataset("invalid", invalid_data);
         assert!(result.is_err());
     }
+}use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    id: u32,
+    value: f64,
+    timestamp: i64,
+}
+
+#[derive(Debug)]
+pub enum ValidationError {
+    InvalidId,
+    InvalidValue,
+    InvalidTimestamp,
+}
+
+impl fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ValidationError::InvalidId => write!(f, "ID must be greater than 0"),
+            ValidationError::InvalidValue => write!(f, "Value must be between 0.0 and 1000.0"),
+            ValidationError::InvalidTimestamp => write!(f, "Timestamp must be non-negative"),
+        }
+    }
+}
+
+impl Error for ValidationError {}
+
+impl DataRecord {
+    pub fn new(id: u32, value: f64, timestamp: i64) -> Result<Self, ValidationError> {
+        if id == 0 {
+            return Err(ValidationError::InvalidId);
+        }
+        if value < 0.0 || value > 1000.0 {
+            return Err(ValidationError::InvalidValue);
+        }
+        if timestamp < 0 {
+            return Err(ValidationError::InvalidTimestamp);
+        }
+        
+        Ok(DataRecord {
+            id,
+            value,
+            timestamp,
+        })
+    }
+    
+    pub fn transform(&self, multiplier: f64) -> Result<f64, &'static str> {
+        if multiplier <= 0.0 {
+            return Err("Multiplier must be positive");
+        }
+        
+        let transformed = self.value * multiplier;
+        if transformed > 10000.0 {
+            return Err("Transformed value exceeds maximum limit");
+        }
+        
+        Ok(transformed)
+    }
+    
+    pub fn normalize(&self, base_value: f64) -> f64 {
+        if base_value == 0.0 {
+            return 0.0;
+        }
+        self.value / base_value
+    }
+}
+
+pub fn process_records(records: &[DataRecord]) -> (f64, f64, usize) {
+    if records.is_empty() {
+        return (0.0, 0.0, 0);
+    }
+    
+    let sum: f64 = records.iter().map(|r| r.value).sum();
+    let count = records.len();
+    let average = sum / count as f64;
+    
+    let max_value = records
+        .iter()
+        .map(|r| r.value)
+        .fold(f64::NEG_INFINITY, f64::max);
+    
+    (average, max_value, count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_valid_record_creation() {
+        let record = DataRecord::new(1, 500.0, 1234567890).unwrap();
+        assert_eq!(record.id, 1);
+        assert_eq!(record.value, 500.0);
+        assert_eq!(record.timestamp, 1234567890);
+    }
+    
+    #[test]
+    fn test_invalid_id() {
+        let result = DataRecord::new(0, 500.0, 1234567890);
+        assert!(matches!(result, Err(ValidationError::InvalidId)));
+    }
+    
+    #[test]
+    fn test_transform_valid() {
+        let record = DataRecord::new(1, 100.0, 1234567890).unwrap();
+        let result = record.transform(2.5).unwrap();
+        assert_eq!(result, 250.0);
+    }
+    
+    #[test]
+    fn test_process_records() {
+        let records = vec![
+            DataRecord::new(1, 100.0, 1000).unwrap(),
+            DataRecord::new(2, 200.0, 2000).unwrap(),
+            DataRecord::new(3, 300.0, 3000).unwrap(),
+        ];
+        
+        let (avg, max, count) = process_records(&records);
+        assert_eq!(avg, 200.0);
+        assert_eq!(max, 300.0);
+        assert_eq!(count, 3);
+    }
 }

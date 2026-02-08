@@ -220,4 +220,39 @@ impl Default for JsonMerger {
     fn default() -> Self {
         Self::new()
     }
+}use serde_json::{json, Value};
+use std::fs;
+use std::path::Path;
+
+pub fn merge_json_files(file_paths: &[&str], output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let mut merged_array = Vec::new();
+
+    for file_path in file_paths {
+        let path = Path::new(file_path);
+        if !path.exists() {
+            eprintln!("Warning: File {} not found, skipping.", file_path);
+            continue;
+        }
+
+        let content = fs::read_to_string(path)?;
+        let parsed: Value = serde_json::from_str(&content)?;
+
+        match parsed {
+            Value::Array(arr) => {
+                merged_array.extend(arr);
+            }
+            Value::Object(_) => {
+                merged_array.push(parsed);
+            }
+            _ => {
+                eprintln!("Warning: File {} does not contain a JSON object or array, skipping.", file_path);
+            }
+        }
+    }
+
+    let output_value = json!(merged_array);
+    let output_string = serde_json::to_string_pretty(&output_value)?;
+    fs::write(output_path, output_string)?;
+
+    Ok(())
 }

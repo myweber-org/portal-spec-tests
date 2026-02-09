@@ -302,3 +302,108 @@ mod tests {
         assert!((stats.1 - 20.3).abs() < 0.1);
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufReader, BufWriter};
+use csv::{ReaderBuilder, WriterBuilder};
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub category: String,
+}
+
+pub struct DataProcessor {
+    records: Vec<DataRecord>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        let mut csv_reader = ReaderBuilder::new()
+            .has_headers(true)
+            .from_reader(reader);
+
+        self.records.clear();
+
+        for result in csv_reader.deserialize() {
+            let record: DataRecord = result?;
+            self.records.push(record);
+        }
+
+        Ok(())
+    }
+
+    pub fn save_to_csv(&self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::create(file_path)?;
+        let writer = BufWriter::new(file);
+        let mut csv_writer = WriterBuilder::new()
+            .has_headers(true)
+            .from_writer(writer);
+
+        for record in &self.records {
+            csv_writer.serialize(record)?;
+        }
+
+        csv_writer.flush()?;
+        Ok(())
+    }
+
+    pub fn filter_by_category(&self, category: &str) -> Vec<DataRecord> {
+        self.records
+            .iter()
+            .filter(|record| record.category == category)
+            .cloned()
+            .collect()
+    }
+
+    pub fn filter_by_value_range(&self, min: f64, max: f64) -> Vec<DataRecord> {
+        self.records
+            .iter()
+            .filter(|record| record.value >= min && record.value <= max)
+            .cloned()
+            .collect()
+    }
+
+    pub fn calculate_average(&self) -> f64 {
+        if self.records.is_empty() {
+            return 0.0;
+        }
+
+        let total: f64 = self.records.iter().map(|record| record.value).sum();
+        total / self.records.len() as f64
+    }
+
+    pub fn add_record(&mut self, record: DataRecord) {
+        self.records.push(record);
+    }
+
+    pub fn remove_record(&mut self, id: u32) -> bool {
+        let initial_len = self.records.len();
+        self.records.retain(|record| record.id != id);
+        self.records.len() < initial_len
+    }
+
+    pub fn get_record_count(&self) -> usize {
+        self.records.len()
+    }
+
+    pub fn clear(&mut self) {
+        self.records.clear();
+    }
+}
+
+impl Default for DataProcessor {
+    fn default() -> Self {
+        Self::new()
+    }
+}

@@ -42,3 +42,72 @@ mod tests {
         assert_eq!(extract_numbers(""), "");
     }
 }
+use std::collections::HashSet;
+
+pub struct DataCleaner {
+    dedupe_set: HashSet<String>,
+}
+
+impl DataCleaner {
+    pub fn new() -> Self {
+        DataCleaner {
+            dedupe_set: HashSet::new(),
+        }
+    }
+
+    pub fn deduplicate(&mut self, input: &str) -> Option<String> {
+        if self.dedupe_set.insert(input.to_string()) {
+            Some(input.to_string())
+        } else {
+            None
+        }
+    }
+
+    pub fn normalize_whitespace(input: &str) -> String {
+        input
+            .split_whitespace()
+            .collect::<Vec<&str>>()
+            .join(" ")
+    }
+
+    pub fn trim_and_lowercase(input: &str) -> String {
+        input.trim().to_lowercase()
+    }
+
+    pub fn clean_pipeline(&mut self, input: &str) -> Option<String> {
+        let normalized = Self::normalize_whitespace(input);
+        let cleaned = Self::trim_and_lowercase(&normalized);
+        self.deduplicate(&cleaned)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_deduplication() {
+        let mut cleaner = DataCleaner::new();
+        assert!(cleaner.deduplicate("test").is_some());
+        assert!(cleaner.deduplicate("test").is_none());
+        assert!(cleaner.deduplicate("another").is_some());
+    }
+
+    #[test]
+    fn test_normalization() {
+        assert_eq!(
+            DataCleaner::normalize_whitespace("  hello   world  "),
+            "hello world"
+        );
+    }
+
+    #[test]
+    fn test_clean_pipeline() {
+        let mut cleaner = DataCleaner::new();
+        let result = cleaner.clean_pipeline("  Hello   World  ");
+        assert_eq!(result, Some("hello world".to_string()));
+        
+        let duplicate = cleaner.clean_pipeline("  hello   world  ");
+        assert!(duplicate.is_none());
+    }
+}

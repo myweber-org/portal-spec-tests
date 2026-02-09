@@ -1,31 +1,88 @@
+use std::collections::HashMap;
 use std::net::Ipv4Addr;
 
 #[derive(Debug, Clone)]
 pub struct NetworkPacket {
     source_ip: Ipv4Addr,
     destination_ip: Ipv4Addr,
-    protocol: Protocol,
+    protocol: u8,
     payload: Vec<u8>,
     timestamp: u64,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum Protocol {
-    TCP,
-    UDP,
-    ICMP,
-    Other(u8),
+#[derive(Debug)]
+pub struct PacketAnalyzer {
+    packet_count: usize,
+    protocol_stats: HashMap<u8, usize>,
+    ip_traffic: HashMap<Ipv4Addr, usize>,
+}
+
+impl PacketAnalyzer {
+    pub fn new() -> Self {
+        PacketAnalyzer {
+            packet_count: 0,
+            protocol_stats: HashMap::new(),
+            ip_traffic: HashMap::new(),
+        }
+    }
+
+    pub fn process_packet(&mut self, packet: &NetworkPacket) {
+        self.packet_count += 1;
+
+        *self.protocol_stats.entry(packet.protocol).or_insert(0) += 1;
+        *self.ip_traffic.entry(packet.source_ip).or_insert(0) += 1;
+        *self.ip_traffic.entry(packet.destination_ip).or_insert(0) += 1;
+    }
+
+    pub fn get_statistics(&self) -> AnalyzerStats {
+        let mut top_protocols: Vec<(u8, usize)> = self.protocol_stats
+            .iter()
+            .map(|(&proto, &count)| (proto, count))
+            .collect();
+        
+        top_protocols.sort_by(|a, b| b.1.cmp(&a.1));
+        
+        let mut top_ips: Vec<(Ipv4Addr, usize)> = self.ip_traffic
+            .iter()
+            .map(|(&ip, &count)| (ip, count))
+            .collect();
+        
+        top_ips.sort_by(|a, b| b.1.cmp(&a.1));
+
+        AnalyzerStats {
+            total_packets: self.packet_count,
+            unique_protocols: self.protocol_stats.len(),
+            unique_ips: self.ip_traffic.len(),
+            top_protocols: top_protocols.into_iter().take(5).collect(),
+            top_ips: top_ips.into_iter().take(10).collect(),
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.packet_count = 0;
+        self.protocol_stats.clear();
+        self.ip_traffic.clear();
+    }
+}
+
+#[derive(Debug)]
+pub struct AnalyzerStats {
+    pub total_packets: usize,
+    pub unique_protocols: usize,
+    pub unique_ips: usize,
+    pub top_protocols: Vec<(u8, usize)>,
+    pub top_ips: Vec<(Ipv4Addr, usize)>,
 }
 
 impl NetworkPacket {
     pub fn new(
         source_ip: Ipv4Addr,
         destination_ip: Ipv4Addr,
-        protocol: Protocol,
+        protocol: u8,
         payload: Vec<u8>,
         timestamp: u64,
     ) -> Self {
-        Self {
+        NetworkPacket {
             source_ip,
             destination_ip,
             protocol,
@@ -34,193 +91,69 @@ impl NetworkPacket {
         }
     }
 
-    pub fn is_from_ip(&self, ip: &Ipv4Addr) -> bool {
-        &self.source_ip == ip
-    }
-
-    pub fn is_to_ip(&self, ip: &Ipv4Addr) -> bool {
-        &self.destination_ip == ip
-    }
-
-    pub fn protocol_matches(&self, protocol: &Protocol) -> bool {
-        &self.protocol == protocol
+    pub fn is_valid(&self) -> bool {
+        !self.payload.is_empty() && self.timestamp > 0
     }
 
     pub fn payload_size(&self) -> usize {
         self.payload.len()
     }
-
-    pub fn contains_pattern(&self, pattern: &[u8]) -> bool {
-        self.payload.windows(pattern.len()).any(|window| window == pattern)
-    }
 }
 
-pub struct PacketFilter {
-    source_ip_filter: Option<Ipv4Addr>,
-    destination_ip_filter: Option<Ipv4Addr>,
-    protocol_filter: Option<Protocol>,
-    min_payload_size: Option<usize>,
-    pattern_filter: Option<Vec<u8>>,
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-impl PacketFilter {
-    pub fn new() -> Self {
-        Self {
-            source_ip_filter: None,
-            destination_ip_filter: None,
-            protocol_filter: None,
-            min_payload_size: None,
-            pattern_filter: None,
-        }
-    }
-
-    pub fn set_source_ip_filter(&mut self, ip: Ipv4Addr) -> &mut Self {
-        self.source_ip_filter = Some(ip);
-        self
-    }
-
-    pub fn set_destination_ip_filter(&mut self, ip: Ipv4Addr) -> &mut Self {
-        self.destination_ip_filter = Some(ip);
-        self
-    }
-
-    pub fn set_protocol_filter(&mut self, protocol: Protocol) -> &mut Self {
-        self.protocol_filter = Some(protocol);
-        self
-    }
-
-    pub fn set_min_payload_size(&mut self, size: usize) -> &mut Self {
-        self.min_payload_size = Some(size);
-        self
-    }
-
-    pub fn set_pattern_filter(&mut self, pattern: Vec<u8>) -> &mut Self {
-        self.pattern_filter = Some(pattern);
-        self
-    }
-
-    pub fn matches(&self, packet: &NetworkPacket) -> bool {
-        if let Some(ref source_ip) = self.source_ip_filter {
-            if !packet.is_from_ip(source_ip) {
-                return false;
-            }
-        }
-
-        if let Some(ref dest_ip) = self.destination_ip_filter {
-            if !packet.is_to_ip(dest_ip) {
-                return false;
-            }
-        }
-
-        if let Some(ref protocol) = self.protocol_filter {
-            if !packet.protocol_matches(protocol) {
-                return false;
-            }
-        }
-
-        if let Some(min_size) = self.min_payload_size {
-            if packet.payload_size() < min_size {
-                return false;
-            }
-        }
-
-        if let Some(ref pattern) = self.pattern_filter {
-            if !packet.contains_pattern(pattern) {
-                return false;
-            }
-        }
-
-        true
-    }
-}
-
-pub fn filter_packets(packets: Vec<NetworkPacket>, filter: &PacketFilter) -> Vec<NetworkPacket> {
-    packets
-        .into_iter()
-        .filter(|packet| filter.matches(packet))
-        .collect()
-}use pcap::{Capture, Device};
-use std::error::Error;
-
-pub struct PacketAnalyzer {
-    capture: Capture<pcap::Active>,
-}
-
-impl PacketAnalyzer {
-    pub fn new(interface_name: &str) -> Result<Self, Box<dyn Error>> {
-        let device = Device::list()?
-            .into_iter()
-            .find(|dev| dev.name == interface_name)
-            .ok_or_else(|| format!("Interface {} not found", interface_name))?;
-
-        let capture = Capture::from_device(device)?
-            .promisc(true)
-            .snaplen(65535)
-            .timeout(1000)
-            .open()?;
-
-        Ok(PacketAnalyzer { capture })
-    }
-
-    pub fn start_capture(&mut self, packet_count: usize) -> Result<(), Box<dyn Error>> {
-        println!("Starting packet capture on interface...");
+    #[test]
+    fn test_packet_analyzer() {
+        let mut analyzer = PacketAnalyzer::new();
         
-        for i in 0..packet_count {
-            match self.capture.next_packet() {
-                Ok(packet) => {
-                    println!("Packet {}: {} bytes captured", i + 1, packet.header.len);
-                    self.analyze_packet(&packet);
-                }
-                Err(e) => eprintln!("Error capturing packet: {}", e),
-            }
-        }
+        let packet1 = NetworkPacket::new(
+            Ipv4Addr::new(192, 168, 1, 1),
+            Ipv4Addr::new(192, 168, 1, 2),
+            6,
+            vec![1, 2, 3, 4, 5],
+            1234567890,
+        );
+
+        let packet2 = NetworkPacket::new(
+            Ipv4Addr::new(192, 168, 1, 2),
+            Ipv4Addr::new(192, 168, 1, 1),
+            17,
+            vec![6, 7, 8, 9, 10],
+            1234567891,
+        );
+
+        analyzer.process_packet(&packet1);
+        analyzer.process_packet(&packet2);
+
+        let stats = analyzer.get_statistics();
         
-        println!("Capture completed.");
-        Ok(())
+        assert_eq!(stats.total_packets, 2);
+        assert_eq!(stats.unique_protocols, 2);
+        assert_eq!(stats.unique_ips, 2);
     }
 
-    fn analyze_packet(&self, packet: &pcap::Packet) {
-        if packet.data.len() >= 14 {
-            let eth_type = u16::from_be_bytes([packet.data[12], packet.data[13]]);
-            
-            match eth_type {
-                0x0800 => println!("  Protocol: IPv4"),
-                0x0806 => println!("  Protocol: ARP"),
-                0x86DD => println!("  Protocol: IPv6"),
-                _ => println!("  Protocol: Unknown (0x{:04x})", eth_type),
-            }
-            
-            if packet.data.len() >= 34 && eth_type == 0x0800 {
-                let protocol = packet.data[23];
-                match protocol {
-                    1 => println!("  IP Protocol: ICMP"),
-                    6 => println!("  IP Protocol: TCP"),
-                    17 => println!("  IP Protocol: UDP"),
-                    _ => println!("  IP Protocol: {}", protocol),
-                }
-                
-                let src_ip = format!(
-                    "{}.{}.{}.{}",
-                    packet.data[26], packet.data[27], packet.data[28], packet.data[29]
-                );
-                let dst_ip = format!(
-                    "{}.{}.{}.{}",
-                    packet.data[30], packet.data[31], packet.data[32], packet.data[33]
-                );
-                println!("  Source IP: {}", src_ip);
-                println!("  Destination IP: {}", dst_ip);
-            }
-        }
-        
-        println!("  Raw data (first 64 bytes): {:02x?}", &packet.data[..packet.data.len().min(64)]);
-        println!();
-    }
-}
+    #[test]
+    fn test_packet_validation() {
+        let valid_packet = NetworkPacket::new(
+            Ipv4Addr::new(10, 0, 0, 1),
+            Ipv4Addr::new(10, 0, 0, 2),
+            1,
+            vec![1, 2, 3],
+            1000,
+        );
 
-pub fn list_interfaces() -> Result<(), Box<dyn Error>> {
-    println!("Available network interfaces:");
-    for device in Device::list()? {
-        println!("  {}: {}", device.name, device.desc.unwrap_or_default());
+        let invalid_packet = NetworkPacket::new(
+            Ipv4Addr::new(10, 0, 0, 1),
+            Ipv4Addr::new(10, 0, 0, 2),
+            1,
+            vec![],
+            0,
+        );
+
+        assert!(valid_packet.is_valid());
+        assert!(!invalid_packet.is_valid());
+        assert_eq!(valid_packet.payload_size(), 3);
     }
-    Ok(())
 }

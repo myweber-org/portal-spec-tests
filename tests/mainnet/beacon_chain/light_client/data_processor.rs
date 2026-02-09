@@ -162,4 +162,113 @@ mod tests {
         assert_eq!(variance, 66.66666666666667);
         assert_eq!(std_dev, 8.16496580927726);
     }
+}use csv::{Reader, Writer};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
+}
+
+pub struct DataProcessor {
+    records: Vec<Record>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let mut rdr = Reader::from_reader(file);
+        
+        for result in rdr.deserialize() {
+            let record: Record = result?;
+            self.records.push(record);
+        }
+        
+        Ok(())
+    }
+
+    pub fn filter_by_value(&self, threshold: f64) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|record| record.value >= threshold && record.active)
+            .collect()
+    }
+
+    pub fn calculate_average(&self) -> Option<f64> {
+        if self.records.is_empty() {
+            return None;
+        }
+        
+        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        Some(sum / self.records.len() as f64)
+    }
+
+    pub fn save_filtered_to_csv(&self, file_path: &str, threshold: f64) -> Result<(), Box<dyn Error>> {
+        let filtered = self.filter_by_value(threshold);
+        let file = File::create(file_path)?;
+        let mut wtr = Writer::from_writer(file);
+
+        for record in filtered {
+            wtr.serialize(record)?;
+        }
+
+        wtr.flush()?;
+        Ok(())
+    }
+
+    pub fn get_record_count(&self) -> usize {
+        self.records.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_data_processor_operations() {
+        let mut processor = DataProcessor::new();
+        
+        let test_data = vec![
+            Record { id: 1, name: "ItemA".to_string(), value: 10.5, active: true },
+            Record { id: 2, name: "ItemB".to_string(), value: 5.2, active: true },
+            Record { id: 3, name: "ItemC".to_string(), value: 15.8, active: false },
+            Record { id: 4, name: "ItemD".to_string(), value: 8.3, active: true },
+        ];
+
+        processor.records = test_data;
+
+        assert_eq!(processor.get_record_count(), 4);
+        
+        let filtered = processor.filter_by_value(8.0);
+        assert_eq!(filtered.len(), 2);
+        
+        let avg = processor.calculate_average();
+        assert!(avg.is_some());
+        assert!((avg.unwrap() - 9.95).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_csv_export() {
+        let mut processor = DataProcessor::new();
+        processor.records = vec![
+            Record { id: 1, name: "Test".to_string(), value: 12.5, active: true },
+        ];
+
+        let temp_file = NamedTempFile::new().unwrap();
+        let result = processor.save_filtered_to_csv(temp_file.path().to_str().unwrap(), 10.0);
+        assert!(result.is_ok());
+    }
 }

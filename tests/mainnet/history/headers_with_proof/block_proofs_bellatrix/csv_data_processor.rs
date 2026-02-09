@@ -1,151 +1,90 @@
-
+use csv::{Reader, Writer};
+use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fs::File;
-use std::io::{BufRead, BufReader};
-use std::path::Path;
 
-#[derive(Debug, Clone)]
-pub struct CsvRecord {
-    pub id: u32,
-    pub name: String,
-    pub value: f64,
-    pub category: String,
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    id: u32,
+    name: String,
+    category: String,
+    value: f64,
+    active: bool,
 }
 
-impl CsvRecord {
-    pub fn new(id: u32, name: String, value: f64, category: String) -> Result<Self, String> {
-        if name.is_empty() {
-            return Err("Name cannot be empty".to_string());
-        }
-        if value < 0.0 {
-            return Err("Value must be non-negative".to_string());
-        }
-        if category.is_empty() {
-            return Err("Category cannot be empty".to_string());
-        }
+fn process_csv(input_path: &str, output_path: &str, min_value: f64) -> Result<(), Box<dyn Error>> {
+    let mut reader = Reader::from_path(input_path)?;
+    let mut writer = Writer::from_path(output_path)?;
 
-        Ok(Self {
-            id,
-            name,
-            value,
-            category,
-        })
+    let mut total_records = 0;
+    let mut filtered_records = 0;
+    let mut sum_values = 0.0;
+
+    for result in reader.deserialize() {
+        let record: Record = result?;
+        total_records += 1;
+
+        if record.value >= min_value && record.active {
+            writer.serialize(&record)?;
+            filtered_records += 1;
+            sum_values += record.value;
+        }
     }
 
-    pub fn transform_value(&mut self, multiplier: f64) {
-        self.value *= multiplier;
+    writer.flush()?;
+
+    if filtered_records > 0 {
+        let average_value = sum_values / filtered_records as f64;
+        println!("Processed {} records", total_records);
+        println!("Filtered {} records with value >= {}", filtered_records, min_value);
+        println!("Average value of filtered records: {:.2}", average_value);
+    } else {
+        println!("No records matched the filter criteria");
     }
+
+    Ok(())
 }
 
-pub struct CsvProcessor {
-    records: Vec<CsvRecord>,
+fn aggregate_by_category(input_path: &str) -> Result<(), Box<dyn Error>> {
+    let mut reader = Reader::from_path(input_path)?;
+    let mut category_totals = std::collections::HashMap::new();
+    let mut category_counts = std::collections::HashMap::new();
+
+    for result in reader.deserialize() {
+        let record: Record = result?;
+        
+        if record.active {
+            let total = category_totals.entry(record.category.clone()).or_insert(0.0);
+            *total += record.value;
+            
+            let count = category_counts.entry(record.category).or_insert(0);
+            *count += 1;
+        }
+    }
+
+    println!("Aggregation by category:");
+    for (category, total) in category_totals {
+        if let Some(count) = category_counts.get(&category) {
+            let average = total / *count as f64;
+            println!("Category: {}, Total: {:.2}, Count: {}, Average: {:.2}", 
+                    category, total, count, average);
+        }
+    }
+
+    Ok(())
 }
 
-impl CsvProcessor {
-    pub fn new() -> Self {
-        Self {
-            records: Vec::new(),
+fn main() -> Result<(), Box<dyn Error>> {
+    let input_file = "data/input.csv";
+    let output_file = "data/filtered_output.csv";
+    
+    match process_csv(input_file, output_file, 50.0) {
+        Ok(_) => {
+            println!("CSV processing completed successfully");
+            aggregate_by_category(output_file)?;
         }
+        Err(e) => eprintln!("Error processing CSV: {}", e),
     }
 
-    pub fn load_from_file<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn Error>> {
-        let file = File::open(path)?;
-        let reader = BufReader::new(file);
-        let mut line_number = 0;
-
-        for line in reader.lines() {
-            line_number += 1;
-            let line = line?;
-            
-            if line.trim().is_empty() || line.starts_with('#') {
-                continue;
-            }
-
-            let parts: Vec<&str> = line.split(',').collect();
-            if parts.len() != 4 {
-                return Err(format!("Invalid CSV format at line {}", line_number).into());
-            }
-
-            let id = parts[0].parse::<u32>()
-                .map_err(|e| format!("Invalid ID at line {}: {}", line_number, e))?;
-            
-            let name = parts[1].trim().to_string();
-            
-            let value = parts[2].parse::<f64>()
-                .map_err(|e| format!("Invalid value at line {}: {}", line_number, e))?;
-            
-            let category = parts[3].trim().to_string();
-
-            let record = CsvRecord::new(id, name, value, category)
-                .map_err(|e| format!("Validation error at line {}: {}", line_number, e))?;
-            
-            self.records.push(record);
-        }
-
-        Ok(())
-    }
-
-    pub fn filter_by_category(&self, category: &str) -> Vec<&CsvRecord> {
-        self.records
-            .iter()
-            .filter(|record| record.category == category)
-            .collect()
-    }
-
-    pub fn calculate_total_value(&self) -> f64 {
-        self.records.iter().map(|record| record.value).sum()
-    }
-
-    pub fn apply_transformation(&mut self, multiplier: f64) {
-        for record in &mut self.records {
-            record.transform_value(multiplier);
-        }
-    }
-
-    pub fn get_records(&self) -> &[CsvRecord] {
-        &self.records
-    }
-
-    pub fn clear(&mut self) {
-        self.records.clear();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
-
-    #[test]
-    fn test_csv_record_creation() {
-        let record = CsvRecord::new(1, "Test".to_string(), 100.0, "A".to_string());
-        assert!(record.is_ok());
-        
-        let invalid_record = CsvRecord::new(2, "".to_string(), 50.0, "B".to_string());
-        assert!(invalid_record.is_err());
-    }
-
-    #[test]
-    fn test_csv_processor() {
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "1,Item1,100.0,CategoryA").unwrap();
-        writeln!(temp_file, "2,Item2,200.0,CategoryB").unwrap();
-        writeln!(temp_file, "3,Item3,300.0,CategoryA").unwrap();
-
-        let mut processor = CsvProcessor::new();
-        let result = processor.load_from_file(temp_file.path());
-        assert!(result.is_ok());
-        assert_eq!(processor.get_records().len(), 3);
-        
-        let filtered = processor.filter_by_category("CategoryA");
-        assert_eq!(filtered.len(), 2);
-        
-        let total = processor.calculate_total_value();
-        assert_eq!(total, 600.0);
-        
-        processor.apply_transformation(2.0);
-        let new_total = processor.calculate_total_value();
-        assert_eq!(new_total, 1200.0);
-    }
+    Ok(())
 }

@@ -191,3 +191,120 @@ mod tests {
         assert_eq!(stats.get("max").unwrap(), &5.0);
     }
 }
+use std::collections::HashMap;
+
+pub struct DataCleaner {
+    pub strict_mode: bool,
+}
+
+impl DataCleaner {
+    pub fn new(strict: bool) -> Self {
+        DataCleaner {
+            strict_mode: strict,
+        }
+    }
+
+    pub fn clean_string_vector(&self, data: Vec<Option<String>>) -> Vec<String> {
+        data.into_iter()
+            .filter_map(|item| {
+                match item {
+                    Some(s) => {
+                        let trimmed = s.trim().to_string();
+                        if trimmed.is_empty() && self.strict_mode {
+                            None
+                        } else if trimmed.is_empty() {
+                            Some("N/A".to_string())
+                        } else {
+                            Some(trimmed)
+                        }
+                    }
+                    None => {
+                        if self.strict_mode {
+                            None
+                        } else {
+                            Some("N/A".to_string())
+                        }
+                    }
+                }
+            })
+            .collect()
+    }
+
+    pub fn clean_hashmap(
+        &self,
+        data: HashMap<String, Option<f64>>,
+    ) -> HashMap<String, f64> {
+        data.into_iter()
+            .filter_map(|(key, value)| {
+                match value {
+                    Some(v) if v.is_finite() => Some((key, v)),
+                    Some(_) if self.strict_mode => None,
+                    Some(_) => Some((key, 0.0)),
+                    None if self.strict_mode => None,
+                    None => Some((key, 0.0)),
+                }
+            })
+            .collect()
+    }
+
+    pub fn calculate_stats(&self, numbers: &[f64]) -> (f64, f64, f64) {
+        if numbers.is_empty() {
+            return (0.0, 0.0, 0.0);
+        }
+
+        let sum: f64 = numbers.iter().sum();
+        let mean = sum / numbers.len() as f64;
+
+        let variance: f64 = numbers
+            .iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>()
+            / numbers.len() as f64;
+
+        let std_dev = variance.sqrt();
+
+        (sum, mean, std_dev)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_clean_string_vector_strict() {
+        let cleaner = DataCleaner::new(true);
+        let data = vec![
+            Some("  hello  ".to_string()),
+            Some("".to_string()),
+            None,
+            Some("world".to_string()),
+        ];
+        let result = cleaner.clean_string_vector(data);
+        assert_eq!(result, vec!["hello", "world"]);
+    }
+
+    #[test]
+    fn test_clean_hashmap_non_strict() {
+        let cleaner = DataCleaner::new(false);
+        let mut data = HashMap::new();
+        data.insert("temp".to_string(), Some(25.5));
+        data.insert("pressure".to_string(), None);
+        data.insert("humidity".to_string(), Some(f64::INFINITY));
+
+        let result = cleaner.clean_hashmap(data);
+        assert_eq!(result.get("temp"), Some(&25.5));
+        assert_eq!(result.get("pressure"), Some(&0.0));
+        assert_eq!(result.get("humidity"), Some(&0.0));
+    }
+
+    #[test]
+    fn test_calculate_stats() {
+        let cleaner = DataCleaner::new(false);
+        let numbers = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let (sum, mean, std_dev) = cleaner.calculate_stats(&numbers);
+        assert_eq!(sum, 15.0);
+        assert_eq!(mean, 3.0);
+        assert!((std_dev - 1.41421356).abs() < 0.0001);
+    }
+}

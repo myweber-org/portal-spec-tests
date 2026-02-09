@@ -118,3 +118,115 @@ mod tests {
         assert!(!encryptor.verify_password("wrong_password"));
     }
 }
+use std::fs;
+use std::io::{self, Read, Write};
+use std::path::Path;
+
+const DEFAULT_KEY: u8 = 0x55;
+
+pub fn encrypt_file(input_path: &str, output_path: &str, key: Option<u8>) -> io::Result<()> {
+    let encryption_key = key.unwrap_or(DEFAULT_KEY);
+    
+    let input_data = fs::read(input_path)?;
+    let encrypted_data: Vec<u8> = input_data
+        .iter()
+        .map(|byte| byte ^ encryption_key)
+        .collect();
+    
+    fs::write(output_path, encrypted_data)?;
+    Ok(())
+}
+
+pub fn decrypt_file(input_path: &str, output_path: &str, key: Option<u8>) -> io::Result<()> {
+    let decryption_key = key.unwrap_or(DEFAULT_KEY);
+    
+    let encrypted_data = fs::read(input_path)?;
+    let decrypted_data: Vec<u8> = encrypted_data
+        .iter()
+        .map(|byte| byte ^ decryption_key)
+        .collect();
+    
+    fs::write(output_path, decrypted_data)?;
+    Ok(())
+}
+
+pub fn process_stream<R: Read, W: Write>(mut reader: R, mut writer: W, key: u8) -> io::Result<()> {
+    let mut buffer = [0; 1024];
+    
+    loop {
+        let bytes_read = reader.read(&mut buffer)?;
+        if bytes_read == 0 {
+            break;
+        }
+        
+        for byte in buffer[..bytes_read].iter_mut() {
+            *byte ^= key;
+        }
+        
+        writer.write_all(&buffer[..bytes_read])?;
+    }
+    
+    writer.flush()?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_encryption_decryption() {
+        let original_text = b"Hello, World!";
+        let test_key = 0x42;
+        
+        let mut input_file = NamedTempFile::new().unwrap();
+        input_file.write_all(original_text).unwrap();
+        
+        let encrypted_file = NamedTempFile::new().unwrap();
+        let decrypted_file = NamedTempFile::new().unwrap();
+        
+        encrypt_file(
+            input_file.path().to_str().unwrap(),
+            encrypted_file.path().to_str().unwrap(),
+            Some(test_key)
+        ).unwrap();
+        
+        decrypt_file(
+            encrypted_file.path().to_str().unwrap(),
+            decrypted_file.path().to_str().unwrap(),
+            Some(test_key)
+        ).unwrap();
+        
+        let decrypted_data = fs::read(decrypted_file.path()).unwrap();
+        assert_eq!(decrypted_data, original_text);
+    }
+    
+    #[test]
+    fn test_default_key() {
+        let test_data = b"Test data for default key";
+        
+        let input_file = NamedTempFile::new().unwrap();
+        fs::write(input_file.path(), test_data).unwrap();
+        
+        let encrypted_file = NamedTempFile::new().unwrap();
+        encrypt_file(
+            input_file.path().to_str().unwrap(),
+            encrypted_file.path().to_str().unwrap(),
+            None
+        ).unwrap();
+        
+        let encrypted_data = fs::read(encrypted_file.path()).unwrap();
+        assert_ne!(encrypted_data, test_data);
+        
+        let decrypted_file = NamedTempFile::new().unwrap();
+        decrypt_file(
+            encrypted_file.path().to_str().unwrap(),
+            decrypted_file.path().to_str().unwrap(),
+            None
+        ).unwrap();
+        
+        let decrypted_data = fs::read(decrypted_file.path()).unwrap();
+        assert_eq!(decrypted_data, test_data);
+    }
+}

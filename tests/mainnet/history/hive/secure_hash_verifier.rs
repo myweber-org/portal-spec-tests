@@ -1,57 +1,56 @@
+
+use sha2::{Sha256, Digest};
+use hmac::{Hmac, Mac};
 use std::fs::File;
 use std::io::{Read, BufReader};
 use std::path::Path;
-use sha2::{Sha256, Digest};
-use blake3::Hasher as Blake3Hasher;
 
-pub enum HashAlgorithm {
-    Sha256,
-    Blake3,
+type HmacSha256 = Hmac<Sha256>;
+
+pub struct HashVerifier {
+    chunk_size: usize,
 }
 
-pub struct FileHashVerifier {
-    algorithm: HashAlgorithm,
-}
-
-impl FileHashVerifier {
-    pub fn new(algorithm: HashAlgorithm) -> Self {
-        Self { algorithm }
+impl HashVerifier {
+    pub fn new(chunk_size: usize) -> Self {
+        HashVerifier { chunk_size }
     }
 
-    pub fn calculate_hash(&self, file_path: &Path) -> Result<String, std::io::Error> {
-        let file = File::open(file_path)?;
+    pub fn calculate_file_hash(&self, file_path: &Path) -> Result<String, String> {
+        let file = File::open(file_path)
+            .map_err(|e| format!("Failed to open file: {}", e))?;
+        
         let mut reader = BufReader::new(file);
-        let mut buffer = [0u8; 8192];
+        let mut hasher = Sha256::new();
+        let mut buffer = vec![0u8; self.chunk_size];
 
-        match self.algorithm {
-            HashAlgorithm::Sha256 => {
-                let mut hasher = Sha256::new();
-                loop {
-                    let bytes_read = reader.read(&mut buffer)?;
-                    if bytes_read == 0 {
-                        break;
-                    }
-                    hasher.update(&buffer[..bytes_read]);
-                }
-                Ok(format!("{:x}", hasher.finalize()))
+        loop {
+            let bytes_read = reader.read(&mut buffer)
+                .map_err(|e| format!("Read error: {}", e))?;
+            
+            if bytes_read == 0 {
+                break;
             }
-            HashAlgorithm::Blake3 => {
-                let mut hasher = Blake3Hasher::new();
-                loop {
-                    let bytes_read = reader.read(&mut buffer)?;
-                    if bytes_read == 0 {
-                        break;
-                    }
-                    hasher.update(&buffer[..bytes_read]);
-                }
-                Ok(hasher.finalize().to_hex().to_string())
-            }
+            
+            hasher.update(&buffer[..bytes_read]);
         }
+
+        Ok(format!("{:x}", hasher.finalize()))
     }
 
-    pub fn verify_hash(&self, file_path: &Path, expected_hash: &str) -> Result<bool, std::io::Error> {
-        let calculated_hash = self.calculate_hash(file_path)?;
-        Ok(calculated_hash == expected_hash.to_lowercase())
+    pub fn verify_hmac(&self, data: &[u8], key: &[u8], expected_hmac: &str) -> bool {
+        let mut mac = HmacSha256::new_from_slice(key)
+            .expect("HMAC key length validation failed");
+        
+        mac.update(data);
+        let result = mac.finalize();
+        let code_bytes = result.into_bytes();
+        
+        hex::encode(code_bytes) == expected_hmac
+    }
+
+    pub fn compare_hashes(&self, hash1: &str, hash2: &str) -> bool {
+        hash1.eq_ignore_ascii_case(hash2)
     }
 }
 
@@ -62,26 +61,26 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_sha256_verification() {
+    fn test_hash_calculation() {
+        let verifier = HashVerifier::new(4096);
         let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "Test content for hash verification").unwrap();
         
-        let verifier = FileHashVerifier::new(HashAlgorithm::Sha256);
-        let hash = verifier.calculate_hash(temp_file.path()).unwrap();
+        writeln!(temp_file, "Test data for hashing").unwrap();
+        let hash = verifier.calculate_file_hash(temp_file.path()).unwrap();
         
         assert_eq!(hash.len(), 64);
-        assert!(verifier.verify_hash(temp_file.path(), &hash).unwrap());
     }
 
     #[test]
-    fn test_blake3_verification() {
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "Another test for BLAKE3 hashing").unwrap();
+    fn test_hmac_verification() {
+        let verifier = HashVerifier::new(1024);
+        let data = b"important message";
+        let key = b"secret-key";
         
-        let verifier = FileHashVerifier::new(HashAlgorithm::Blake3);
-        let hash = verifier.calculate_hash(temp_file.path()).unwrap();
+        let mut mac = HmacSha256::new_from_slice(key).unwrap();
+        mac.update(data);
+        let expected_hmac = hex::encode(mac.finalize().into_bytes());
         
-        assert_eq!(hash.len(), 64);
-        assert!(verifier.verify_hash(temp_file.path(), &hash).unwrap());
+        assert!(verifier.verify_hmac(data, key, &expected_hmac));
     }
 }

@@ -334,3 +334,182 @@ mod tests {
         assert_eq!(obj.get("key").unwrap(), &serde_json::json!("second"));
     }
 }
+use serde_json::{Map, Value};
+use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
+
+pub fn merge_json_files(file_paths: &[&str]) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut merged_map = Map::new();
+
+    for path_str in file_paths {
+        let path = Path::new(path_str);
+        if !path.exists() {
+            continue;
+        }
+
+        let content = fs::read_to_string(path)?;
+        let json_value: Value = serde_json::from_str(&content)?;
+
+        if let Value::Object(map) = json_value {
+            for (key, value) in map {
+                merged_map.insert(key, value);
+            }
+        }
+    }
+
+    Ok(Value::Object(merged_map))
+}
+
+pub fn merge_json_with_strategy(
+    file_paths: &[&str],
+    conflict_strategy: ConflictStrategy,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut accumulator: HashMap<String, Value> = HashMap::new();
+
+    for path_str in file_paths {
+        let path = Path::new(path_str);
+        if !path.exists() {
+            continue;
+        }
+
+        let content = fs::read_to_string(path)?;
+        let json_value: Value = serde_json::from_str(&content)?;
+
+        if let Value::Object(map) = json_value {
+            for (key, value) in map {
+                match conflict_strategy {
+                    ConflictStrategy::Overwrite => {
+                        accumulator.insert(key, value);
+                    }
+                    ConflictStrategy::Skip => {
+                        accumulator.entry(key).or_insert(value);
+                    }
+                    ConflictStrategy::MergeObjects => {
+                        if let Some(existing) = accumulator.get(&key) {
+                            if existing.is_object() && value.is_object() {
+                                let merged = merge_two_objects(existing, &value);
+                                accumulator.insert(key, merged);
+                            } else {
+                                accumulator.insert(key, value);
+                            }
+                        } else {
+                            accumulator.insert(key, value);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut final_map = Map::new();
+    for (key, value) in accumulator {
+        final_map.insert(key, value);
+    }
+
+    Ok(Value::Object(final_map))
+}
+
+fn merge_two_objects(a: &Value, b: &Value) -> Value {
+    let mut result_map = Map::new();
+
+    if let Value::Object(map_a) = a {
+        for (key, val) in map_a {
+            result_map.insert(key.clone(), val.clone());
+        }
+    }
+
+    if let Value::Object(map_b) = b {
+        for (key, val) in map_b {
+            result_map.insert(key.clone(), val.clone());
+        }
+    }
+
+    Value::Object(result_map)
+}
+
+#[derive(Clone, Copy)]
+pub enum ConflictStrategy {
+    Overwrite,
+    Skip,
+    MergeObjects,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_basic_merge() {
+        let mut file1 = NamedTempFile::new().unwrap();
+        let mut file2 = NamedTempFile::new().unwrap();
+
+        let data1 = json!({"name": "Alice", "age": 30});
+        let data2 = json!({"city": "Berlin", "country": "Germany"});
+
+        file1.write_all(data1.to_string().as_bytes()).unwrap();
+        file2.write_all(data2.to_string().as_bytes()).unwrap();
+
+        let paths = vec![
+            file1.path().to_str().unwrap(),
+            file2.path().to_str().unwrap(),
+        ];
+
+        let result = merge_json_files(&paths).unwrap();
+        let expected = json!({
+            "name": "Alice",
+            "age": 30,
+            "city": "Berlin",
+            "country": "Germany"
+        });
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_conflict_overwrite() {
+        let mut file1 = NamedTempFile::new().unwrap();
+        let mut file2 = NamedTempFile::new().unwrap();
+
+        let data1 = json!({"id": 1, "value": "first"});
+        let data2 = json!({"id": 2, "value": "second"});
+
+        file1.write_all(data1.to_string().as_bytes()).unwrap();
+        file2.write_all(data2.to_string().as_bytes()).unwrap();
+
+        let paths = vec![
+            file1.path().to_str().unwrap(),
+            file2.path().to_str().unwrap(),
+        ];
+
+        let result = merge_json_with_strategy(&paths, ConflictStrategy::Overwrite).unwrap();
+        let expected = json!({"id": 2, "value": "second"});
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_conflict_skip() {
+        let mut file1 = NamedTempFile::new().unwrap();
+        let mut file2 = NamedTempFile::new().unwrap();
+
+        let data1 = json!({"id": 1, "value": "first"});
+        let data2 = json!({"id": 2, "value": "second"});
+
+        file1.write_all(data1.to_string().as_bytes()).unwrap();
+        file2.write_all(data2.to_string().as_bytes()).unwrap();
+
+        let paths = vec![
+            file1.path().to_str().unwrap(),
+            file2.path().to_str().unwrap(),
+        ];
+
+        let result = merge_json_with_strategy(&paths, ConflictStrategy::Skip).unwrap();
+        let expected = json!({"id": 1, "value": "first"});
+
+        assert_eq!(result, expected);
+    }
+}

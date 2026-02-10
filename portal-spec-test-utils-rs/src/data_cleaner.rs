@@ -1,97 +1,75 @@
+use csv::{ReaderBuilder, WriterBuilder};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufReader, BufWriter};
 
-use regex::Regex;
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    category: String,
+}
 
-pub fn clean_alphanumeric(input: &str) -> String {
-    let re = Regex::new(r"[^a-zA-Z0-9]").unwrap();
-    re.replace_all(input, "").to_string()
+fn normalize_string(s: &str) -> String {
+    s.trim().to_lowercase()
+}
+
+fn clean_record(record: &mut Record) {
+    record.name = normalize_string(&record.name);
+    record.category = normalize_string(&record.category);
+    
+    if record.value < 0.0 {
+        record.value = 0.0;
+    }
+}
+
+pub fn clean_csv(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
+    let input_file = File::open(input_path)?;
+    let reader = BufReader::new(input_file);
+    let mut csv_reader = ReaderBuilder::new().has_headers(true).from_reader(reader);
+    
+    let output_file = File::create(output_path)?;
+    let writer = BufWriter::new(output_file);
+    let mut csv_writer = WriterBuilder::new().has_headers(true).from_writer(writer);
+    
+    for result in csv_reader.deserialize() {
+        let mut record: Record = result?;
+        clean_record(&mut record);
+        csv_writer.serialize(&record)?;
+    }
+    
+    csv_writer.flush()?;
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::NamedTempFile;
+    use std::io::Write;
 
     #[test]
-    fn test_clean_alphanumeric() {
-        assert_eq!(clean_alphanumeric("Hello, World! 123"), "HelloWorld123");
-        assert_eq!(clean_alphanumeric("Test@#$%^&*()String"), "TestString");
-        assert_eq!(clean_alphanumeric("123_456-789"), "123456789");
-        assert_eq!(clean_alphanumeric(""), "");
-    }
-}
-use std::collections::HashSet;
-
-pub struct DataCleaner {
-    pub deduplicate: bool,
-    pub validate_email: bool,
-}
-
-impl DataCleaner {
-    pub fn new() -> Self {
-        DataCleaner {
-            deduplicate: true,
-            validate_email: false,
-        }
-    }
-
-    pub fn clean_records(&self, records: Vec<String>) -> Vec<String> {
-        let mut cleaned = records;
-
-        if self.deduplicate {
-            cleaned = self.remove_duplicates(cleaned);
-        }
-
-        if self.validate_email {
-            cleaned = self.filter_valid_emails(cleaned);
-        }
-
-        cleaned
-    }
-
-    fn remove_duplicates(&self, records: Vec<String>) -> Vec<String> {
-        let mut seen = HashSet::new();
-        records
-            .into_iter()
-            .filter(|record| seen.insert(record.clone()))
-            .collect()
-    }
-
-    fn filter_valid_emails(&self, records: Vec<String>) -> Vec<String> {
-        records
-            .into_iter()
-            .filter(|record| record.contains('@') && record.contains('.'))
-            .collect()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_deduplication() {
-        let cleaner = DataCleaner::new();
-        let data = vec![
-            "test@example.com".to_string(),
-            "test@example.com".to_string(),
-            "unique@domain.com".to_string(),
-        ];
+    fn test_clean_csv() {
+        let input_data = "id,name,value,category\n1,  TEST  ,-5.0,  CATEGORY_A  \n2,Another,42.5,category_b\n";
         
-        let result = cleaner.clean_records(data);
-        assert_eq!(result.len(), 2);
-    }
-
-    #[test]
-    fn test_email_validation() {
-        let mut cleaner = DataCleaner::new();
-        cleaner.validate_email = true;
+        let mut input_file = NamedTempFile::new().unwrap();
+        write!(input_file, "{}", input_data).unwrap();
         
-        let data = vec![
-            "valid@email.com".to_string(),
-            "invalid-email".to_string(),
-            "another@test.org".to_string(),
-        ];
+        let output_file = NamedTempFile::new().unwrap();
         
-        let result = cleaner.clean_records(data);
-        assert_eq!(result.len(), 2);
+        clean_csv(input_file.path().to_str().unwrap(), output_file.path().to_str().unwrap()).unwrap();
+        
+        let mut rdr = csv::Reader::from_path(output_file.path()).unwrap();
+        let records: Vec<Record> = rdr.deserialize().map(|r| r.unwrap()).collect();
+        
+        assert_eq!(records[0].name, "test");
+        assert_eq!(records[0].value, 0.0);
+        assert_eq!(records[0].category, "category_a");
+        
+        assert_eq!(records[1].name, "another");
+        assert_eq!(records[1].value, 42.5);
+        assert_eq!(records[1].category, "category_b");
     }
 }

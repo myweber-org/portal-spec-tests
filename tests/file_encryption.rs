@@ -224,3 +224,81 @@ fn main() -> io::Result<()> {
 
     Ok(())
 }
+use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
+use pbkdf2::pbkdf2_hmac;
+use rand::RngCore;
+use sha2::Sha256;
+use std::fs;
+use std::io::{Read, Write};
+
+type Aes256CbcEnc = cbc::Encryptor<aes::Aes256>;
+type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
+
+const SALT_LENGTH: usize = 16;
+const IV_LENGTH: usize = 16;
+const KEY_ITERATIONS: u32 = 100_000;
+const KEY_LENGTH: usize = 32;
+
+pub struct FileCrypto;
+
+impl FileCrypto {
+    pub fn encrypt_file(input_path: &str, output_path: &str, password: &str) -> Result<(), String> {
+        let mut file_data = fs::read(input_path).map_err(|e| format!("Read error: {}", e))?;
+        
+        let mut salt = [0u8; SALT_LENGTH];
+        let mut iv = [0u8; IV_LENGTH];
+        rand::thread_rng().fill_bytes(&mut salt);
+        rand::thread_rng().fill_bytes(&mut iv);
+        
+        let mut key = [0u8; KEY_LENGTH];
+        pbkdf2_hmac::<Sha256>(password.as_bytes(), &salt, KEY_ITERATIONS, &mut key);
+        
+        let cipher = Aes256CbcEnc::new(&key.into(), &iv.into());
+        let encrypted_data = cipher.encrypt_padded_vec_mut::<Pkcs7>(&mut file_data);
+        
+        let mut output = Vec::with_capacity(SALT_LENGTH + IV_LENGTH + encrypted_data.len());
+        output.extend_from_slice(&salt);
+        output.extend_from_slice(&iv);
+        output.extend_from_slice(&encrypted_data);
+        
+        fs::write(output_path, &output).map_err(|e| format!("Write error: {}", e))?;
+        Ok(())
+    }
+    
+    pub fn decrypt_file(input_path: &str, output_path: &str, password: &str) -> Result<(), String> {
+        let encrypted_data = fs::read(input_path).map_err(|e| format!("Read error: {}", e))?;
+        
+        if encrypted_data.len() < SALT_LENGTH + IV_LENGTH {
+            return Err("Invalid encrypted file format".to_string());
+        }
+        
+        let salt = &encrypted_data[0..SALT_LENGTH];
+        let iv = &encrypted_data[SALT_LENGTH..SALT_LENGTH + IV_LENGTH];
+        let ciphertext = &encrypted_data[SALT_LENGTH + IV_LENGTH..];
+        
+        let mut key = [0u8; KEY_LENGTH];
+        pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, KEY_ITERATIONS, &mut key);
+        
+        let cipher = Aes256CbcDec::new(&key.into(), iv.into());
+        let decrypted_data = cipher.decrypt_padded_vec_mut::<Pkcs7>(ciphertext)
+            .map_err(|e| format!("Decryption failed: {}", e))?;
+        
+        fs::write(output_path, &decrypted_data).map_err(|e| format!("Write error: {}", e))?;
+        Ok(())
+    }
+    
+    pub fn generate_key_file(output_path: &str, password: &str) -> Result<(), String> {
+        let mut salt = [0u8; SALT_LENGTH];
+        rand::thread_rng().fill_bytes(&mut salt);
+        
+        let mut key = [0u8; KEY_LENGTH];
+        pbkdf2_hmac::<Sha256>(password.as_bytes(), &salt, KEY_ITERATIONS, &mut key);
+        
+        let mut output = Vec::with_capacity(SALT_LENGTH + KEY_LENGTH);
+        output.extend_from_slice(&salt);
+        output.extend_from_slice(&key);
+        
+        fs::write(output_path, &output).map_err(|e| format!("Write error: {}", e))?;
+        Ok(())
+    }
+}

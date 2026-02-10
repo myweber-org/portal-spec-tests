@@ -241,4 +241,63 @@ mod tests {
 
         assert_eq!(column, vec!["100", "200"]);
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+
+#[derive(Debug)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+}
+
+fn parse_csv_line(line: &str) -> Result<Record, Box<dyn Error>> {
+    let parts: Vec<&str> = line.split(',').collect();
+    if parts.len() != 3 {
+        return Err("Invalid number of fields".into());
+    }
+
+    let id = parts[0].parse::<u32>()?;
+    let name = parts[1].to_string();
+    let value = parts[2].parse::<f64>()?;
+
+    Ok(Record { id, name, value })
+}
+
+fn process_csv_file(path: &str) -> Result<Vec<Record>, Box<dyn Error>> {
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+    let mut records = Vec::new();
+
+    for (line_num, line_result) in reader.lines().enumerate() {
+        let line = line_result?;
+        if line.is_empty() {
+            continue;
+        }
+
+        match parse_csv_line(&line) {
+            Ok(record) => records.push(record),
+            Err(e) => eprintln!("Error parsing line {}: {}", line_num + 1, e),
+        }
+    }
+
+    Ok(records)
+}
+
+fn calculate_total(records: &[Record]) -> f64 {
+    records.iter().map(|r| r.value).sum()
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let records = process_csv_file("data.csv")?;
+    
+    println!("Processed {} records", records.len());
+    println!("Total value: {:.2}", calculate_total(&records));
+    
+    for record in records.iter().take(3) {
+        println!("{:?}", record);
+    }
+    
+    Ok(())
 }

@@ -204,3 +204,210 @@ mod tests {
         assert_eq!(total_items, 3);
     }
 }
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum ProcessingError {
+    #[error("Invalid data format")]
+    InvalidFormat,
+    #[error("Missing required field: {0}")]
+    MissingField(String),
+    #[error("Validation failed: {0}")]
+    ValidationFailed(String),
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DataRecord {
+    pub id: u64,
+    pub timestamp: i64,
+    pub values: HashMap<String, f64>,
+    pub tags: Vec<String>,
+}
+
+impl DataRecord {
+    pub fn validate(&self) -> Result<(), ProcessingError> {
+        if self.id == 0 {
+            return Err(ProcessingError::ValidationFailed("ID cannot be zero".into()));
+        }
+        
+        if self.timestamp < 0 {
+            return Err(ProcessingError::ValidationFailed("Timestamp cannot be negative".into()));
+        }
+        
+        if self.values.is_empty() {
+            return Err(ProcessingError::ValidationFailed("Values cannot be empty".into()));
+        }
+        
+        for (key, value) in &self.values {
+            if key.trim().is_empty() {
+                return Err(ProcessingError::ValidationFailed("Value key cannot be empty".into()));
+            }
+            
+            if !value.is_finite() {
+                return Err(ProcessingError::ValidationFailed(
+                    format!("Value for '{}' must be finite", key)
+                ));
+            }
+        }
+        
+        Ok(())
+    }
+    
+    pub fn transform(&mut self, multiplier: f64) -> Result<(), ProcessingError> {
+        if !multiplier.is_finite() || multiplier == 0.0 {
+            return Err(ProcessingError::ValidationFailed(
+                "Multiplier must be finite and non-zero".into()
+            ));
+        }
+        
+        for value in self.values.values_mut() {
+            *value *= multiplier;
+        }
+        
+        self.timestamp += 1;
+        Ok(())
+    }
+    
+    pub fn calculate_statistics(&self) -> HashMap<String, f64> {
+        let mut stats = HashMap::new();
+        
+        if self.values.is_empty() {
+            return stats;
+        }
+        
+        let values: Vec<f64> = self.values.values().copied().collect();
+        let count = values.len() as f64;
+        
+        let sum: f64 = values.iter().sum();
+        let mean = sum / count;
+        
+        let variance: f64 = values.iter()
+            .map(|v| (v - mean).powi(2))
+            .sum::<f64>() / count;
+        
+        stats.insert("count".into(), count);
+        stats.insert("sum".into(), sum);
+        stats.insert("mean".into(), mean);
+        stats.insert("variance".into(), variance);
+        
+        if let Some(&min) = values.iter().min_by(|a, b| a.partial_cmp(b).unwrap()) {
+            stats.insert("min".into(), min);
+        }
+        
+        if let Some(&max) = values.iter().max_by(|a, b| a.partial_cmp(b).unwrap()) {
+            stats.insert("max".into(), max);
+        }
+        
+        stats
+    }
+}
+
+pub struct DataProcessor {
+    records: Vec<DataRecord>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+    
+    pub fn add_record(&mut self, record: DataRecord) -> Result<(), ProcessingError> {
+        record.validate()?;
+        self.records.push(record);
+        Ok(())
+    }
+    
+    pub fn process_all(&mut self, multiplier: f64) -> Result<(), ProcessingError> {
+        for record in &mut self.records {
+            record.transform(multiplier)?;
+        }
+        Ok(())
+    }
+    
+    pub fn get_aggregated_stats(&self) -> HashMap<String, f64> {
+        let mut aggregated = HashMap::new();
+        let mut total_count = 0.0;
+        let mut weighted_sum = 0.0;
+        
+        for record in &self.records {
+            let stats = record.calculate_statistics();
+            let count = stats.get("count").unwrap_or(&0.0);
+            let mean = stats.get("mean").unwrap_or(&0.0);
+            
+            if *count > 0.0 {
+                total_count += count;
+                weighted_sum += mean * count;
+            }
+        }
+        
+        if total_count > 0.0 {
+            aggregated.insert("total_records".into(), self.records.len() as f64);
+            aggregated.insert("aggregated_mean".into(), weighted_sum / total_count);
+        }
+        
+        aggregated
+    }
+    
+    pub fn filter_by_tag(&self, tag: &str) -> Vec<DataRecord> {
+        self.records.iter()
+            .filter(|record| record.tags.contains(&tag.to_string()))
+            .cloned()
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_record_validation() {
+        let mut record = DataRecord {
+            id: 1,
+            timestamp: 1000,
+            values: HashMap::from([("temp".into(), 25.5)]),
+            tags: vec!["sensor".into()],
+        };
+        
+        assert!(record.validate().is_ok());
+        
+        record.id = 0;
+        assert!(record.validate().is_err());
+    }
+    
+    #[test]
+    fn test_transform() {
+        let mut record = DataRecord {
+            id: 1,
+            timestamp: 1000,
+            values: HashMap::from([("value".into(), 10.0)]),
+            tags: vec![],
+        };
+        
+        assert!(record.transform(2.0).is_ok());
+        assert_eq!(record.values.get("value"), Some(&20.0));
+        assert_eq!(record.timestamp, 1001);
+    }
+    
+    #[test]
+    fn test_statistics() {
+        let record = DataRecord {
+            id: 1,
+            timestamp: 1000,
+            values: HashMap::from([
+                ("a".into(), 1.0),
+                ("b".into(), 2.0),
+                ("c".into(), 3.0),
+            ]),
+            tags: vec![],
+        };
+        
+        let stats = record.calculate_statistics();
+        assert_eq!(stats.get("count"), Some(&3.0));
+        assert_eq!(stats.get("mean"), Some(&2.0));
+    }
+}

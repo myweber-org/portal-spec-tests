@@ -137,3 +137,157 @@ mod tests {
         assert_eq!(config.get("NORMAL").unwrap(), "value");
     }
 }
+use std::collections::HashMap;
+use std::env;
+use std::fs;
+
+#[derive(Debug, Clone)]
+pub struct Config {
+    pub database_url: String,
+    pub port: u16,
+    pub log_level: String,
+    pub cache_size: usize,
+}
+
+impl Config {
+    pub fn from_file(path: &str) -> Result<Self, String> {
+        let contents = fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read config file: {}", e))?;
+
+        let mut config_map = HashMap::new();
+        for line in contents.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+
+            let parts: Vec<&str> = line.splitn(2, '=').collect();
+            if parts.len() == 2 {
+                let key = parts[0].trim().to_string();
+                let value = parts[1].trim().to_string();
+                config_map.insert(key, value);
+            }
+        }
+
+        Self::from_map(&config_map)
+    }
+
+    pub fn from_env() -> Result<Self, String> {
+        let mut config_map = HashMap::new();
+        for (key, value) in env::vars() {
+            if key.starts_with("APP_") {
+                let config_key = key.trim_start_matches("APP_").to_lowercase();
+                config_map.insert(config_key, value);
+            }
+        }
+
+        Self::from_map(&config_map)
+    }
+
+    fn from_map(map: &HashMap<String, String>) -> Result<Self, String> {
+        let database_url = map
+            .get("database_url")
+            .map(|s| s.to_string())
+            .or_else(|| env::var("DATABASE_URL").ok())
+            .unwrap_or_else(|| "postgres://localhost:5432/mydb".to_string());
+
+        let port = map
+            .get("port")
+            .and_then(|s| s.parse().ok())
+            .or_else(|| env::var("PORT").ok().and_then(|s| s.parse().ok()))
+            .unwrap_or(8080);
+
+        let log_level = map
+            .get("log_level")
+            .map(|s| s.to_string())
+            .or_else(|| env::var("LOG_LEVEL").ok())
+            .unwrap_or_else(|| "info".to_string());
+
+        let cache_size = map
+            .get("cache_size")
+            .and_then(|s| s.parse().ok())
+            .or_else(|| env::var("CACHE_SIZE").ok().and_then(|s| s.parse().ok()))
+            .unwrap_or(1000);
+
+        Ok(Config {
+            database_url,
+            port,
+            log_level,
+            cache_size,
+        })
+    }
+
+    pub fn merge(self, other: Self) -> Self {
+        Config {
+            database_url: other.database_url,
+            port: other.port,
+            log_level: other.log_level,
+            cache_size: other.cache_size,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_from_file() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "database_url=postgres://test:5432/db").unwrap();
+        writeln!(file, "port=3000").unwrap();
+        writeln!(file, "# This is a comment").unwrap();
+        writeln!(file, "log_level=debug").unwrap();
+        writeln!(file, "cache_size=500").unwrap();
+
+        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.database_url, "postgres://test:5432/db");
+        assert_eq!(config.port, 3000);
+        assert_eq!(config.log_level, "debug");
+        assert_eq!(config.cache_size, 500);
+    }
+
+    #[test]
+    fn test_from_env() {
+        env::set_var("APP_DATABASE_URL", "postgres://env:5432/db");
+        env::set_var("APP_PORT", "4000");
+        env::set_var("APP_LOG_LEVEL", "trace");
+        env::set_var("APP_CACHE_SIZE", "200");
+
+        let config = Config::from_env().unwrap();
+        assert_eq!(config.database_url, "postgres://env:5432/db");
+        assert_eq!(config.port, 4000);
+        assert_eq!(config.log_level, "trace");
+        assert_eq!(config.cache_size, 200);
+
+        env::remove_var("APP_DATABASE_URL");
+        env::remove_var("APP_PORT");
+        env::remove_var("APP_LOG_LEVEL");
+        env::remove_var("APP_CACHE_SIZE");
+    }
+
+    #[test]
+    fn test_merge() {
+        let config1 = Config {
+            database_url: "url1".to_string(),
+            port: 1000,
+            log_level: "info".to_string(),
+            cache_size: 100,
+        };
+
+        let config2 = Config {
+            database_url: "url2".to_string(),
+            port: 2000,
+            log_level: "debug".to_string(),
+            cache_size: 200,
+        };
+
+        let merged = config1.merge(config2);
+        assert_eq!(merged.database_url, "url2");
+        assert_eq!(merged.port, 2000);
+        assert_eq!(merged.log_level, "debug");
+        assert_eq!(merged.cache_size, 200);
+    }
+}

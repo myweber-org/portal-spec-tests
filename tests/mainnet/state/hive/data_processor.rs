@@ -298,3 +298,148 @@ mod tests {
         assert_eq!(processor.calculate_average(), 100.0);
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug)]
+pub struct DataSet {
+    values: Vec<f64>,
+    mean: Option<f64>,
+    variance: Option<f64>,
+}
+
+impl DataSet {
+    pub fn new() -> Self {
+        DataSet {
+            values: Vec::new(),
+            mean: None,
+            variance: None,
+        }
+    }
+
+    pub fn from_csv<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut dataset = DataSet::new();
+
+        for line in reader.lines() {
+            let line = line?;
+            if let Ok(value) = line.trim().parse::<f64>() {
+                dataset.add_value(value);
+            }
+        }
+
+        Ok(dataset)
+    }
+
+    pub fn add_value(&mut self, value: f64) {
+        self.values.push(value);
+        self.mean = None;
+        self.variance = None;
+    }
+
+    pub fn calculate_mean(&mut self) -> f64 {
+        if let Some(mean) = self.mean {
+            return mean;
+        }
+
+        if self.values.is_empty() {
+            self.mean = Some(0.0);
+            return 0.0;
+        }
+
+        let sum: f64 = self.values.iter().sum();
+        let mean = sum / self.values.len() as f64;
+        self.mean = Some(mean);
+        mean
+    }
+
+    pub fn calculate_variance(&mut self) -> f64 {
+        if let Some(variance) = self.variance {
+            return variance;
+        }
+
+        if self.values.len() < 2 {
+            self.variance = Some(0.0);
+            return 0.0;
+        }
+
+        let mean = self.calculate_mean();
+        let sum_squared_diff: f64 = self.values
+            .iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum();
+        
+        let variance = sum_squared_diff / (self.values.len() - 1) as f64;
+        self.variance = Some(variance);
+        variance
+    }
+
+    pub fn get_values(&self) -> &[f64] {
+        &self.values
+    }
+
+    pub fn count(&self) -> usize {
+        self.values.len()
+    }
+
+    pub fn clear(&mut self) {
+        self.values.clear();
+        self.mean = None;
+        self.variance = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_empty_dataset() {
+        let mut dataset = DataSet::new();
+        assert_eq!(dataset.count(), 0);
+        assert_eq!(dataset.calculate_mean(), 0.0);
+        assert_eq!(dataset.calculate_variance(), 0.0);
+    }
+
+    #[test]
+    fn test_basic_statistics() {
+        let mut dataset = DataSet::new();
+        dataset.add_value(1.0);
+        dataset.add_value(2.0);
+        dataset.add_value(3.0);
+        dataset.add_value(4.0);
+        dataset.add_value(5.0);
+
+        assert_eq!(dataset.count(), 5);
+        assert_eq!(dataset.calculate_mean(), 3.0);
+        assert_eq!(dataset.calculate_variance(), 2.5);
+    }
+
+    #[test]
+    fn test_csv_parsing() -> Result<(), Box<dyn Error>> {
+        let mut temp_file = NamedTempFile::new()?;
+        writeln!(temp_file, "1.5\n2.5\n3.5\n4.5\n5.5")?;
+        
+        let dataset = DataSet::from_csv(temp_file.path())?;
+        assert_eq!(dataset.count(), 5);
+        
+        Ok(())
+    }
+
+    #[test]
+    fn test_clear_dataset() {
+        let mut dataset = DataSet::new();
+        dataset.add_value(10.0);
+        dataset.add_value(20.0);
+        
+        assert_eq!(dataset.count(), 2);
+        dataset.clear();
+        assert_eq!(dataset.count(), 0);
+        assert_eq!(dataset.calculate_mean(), 0.0);
+    }
+}

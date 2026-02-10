@@ -205,4 +205,170 @@ impl AppConfig {
     pub fn to_toml(&self) -> Result<String, toml::ser::Error> {
         toml::to_string_pretty(self)
     }
+}use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::Path;
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DatabaseConfig {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: String,
+    pub database_name: String,
+    pub pool_size: u32,
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ServerConfig {
+    pub address: String,
+    pub port: u16,
+    pub enable_https: bool,
+    pub cert_path: Option<String>,
+    pub key_path: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct LoggingConfig {
+    pub level: String,
+    pub file_path: Option<String>,
+    pub max_files: usize,
+    pub max_file_size: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AppConfig {
+    pub database: DatabaseConfig,
+    pub server: ServerConfig,
+    pub logging: LoggingConfig,
+    pub feature_flags: Vec<String>,
+}
+
+impl Default for DatabaseConfig {
+    fn default() -> Self {
+        DatabaseConfig {
+            host: "localhost".to_string(),
+            port: 5432,
+            username: "postgres".to_string(),
+            password: "".to_string(),
+            database_name: "app_db".to_string(),
+            pool_size: 10,
+        }
+    }
+}
+
+impl Default for ServerConfig {
+    fn default() -> Self {
+        ServerConfig {
+            address: "0.0.0.0".to_string(),
+            port: 8080,
+            enable_https: false,
+            cert_path: None,
+            key_path: None,
+        }
+    }
+}
+
+impl Default for LoggingConfig {
+    fn default() -> Self {
+        LoggingConfig {
+            level: "info".to_string(),
+            file_path: None,
+            max_files: 5,
+            max_file_size: 10_485_760,
+        }
+    }
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        AppConfig {
+            database: DatabaseConfig::default(),
+            server: ServerConfig::default(),
+            logging: LoggingConfig::default(),
+            feature_flags: vec![],
+        }
+    }
+}
+
+impl AppConfig {
+    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, ConfigError> {
+        let content = fs::read_to_string(path)
+            .map_err(|e| ConfigError::IoError(e.to_string()))?;
+        
+        let mut config: AppConfig = serde_yaml::from_str(&content)
+            .map_err(|e| ConfigError::ParseError(e.to_string()))?;
+        
+        config.validate()?;
+        Ok(config)
+    }
+    
+    pub fn from_file_or_default<P: AsRef<Path>>(path: P) -> Self {
+        match Self::from_file(path) {
+            Ok(config) => config,
+            Err(e) => {
+                eprintln!("Warning: Failed to load config: {}. Using defaults.", e);
+                AppConfig::default()
+            }
+        }
+    }
+    
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        if self.server.port == 0 {
+            return Err(ConfigError::ValidationError("Server port cannot be 0".to_string()));
+        }
+        
+        if self.database.pool_size == 0 {
+            return Err(ConfigError::ValidationError("Database pool size cannot be 0".to_string()));
+        }
+        
+        if self.server.enable_https {
+            if self.server.cert_path.is_none() || self.server.key_path.is_none() {
+                return Err(ConfigError::ValidationError(
+                    "HTTPS enabled but certificate or key path not provided".to_string()
+                ));
+            }
+        }
+        
+        let valid_log_levels = ["trace", "debug", "info", "warn", "error"];
+        if !valid_log_levels.contains(&self.logging.level.to_lowercase().as_str()) {
+            return Err(ConfigError::ValidationError(
+                format!("Invalid log level: {}", self.logging.level)
+            ));
+        }
+        
+        Ok(())
+    }
+    
+    pub fn to_yaml(&self) -> Result<String, ConfigError> {
+        serde_yaml::to_string(self)
+            .map_err(|e| ConfigError::SerializeError(e.to_string()))
+    }
+    
+    pub fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), ConfigError> {
+        let yaml = self.to_yaml()?;
+        fs::write(path, yaml)
+            .map_err(|e| ConfigError::IoError(e.to_string()))
+    }
+}
+
+#[derive(Debug)]
+pub enum ConfigError {
+    IoError(String),
+    ParseError(String),
+    ValidationError(String),
+    SerializeError(String),
+}
+
+impl std::fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ConfigError::IoError(msg) => write!(f, "IO error: {}", msg),
+            ConfigError::ParseError(msg) => write!(f, "Parse error: {}", msg),
+            ConfigError::ValidationError(msg) => write!(f, "Validation error: {}", msg),
+            ConfigError::SerializeError(msg) => write!(f, "Serialize error: {}", msg),
+        }
+    }
+}
+
+impl std::error::Error for ConfigError {}

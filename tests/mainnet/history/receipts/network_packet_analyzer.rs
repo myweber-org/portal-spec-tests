@@ -219,4 +219,152 @@ mod tests {
         let short_data = vec![0u8; 10];
         assert!(EthernetFrame::from_bytes(&short_data).is_none());
     }
+}use std::collections::HashMap;
+use std::net::Ipv4Addr;
+
+#[derive(Debug, Clone)]
+pub struct NetworkPacket {
+    source_ip: Ipv4Addr,
+    destination_ip: Ipv4Addr,
+    protocol: Protocol,
+    payload_size: usize,
+    timestamp: u64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Protocol {
+    TCP,
+    UDP,
+    ICMP,
+    Other(u8),
+}
+
+pub struct PacketAnalyzer {
+    packet_count: usize,
+    total_bytes: usize,
+    protocol_distribution: HashMap<Protocol, usize>,
+    ip_traffic: HashMap<Ipv4Addr, usize>,
+}
+
+impl PacketAnalyzer {
+    pub fn new() -> Self {
+        PacketAnalyzer {
+            packet_count: 0,
+            total_bytes: 0,
+            protocol_distribution: HashMap::new(),
+            ip_traffic: HashMap::new(),
+        }
+    }
+
+    pub fn process_packet(&mut self, packet: &NetworkPacket) {
+        self.packet_count += 1;
+        self.total_bytes += packet.payload_size;
+
+        *self.protocol_distribution
+            .entry(packet.protocol.clone())
+            .or_insert(0) += 1;
+
+        *self.ip_traffic
+            .entry(packet.source_ip)
+            .or_insert(0) += 1;
+        *self.ip_traffic
+            .entry(packet.destination_ip)
+            .or_insert(0) += 1;
+    }
+
+    pub fn get_statistics(&self) -> AnalyzerStats {
+        let avg_packet_size = if self.packet_count > 0 {
+            self.total_bytes / self.packet_count
+        } else {
+            0
+        };
+
+        let top_source = self.ip_traffic
+            .iter()
+            .max_by_key(|(_, &count)| count)
+            .map(|(ip, count)| (ip.to_string(), *count))
+            .unwrap_or_else(|| ("0.0.0.0".to_string(), 0));
+
+        AnalyzerStats {
+            total_packets: self.packet_count,
+            total_bytes: self.total_bytes,
+            average_packet_size: avg_packet_size,
+            top_source_ip: top_source.0,
+            top_source_count: top_source.1,
+            protocol_counts: self.protocol_distribution.clone(),
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.packet_count = 0;
+        self.total_bytes = 0;
+        self.protocol_distribution.clear();
+        self.ip_traffic.clear();
+    }
+}
+
+#[derive(Debug)]
+pub struct AnalyzerStats {
+    pub total_packets: usize,
+    pub total_bytes: usize,
+    pub average_packet_size: usize,
+    pub top_source_ip: String,
+    pub top_source_count: usize,
+    pub protocol_counts: HashMap<Protocol, usize>,
+}
+
+impl Protocol {
+    pub fn from_u8(value: u8) -> Self {
+        match value {
+            6 => Protocol::TCP,
+            17 => Protocol::UDP,
+            1 => Protocol::ICMP,
+            other => Protocol::Other(other),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_packet_processing() {
+        let mut analyzer = PacketAnalyzer::new();
+        
+        let packet1 = NetworkPacket {
+            source_ip: Ipv4Addr::new(192, 168, 1, 1),
+            destination_ip: Ipv4Addr::new(192, 168, 1, 2),
+            protocol: Protocol::TCP,
+            payload_size: 1500,
+            timestamp: 1234567890,
+        };
+
+        let packet2 = NetworkPacket {
+            source_ip: Ipv4Addr::new(192, 168, 1, 2),
+            destination_ip: Ipv4Addr::new(192, 168, 1, 1),
+            protocol: Protocol::UDP,
+            payload_size: 512,
+            timestamp: 1234567891,
+        };
+
+        analyzer.process_packet(&packet1);
+        analyzer.process_packet(&packet2);
+
+        let stats = analyzer.get_statistics();
+        
+        assert_eq!(stats.total_packets, 2);
+        assert_eq!(stats.total_bytes, 2012);
+        assert_eq!(stats.average_packet_size, 1006);
+        assert_eq!(*stats.protocol_counts.get(&Protocol::TCP).unwrap(), 1);
+        assert_eq!(*stats.protocol_counts.get(&Protocol::UDP).unwrap(), 1);
+    }
+
+    #[test]
+    fn test_protocol_conversion() {
+        assert_eq!(Protocol::from_u8(6), Protocol::TCP);
+        assert_eq!(Protocol::from_u8(17), Protocol::UDP);
+        assert_eq!(Protocol::from_u8(1), Protocol::ICMP);
+        assert_eq!(Protocol::from_u8(99), Protocol::Other(99));
+    }
 }

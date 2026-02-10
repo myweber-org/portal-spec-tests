@@ -277,3 +277,185 @@ mod tests {
         assert_eq!(*record.values.get("temperature").unwrap(), 0.255);
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufReader, Read};
+use std::path::Path;
+
+#[derive(Debug, Clone)]
+pub struct DataPoint {
+    timestamp: i64,
+    value: f64,
+    category: String,
+}
+
+#[derive(Debug)]
+pub struct DataSet {
+    points: Vec<DataPoint>,
+    name: String,
+}
+
+impl DataSet {
+    pub fn new(name: &str) -> Self {
+        DataSet {
+            points: Vec::new(),
+            name: name.to_string(),
+        }
+    }
+
+    pub fn add_point(&mut self, point: DataPoint) {
+        self.points.push(point);
+    }
+
+    pub fn calculate_statistics(&self) -> Statistics {
+        let values: Vec<f64> = self.points.iter().map(|p| p.value).collect();
+        let count = values.len();
+        
+        if count == 0 {
+            return Statistics::empty();
+        }
+
+        let sum: f64 = values.iter().sum();
+        let mean = sum / count as f64;
+        
+        let variance: f64 = values.iter()
+            .map(|v| (v - mean).powi(2))
+            .sum::<f64>() / count as f64;
+        
+        let std_dev = variance.sqrt();
+        
+        let min = values.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+        let max = values.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+
+        Statistics {
+            count,
+            mean,
+            std_dev,
+            min,
+            max,
+            sum,
+        }
+    }
+
+    pub fn filter_by_category(&self, category: &str) -> Vec<&DataPoint> {
+        self.points.iter()
+            .filter(|p| p.category == category)
+            .collect()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Statistics {
+    pub count: usize,
+    pub mean: f64,
+    pub std_dev: f64,
+    pub min: f64,
+    pub max: f64,
+    pub sum: f64,
+}
+
+impl Statistics {
+    fn empty() -> Self {
+        Statistics {
+            count: 0,
+            mean: 0.0,
+            std_dev: 0.0,
+            min: 0.0,
+            max: 0.0,
+            sum: 0.0,
+        }
+    }
+}
+
+pub fn parse_csv_data<R: Read>(reader: R) -> Result<DataSet, Box<dyn Error>> {
+    let mut rdr = csv::Reader::from_reader(reader);
+    let mut dataset = DataSet::new("csv_import");
+
+    for result in rdr.records() {
+        let record = result?;
+        
+        if record.len() >= 3 {
+            let timestamp = record[0].parse::<i64>()?;
+            let value = record[1].parse::<f64>()?;
+            let category = record[2].to_string();
+
+            let point = DataPoint {
+                timestamp,
+                value,
+                category,
+            };
+
+            dataset.add_point(point);
+        }
+    }
+
+    Ok(dataset)
+}
+
+pub fn load_dataset_from_file<P: AsRef<Path>>(path: P) -> Result<DataSet, Box<dyn Error>> {
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+    parse_csv_data(reader)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_empty_dataset_statistics() {
+        let dataset = DataSet::new("test");
+        let stats = dataset.calculate_statistics();
+        assert_eq!(stats.count, 0);
+        assert_eq!(stats.mean, 0.0);
+    }
+
+    #[test]
+    fn test_dataset_with_points() {
+        let mut dataset = DataSet::new("test");
+        
+        dataset.add_point(DataPoint {
+            timestamp: 1000,
+            value: 10.5,
+            category: "A".to_string(),
+        });
+        
+        dataset.add_point(DataPoint {
+            timestamp: 2000,
+            value: 20.5,
+            category: "B".to_string(),
+        });
+
+        let stats = dataset.calculate_statistics();
+        assert_eq!(stats.count, 2);
+        assert_eq!(stats.mean, 15.5);
+        assert_eq!(stats.sum, 31.0);
+    }
+
+    #[test]
+    fn test_filter_by_category() {
+        let mut dataset = DataSet::new("test");
+        
+        dataset.add_point(DataPoint {
+            timestamp: 1000,
+            value: 10.5,
+            category: "A".to_string(),
+        });
+        
+        dataset.add_point(DataPoint {
+            timestamp: 2000,
+            value: 20.5,
+            category: "B".to_string(),
+        });
+        
+        dataset.add_point(DataPoint {
+            timestamp: 3000,
+            value: 30.5,
+            category: "A".to_string(),
+        });
+
+        let filtered = dataset.filter_by_category("A");
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered.iter().all(|p| p.category == "A"));
+    }
+}

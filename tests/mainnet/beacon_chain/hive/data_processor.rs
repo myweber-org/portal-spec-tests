@@ -596,3 +596,94 @@ mod tests {
         assert_eq!(stats.2, 3);
     }
 }
+use csv;
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
+}
+
+impl Record {
+    fn is_valid(&self) -> bool {
+        !self.name.is_empty() && self.value >= 0.0
+    }
+
+    fn process(&mut self) {
+        self.name = self.name.trim().to_string();
+        if self.value > 1000.0 {
+            self.value = 1000.0;
+        }
+    }
+}
+
+struct DataProcessor {
+    records: Vec<Record>,
+}
+
+impl DataProcessor {
+    fn new() -> Self {
+        DataProcessor { records: Vec::new() }
+    }
+
+    fn load_from_csv(&mut self, path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(path)?;
+        let mut reader = csv::Reader::from_reader(file);
+        
+        for result in reader.deserialize() {
+            let mut record: Record = result?;
+            if record.is_valid() {
+                record.process();
+                self.records.push(record);
+            }
+        }
+        
+        Ok(())
+    }
+
+    fn filter_active(&self) -> Vec<&Record> {
+        self.records.iter().filter(|r| r.active).collect()
+    }
+
+    fn calculate_average(&self) -> Option<f64> {
+        if self.records.is_empty() {
+            return None;
+        }
+        
+        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        Some(sum / self.records.len() as f64)
+    }
+
+    fn save_to_csv(&self, path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::create(path)?;
+        let mut writer = csv::Writer::from_writer(file);
+        
+        for record in &self.records {
+            writer.serialize(record)?;
+        }
+        
+        writer.flush()?;
+        Ok(())
+    }
+}
+
+fn process_data_file(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
+    let mut processor = DataProcessor::new();
+    processor.load_from_csv(input_path)?;
+    
+    let avg = processor.calculate_average();
+    if let Some(average) = avg {
+        println!("Average value: {:.2}", average);
+    }
+    
+    let active_records = processor.filter_active();
+    println!("Active records: {}", active_records.len());
+    
+    processor.save_to_csv(output_path)?;
+    Ok(())
+}

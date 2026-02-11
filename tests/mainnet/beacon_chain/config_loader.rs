@@ -120,3 +120,97 @@ impl Config {
         self.settings.get(key)
     }
 }
+use std::collections::HashMap;
+use std::env;
+use std::fs;
+
+pub struct Config {
+    pub database_url: String,
+    pub api_key: String,
+    pub debug_mode: bool,
+    pub port: u16,
+}
+
+impl Config {
+    pub fn load() -> Result<Self, String> {
+        let content = fs::read_to_string("config.toml")
+            .map_err(|e| format!("Failed to read config file: {}", e))?;
+
+        let mut table = toml::from_str::<toml::Value>(&content)
+            .map_err(|e| format!("Invalid TOML: {}", e))?
+            .as_table()
+            .ok_or("Config must be a TOML table")?
+            .clone();
+
+        Self::substitute_env_vars(&mut table);
+
+        let config: Config = toml::from_str(&toml::to_string(&table).unwrap())
+            .map_err(|e| format!("Failed to parse config: {}", e))?;
+
+        Ok(config)
+    }
+
+    fn substitute_env_vars(table: &mut toml::value::Table) {
+        let mut replacements = HashMap::new();
+
+        for (key, value) in table.iter() {
+            if let Some(s) = value.as_str() {
+                if s.starts_with("${") && s.ends_with('}') {
+                    let var_name = &s[2..s.len() - 1];
+                    if let Ok(env_value) = env::var(var_name) {
+                        replacements.insert(key.clone(), toml::Value::String(env_value));
+                    }
+                }
+            } else if let Some(arr) = value.as_array() {
+                let mut new_arr = Vec::new();
+                for item in arr {
+                    if let Some(s) = item.as_str() {
+                        if s.starts_with("${") && s.ends_with('}') {
+                            let var_name = &s[2..s.len() - 1];
+                            if let Ok(env_value) = env::var(var_name) {
+                                new_arr.push(toml::Value::String(env_value));
+                                continue;
+                            }
+                        }
+                    }
+                    new_arr.push(item.clone());
+                }
+                replacements.insert(key.clone(), toml::Value::Array(new_arr));
+            } else if let Some(sub_table) = value.as_table() {
+                let mut sub_table_clone = sub_table.clone();
+                Self::substitute_env_vars(&mut sub_table_clone);
+                replacements.insert(key.clone(), toml::Value::Table(sub_table_clone));
+            }
+        }
+
+        for (key, value) in replacements {
+            table.insert(key, value);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_env_substitution() {
+        env::set_var("DB_HOST", "localhost");
+        env::set_var("API_SECRET", "supersecret");
+
+        let toml_content = r#"
+            database_url = "${DB_HOST}:5432"
+            api_key = "${API_SECRET}"
+            debug_mode = true
+            port = 8080
+        "#;
+
+        fs::write("test_config.toml", toml_content).unwrap();
+        
+        let config = Config::load().unwrap();
+        assert_eq!(config.database_url, "localhost:5432");
+        assert_eq!(config.api_key, "supersecret");
+        
+        fs::remove_file("test_config.toml").unwrap();
+    }
+}

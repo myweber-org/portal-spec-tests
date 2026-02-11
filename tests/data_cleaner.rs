@@ -110,4 +110,73 @@ mod tests {
         let duplicate = cleaner.clean_pipeline("  hello   world  ");
         assert!(duplicate.is_none());
     }
+}use std::collections::HashSet;
+
+pub struct DataCleaner {
+    records: Vec<String>,
+}
+
+impl DataCleaner {
+    pub fn new() -> Self {
+        DataCleaner {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn add_record(&mut self, record: &str) {
+        self.records.push(record.to_string());
+    }
+
+    pub fn clean(&mut self) -> Vec<String> {
+        let mut unique_set = HashSet::new();
+        let mut cleaned = Vec::new();
+
+        for record in &self.records {
+            let normalized = record.trim().to_lowercase();
+            if unique_set.insert(normalized.clone()) {
+                cleaned.push(record.trim().to_string());
+            }
+        }
+
+        cleaned
+    }
+
+    pub fn get_stats(&self) -> (usize, usize) {
+        let original_count = self.records.len();
+        let unique_count = self.records
+            .iter()
+            .map(|s| s.trim().to_lowercase())
+            .collect::<HashSet<_>>()
+            .len();
+        (original_count, unique_count)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cleaner_removes_duplicates() {
+        let mut cleaner = DataCleaner::new();
+        cleaner.add_record("Apple");
+        cleaner.add_record("apple ");
+        cleaner.add_record("Banana");
+        cleaner.add_record("banana");
+
+        let cleaned = cleaner.clean();
+        assert_eq!(cleaned.len(), 2);
+        assert_eq!(cleaner.get_stats(), (4, 2));
+    }
+
+    #[test]
+    fn test_cleaner_normalizes_whitespace() {
+        let mut cleaner = DataCleaner::new();
+        cleaner.add_record("  Orange  ");
+        cleaner.add_record("Orange");
+
+        let cleaned = cleaner.clean();
+        assert_eq!(cleaned.len(), 1);
+        assert_eq!(cleaned[0], "Orange");
+    }
 }

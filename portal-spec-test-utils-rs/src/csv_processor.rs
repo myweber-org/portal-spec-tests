@@ -1,113 +1,159 @@
+
 use std::error::Error;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+pub struct CsvConfig {
+    delimiter: char,
+    quote_char: char,
+    has_headers: bool,
+}
+
+impl Default for CsvConfig {
+    fn default() -> Self {
+        CsvConfig {
+            delimiter: ',',
+            quote_char: '"',
+            has_headers: true,
+        }
+    }
+}
 
 pub struct CsvProcessor {
-    input_path: String,
-    output_path: String,
-    filter_column: usize,
-    filter_value: String,
+    config: CsvConfig,
 }
 
 impl CsvProcessor {
-    pub fn new(input_path: &str, output_path: &str, filter_column: usize, filter_value: &str) -> Self {
-        CsvProcessor {
-            input_path: input_path.to_string(),
-            output_path: output_path.to_string(),
-            filter_column,
-            filter_value: filter_value.to_string(),
-        }
+    pub fn new(config: CsvConfig) -> Self {
+        CsvProcessor { config }
     }
 
-    pub fn process(&self) -> Result<usize, Box<dyn Error>> {
-        let input_file = File::open(&self.input_path)?;
-        let reader = BufReader::new(input_file);
-        let mut output_file = File::create(&self.output_path)?;
-        
-        let mut processed_count = 0;
-        
-        for (line_num, line) in reader.lines().enumerate() {
-            let line = line?;
-            
-            if line_num == 0 {
-                writeln!(output_file, "{}", line)?;
-                continue;
-            }
-            
-            let columns: Vec<&str> = line.split(',').collect();
-            
-            if columns.len() > self.filter_column {
-                if columns[self.filter_column] == self.filter_value {
-                    writeln!(output_file, "{}", line)?;
-                    processed_count += 1;
-                }
+    pub fn filter_rows<P, F>(&self, file_path: P, predicate: F) -> Result<Vec<Vec<String>>, Box<dyn Error>>
+    where
+        P: AsRef<Path>,
+        F: Fn(&[String]) -> bool,
+    {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        let mut lines = reader.lines();
+        let mut result = Vec::new();
+
+        if self.config.has_headers {
+            if let Some(header_line) = lines.next() {
+                let header = self.parse_line(&header_line?);
+                result.push(header);
             }
         }
-        
-        Ok(processed_count)
+
+        for line in lines {
+            let line = line?;
+            let fields = self.parse_line(&line);
+            if predicate(&fields) {
+                result.push(fields);
+            }
+        }
+
+        Ok(result)
     }
-    
-    pub fn transform_column(&self, transform_column: usize, transform_fn: fn(&str) -> String) -> Result<usize, Box<dyn Error>> {
-        let input_file = File::open(&self.input_path)?;
-        let reader = BufReader::new(input_file);
-        let mut output_file = File::create(&self.output_path)?;
-        
-        let mut processed_count = 0;
-        
-        for (line_num, line) in reader.lines().enumerate() {
-            let line = line?;
+
+    fn parse_line(&self, line: &str) -> Vec<String> {
+        let mut fields = Vec::new();
+        let mut current_field = String::new();
+        let mut in_quotes = false;
+        let chars: Vec<char> = line.chars().collect();
+        let mut i = 0;
+
+        while i < chars.len() {
+            let ch = chars[i];
             
-            if line_num == 0 {
-                writeln!(output_file, "{}", line)?;
-                continue;
+            if ch == self.config.quote_char {
+                if in_quotes && i + 1 < chars.len() && chars[i + 1] == self.config.quote_char {
+                    current_field.push(self.config.quote_char);
+                    i += 1;
+                } else {
+                    in_quotes = !in_quotes;
+                }
+            } else if ch == self.config.delimiter && !in_quotes {
+                fields.push(current_field.clone());
+                current_field.clear();
+            } else {
+                current_field.push(ch);
             }
-            
-            let mut columns: Vec<&str> = line.split(',').collect();
-            
-            if columns.len() > transform_column {
-                let original_value = columns[transform_column];
-                let transformed_value = transform_fn(original_value);
-                columns[transform_column] = &transformed_value;
-                
-                let new_line = columns.join(",");
-                writeln!(output_file, "{}", new_line)?;
-                processed_count += 1;
-            }
+            i += 1;
         }
-        
-        Ok(processed_count)
+
+        fields.push(current_field);
+        fields
+    }
+
+    pub fn count_matching_rows<P, F>(&self, file_path: P, predicate: F) -> Result<usize, Box<dyn Error>>
+    where
+        P: AsRef<Path>,
+        F: Fn(&[String]) -> bool,
+    {
+        let filtered = self.filter_rows(file_path, predicate)?;
+        let start_index = if self.config.has_headers { 1 } else { 0 };
+        Ok(filtered.len() - start_index)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
-    
-    fn uppercase_transform(value: &str) -> String {
-        value.to_uppercase()
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    fn create_test_csv() -> NamedTempFile {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "name,age,city").unwrap();
+        writeln!(file, "\"John, Doe\",30,\"New York\"").unwrap();
+        writeln!(file, "Jane,25,\"Los Angeles\"").unwrap();
+        writeln!(file, "Bob,35,Chicago").unwrap();
+        file
     }
-    
+
     #[test]
-    fn test_csv_processing() {
-        let test_input = "test_data.csv";
-        let test_output = "test_output.csv";
+    fn test_filter_rows() {
+        let file = create_test_csv();
+        let processor = CsvProcessor::new(CsvConfig::default());
         
-        let content = "id,name,status\n1,alice,active\n2,bob,inactive\n3,charlie,active\n";
-        fs::write(test_input, content).unwrap();
+        let result = processor.filter_rows(file.path(), |fields| {
+            fields.get(1).and_then(|age| age.parse::<i32>().ok()).map_or(false, |age| age >= 30)
+        }).unwrap();
+
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0], vec!["name", "age", "city"]);
+        assert_eq!(result[1], vec!["John, Doe", "30", "New York"]);
+        assert_eq!(result[2], vec!["Bob", "35", "Chicago"]);
+    }
+
+    #[test]
+    fn test_count_matching_rows() {
+        let file = create_test_csv();
+        let processor = CsvProcessor::new(CsvConfig::default());
         
-        let processor = CsvProcessor::new(test_input, test_output, 2, "active");
-        let result = processor.process();
+        let count = processor.count_matching_rows(file.path(), |fields| {
+            fields.get(2).map_or(false, |city| city.contains("York"))
+        }).unwrap();
+
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_custom_delimiter() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "name|age|city").unwrap();
+        writeln!(file, "John|30|NYC").unwrap();
+        writeln!(file, "Jane|25|LA").unwrap();
         
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), 2);
+        let config = CsvConfig {
+            delimiter: '|',
+            ..CsvConfig::default()
+        };
+        let processor = CsvProcessor::new(config);
         
-        let output_content = fs::read_to_string(test_output).unwrap();
-        assert!(output_content.contains("alice"));
-        assert!(output_content.contains("charlie"));
-        assert!(!output_content.contains("bob"));
-        
-        fs::remove_file(test_input).unwrap();
-        fs::remove_file(test_output).unwrap();
+        let result = processor.filter_rows(file.path(), |_| true).unwrap();
+        assert_eq!(result[1], vec!["John", "30", "NYC"]);
     }
 }

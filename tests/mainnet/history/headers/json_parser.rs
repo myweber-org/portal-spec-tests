@@ -973,4 +973,261 @@ mod tests {
         expected.insert("key".to_string(), JsonValue::String("value".to_string()));
         assert_eq!(parser.parse(), Ok(JsonValue::Object(expected)));
     }
+}use std::collections::HashMap;
+use std::error::Error;
+
+#[derive(Debug, PartialEq)]
+enum JsonValue {
+    String(String),
+    Number(f64),
+    Boolean(bool),
+    Null,
+    Object(HashMap<String, JsonValue>),
+    Array(Vec<JsonValue>),
+}
+
+struct JsonParser {
+    input: String,
+    position: usize,
+}
+
+impl JsonParser {
+    fn new(input: &str) -> Self {
+        JsonParser {
+            input: input.to_string(),
+            position: 0,
+        }
+    }
+
+    fn parse(&mut self) -> Result<JsonValue, Box<dyn Error>> {
+        self.skip_whitespace();
+        let value = self.parse_value()?;
+        self.skip_whitespace();
+        if self.position < self.input.len() {
+            return Err("Unexpected trailing characters".into());
+        }
+        Ok(value)
+    }
+
+    fn parse_value(&mut self) -> Result<JsonValue, Box<dyn Error>> {
+        self.skip_whitespace();
+        match self.peek_char() {
+            Some('"') => self.parse_string(),
+            Some('{') => self.parse_object(),
+            Some('[') => self.parse_array(),
+            Some('t') | Some('f') => self.parse_boolean(),
+            Some('n') => self.parse_null(),
+            Some(c) if c.is_digit(10) || c == '-' => self.parse_number(),
+            _ => Err("Invalid JSON value".into()),
+        }
+    }
+
+    fn parse_string(&mut self) -> Result<JsonValue, Box<dyn Error>> {
+        self.consume_char('"')?;
+        let mut result = String::new();
+        while let Some(c) = self.next_char() {
+            match c {
+                '"' => break,
+                '\\' => {
+                    let escaped = self.next_char().ok_or("Unexpected end of string")?;
+                    result.push(self.parse_escape(escaped)?);
+                }
+                _ => result.push(c),
+            }
+        }
+        Ok(JsonValue::String(result))
+    }
+
+    fn parse_escape(&self, c: char) -> Result<char, Box<dyn Error>> {
+        match c {
+            '"' => Ok('"'),
+            '\\' => Ok('\\'),
+            '/' => Ok('/'),
+            'b' => Ok('\u{0008}'),
+            'f' => Ok('\u{000C}'),
+            'n' => Ok('\n'),
+            'r' => Ok('\r'),
+            't' => Ok('\t'),
+            _ => Err("Invalid escape sequence".into()),
+        }
+    }
+
+    fn parse_number(&mut self) -> Result<JsonValue, Box<dyn Error>> {
+        let start = self.position;
+        let mut has_decimal = false;
+        let mut has_exponent = false;
+
+        if self.peek_char() == Some('-') {
+            self.next_char();
+        }
+
+        while let Some(c) = self.peek_char() {
+            if c.is_digit(10) {
+                self.next_char();
+            } else if c == '.' && !has_decimal && !has_exponent {
+                has_decimal = true;
+                self.next_char();
+            } else if (c == 'e' || c == 'E') && !has_exponent {
+                has_exponent = true;
+                self.next_char();
+                if self.peek_char() == Some('-') || self.peek_char() == Some('+') {
+                    self.next_char();
+                }
+            } else {
+                break;
+            }
+        }
+
+        let num_str = &self.input[start..self.position];
+        num_str
+            .parse::<f64>()
+            .map(JsonValue::Number)
+            .map_err(|e| e.into())
+    }
+
+    fn parse_boolean(&mut self) -> Result<JsonValue, Box<dyn Error>> {
+        if self.input[self.position..].starts_with("true") {
+            self.position += 4;
+            Ok(JsonValue::Boolean(true))
+        } else if self.input[self.position..].starts_with("false") {
+            self.position += 5;
+            Ok(JsonValue::Boolean(false))
+        } else {
+            Err("Invalid boolean value".into())
+        }
+    }
+
+    fn parse_null(&mut self) -> Result<JsonValue, Box<dyn Error>> {
+        if self.input[self.position..].starts_with("null") {
+            self.position += 4;
+            Ok(JsonValue::Null)
+        } else {
+            Err("Invalid null value".into())
+        }
+    }
+
+    fn parse_object(&mut self) -> Result<JsonValue, Box<dyn Error>> {
+        self.consume_char('{')?;
+        self.skip_whitespace();
+        let mut map = HashMap::new();
+
+        if self.peek_char() != Some('}') {
+            loop {
+                self.skip_whitespace();
+                let key = match self.parse_string()? {
+                    JsonValue::String(s) => s,
+                    _ => return Err("Object key must be string".into()),
+                };
+                self.skip_whitespace();
+                self.consume_char(':')?;
+                let value = self.parse_value()?;
+                map.insert(key, value);
+                self.skip_whitespace();
+                if self.peek_char() != Some(',') {
+                    break;
+                }
+                self.next_char();
+            }
+        }
+        self.consume_char('}')?;
+        Ok(JsonValue::Object(map))
+    }
+
+    fn parse_array(&mut self) -> Result<JsonValue, Box<dyn Error>> {
+        self.consume_char('[')?;
+        self.skip_whitespace();
+        let mut array = Vec::new();
+
+        if self.peek_char() != Some(']') {
+            loop {
+                let value = self.parse_value()?;
+                array.push(value);
+                self.skip_whitespace();
+                if self.peek_char() != Some(',') {
+                    break;
+                }
+                self.next_char();
+            }
+        }
+        self.consume_char(']')?;
+        Ok(JsonValue::Array(array))
+    }
+
+    fn skip_whitespace(&mut self) {
+        while let Some(c) = self.peek_char() {
+            if c.is_whitespace() {
+                self.next_char();
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn peek_char(&self) -> Option<char> {
+        self.input.chars().nth(self.position)
+    }
+
+    fn next_char(&mut self) -> Option<char> {
+        let c = self.peek_char();
+        if c.is_some() {
+            self.position += 1;
+        }
+        c
+    }
+
+    fn consume_char(&mut self, expected: char) -> Result<(), Box<dyn Error>> {
+        match self.next_char() {
+            Some(c) if c == expected => Ok(()),
+            Some(c) => Err(format!("Expected '{}', found '{}'", expected, c).into()),
+            None => Err("Unexpected end of input".into()),
+        }
+    }
+}
+
+fn extract_values(json: &str, keys: &[&str]) -> Result<Vec<Option<String>>, Box<dyn Error>> {
+    let mut parser = JsonParser::new(json);
+    let value = parser.parse()?;
+    
+    let mut results = Vec::new();
+    if let JsonValue::Object(map) = value {
+        for key in keys {
+            match map.get(*key) {
+                Some(JsonValue::String(s)) => results.push(Some(s.clone())),
+                Some(JsonValue::Number(n)) => results.push(Some(n.to_string())),
+                Some(JsonValue::Boolean(b)) => results.push(Some(b.to_string())),
+                Some(JsonValue::Null) => results.push(Some("null".to_string())),
+                Some(_) => results.push(None),
+                None => results.push(None),
+            }
+        }
+    } else {
+        return Err("Expected JSON object".into());
+    }
+    Ok(results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_basic_parsing() {
+        let json = r#"{"name": "John", "age": 30, "active": true}"#;
+        let mut parser = JsonParser::new(json);
+        let result = parser.parse();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_value_extraction() {
+        let json = r#"{"name": "Alice", "score": 95.5, "passed": true}"#;
+        let keys = vec!["name", "score", "passed", "missing"];
+        let result = extract_values(json, &keys).unwrap();
+        assert_eq!(result, vec![
+            Some("Alice".to_string()),
+            Some("95.5".to_string()),
+            Some("true".to_string()),
+            None
+        ]);
+    }
 }

@@ -784,3 +784,89 @@ mod tests {
         Ok(())
     }
 }
+use csv;
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+use std::path::Path;
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
+}
+
+pub struct DataProcessor {
+    records: Vec<Record>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn Error>> {
+        let file = File::open(path)?;
+        let mut reader = csv::Reader::from_reader(file);
+        
+        for result in reader.deserialize() {
+            let record: Record = result?;
+            self.records.push(record);
+        }
+        
+        Ok(())
+    }
+
+    pub fn validate_records(&self) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|record| record.value > 0.0 && !record.name.is_empty())
+            .collect()
+    }
+
+    pub fn calculate_total(&self) -> f64 {
+        self.records.iter().map(|record| record.value).sum()
+    }
+
+    pub fn find_by_id(&self, id: u32) -> Option<&Record> {
+        self.records.iter().find(|record| record.id == id)
+    }
+
+    pub fn export_to_json<P: AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn Error>> {
+        let file = File::create(path)?;
+        serde_json::to_writer_pretty(file, &self.records)?;
+        Ok(())
+    }
+
+    pub fn get_statistics(&self) -> Statistics {
+        let count = self.records.len();
+        let total = self.calculate_total();
+        let avg = if count > 0 { total / count as f64 } else { 0.0 };
+        let active_count = self.records.iter().filter(|r| r.active).count();
+
+        Statistics {
+            count,
+            total,
+            average: avg,
+            active_count,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Statistics {
+    pub count: usize,
+    pub total: f64,
+    pub average: f64,
+    pub active_count: usize,
+}
+
+impl Default for DataProcessor {
+    fn default() -> Self {
+        Self::new()
+    }
+}

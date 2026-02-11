@@ -264,4 +264,123 @@ mod tests {
         assert!(validate_csv_format(valid_csv));
         assert!(!validate_csv_format(invalid_csv));
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+pub struct CsvConfig {
+    pub delimiter: char,
+    pub has_headers: bool,
+    pub selected_columns: Option<Vec<usize>>,
+}
+
+pub struct CsvProcessor {
+    config: CsvConfig,
+}
+
+impl CsvProcessor {
+    pub fn new(config: CsvConfig) -> Self {
+        CsvProcessor { config }
+    }
+
+    pub fn process_file<P: AsRef<Path>>(&self, path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut records = Vec::new();
+        let mut lines = reader.lines();
+
+        if self.config.has_headers {
+            let _headers = lines.next();
+        }
+
+        for line_result in lines {
+            let line = line_result?;
+            let fields: Vec<String> = line
+                .split(self.config.delimiter)
+                .map(|s| s.trim().to_string())
+                .collect();
+
+            let processed_fields = if let Some(ref selected) = self.config.selected_columns {
+                selected
+                    .iter()
+                    .filter_map(|&idx| fields.get(idx).cloned())
+                    .collect()
+            } else {
+                fields
+            };
+
+            if !processed_fields.is_empty() {
+                records.push(processed_fields);
+            }
+        }
+
+        Ok(records)
+    }
+
+    pub fn filter_records<F>(&self, records: &[Vec<String>], predicate: F) -> Vec<Vec<String>>
+    where
+        F: Fn(&[String]) -> bool,
+    {
+        records
+            .iter()
+            .filter(|record| predicate(record))
+            .cloned()
+            .collect()
+    }
+}
+
+pub fn create_default_config() -> CsvConfig {
+    CsvConfig {
+        delimiter: ',',
+        has_headers: true,
+        selected_columns: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_csv_processing() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,city").unwrap();
+        writeln!(temp_file, "Alice,30,New York").unwrap();
+        writeln!(temp_file, "Bob,25,London").unwrap();
+
+        let config = CsvConfig {
+            delimiter: ',',
+            has_headers: true,
+            selected_columns: Some(vec![0, 2]),
+        };
+
+        let processor = CsvProcessor::new(config);
+        let result = processor.process_file(temp_file.path()).unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], vec!["Alice", "New York"]);
+        assert_eq!(result[1], vec!["Bob", "London"]);
+    }
+
+    #[test]
+    fn test_filter_records() {
+        let records = vec![
+            vec!["Alice".to_string(), "30".to_string()],
+            vec!["Bob".to_string(), "25".to_string()],
+            vec!["Charlie".to_string(), "35".to_string()],
+        ];
+
+        let config = create_default_config();
+        let processor = CsvProcessor::new(config);
+
+        let filtered = processor.filter_records(&records, |fields| {
+            fields.get(1).and_then(|age| age.parse::<i32>().ok()).map_or(false, |age| age > 30)
+        });
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0], vec!["Charlie", "35"]);
+    }
 }

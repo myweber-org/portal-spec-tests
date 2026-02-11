@@ -109,4 +109,88 @@ mod tests {
     fn test_invalid_username() {
         assert!(Validator::validate_username("ab").is_err());
     }
+}use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct UserData {
+    pub username: Option<String>,
+    pub email: Option<String>,
+    pub age: Option<u32>,
+    pub active: Option<bool>,
+}
+
+pub struct ValidationResult {
+    pub is_valid: bool,
+    pub missing_fields: Vec<String>,
+}
+
+impl UserData {
+    pub fn validate_required(&self, required_fields: &[&str]) -> ValidationResult {
+        let mut missing = Vec::new();
+        let present_fields = self.get_present_fields();
+
+        for &field in required_fields {
+            if !present_fields.contains(field) {
+                missing.push(field.to_string());
+            }
+        }
+
+        ValidationResult {
+            is_valid: missing.is_empty(),
+            missing_fields: missing,
+        }
+    }
+
+    fn get_present_fields(&self) -> HashSet<&str> {
+        let mut fields = HashSet::new();
+        if self.username.is_some() {
+            fields.insert("username");
+        }
+        if self.email.is_some() {
+            fields.insert("email");
+        }
+        if self.age.is_some() {
+            fields.insert("age");
+        }
+        if self.active.is_some() {
+            fields.insert("active");
+        }
+        fields
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validation_with_all_fields() {
+        let user = UserData {
+            username: Some("john_doe".to_string()),
+            email: Some("john@example.com".to_string()),
+            age: Some(25),
+            active: Some(true),
+        };
+
+        let result = user.validate_required(&["username", "email"]);
+        assert!(result.is_valid);
+        assert!(result.missing_fields.is_empty());
+    }
+
+    #[test]
+    fn test_validation_with_missing_fields() {
+        let user = UserData {
+            username: None,
+            email: Some("john@example.com".to_string()),
+            age: Some(25),
+            active: None,
+        };
+
+        let result = user.validate_required(&["username", "email", "active"]);
+        assert!(!result.is_valid);
+        assert_eq!(result.missing_fields.len(), 2);
+        assert!(result.missing_fields.contains(&"username".to_string()));
+        assert!(result.missing_fields.contains(&"active".to_string()));
+    }
 }

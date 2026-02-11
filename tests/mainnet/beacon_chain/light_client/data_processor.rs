@@ -550,3 +550,171 @@ mod tests {
         assert_eq!(filtered.len(), 2);
     }
 }
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub category: String,
+}
+
+#[derive(Debug)]
+pub enum ValidationError {
+    InvalidId,
+    EmptyName,
+    InvalidValue,
+    UnknownCategory,
+}
+
+impl fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ValidationError::InvalidId => write!(f, "ID must be greater than 0"),
+            ValidationError::EmptyName => write!(f, "Name cannot be empty"),
+            ValidationError::InvalidValue => write!(f, "Value must be between 0.0 and 1000.0"),
+            ValidationError::UnknownCategory => write!(f, "Category not recognized"),
+        }
+    }
+}
+
+impl Error for ValidationError {}
+
+pub struct DataProcessor {
+    valid_categories: Vec<String>,
+    transformation_rules: HashMap<String, fn(f64) -> f64>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        let mut processor = DataProcessor {
+            valid_categories: vec![
+                "standard".to_string(),
+                "premium".to_string(),
+                "economy".to_string(),
+            ],
+            transformation_rules: HashMap::new(),
+        };
+        
+        processor.initialize_transformation_rules();
+        processor
+    }
+    
+    fn initialize_transformation_rules(&mut self) {
+        self.transformation_rules.insert("standard".to_string(), |v| v * 1.0);
+        self.transformation_rules.insert("premium".to_string(), |v| v * 1.2);
+        self.transformation_rules.insert("economy".to_string(), |v| v * 0.8);
+    }
+    
+    pub fn validate_record(&self, record: &DataRecord) -> Result<(), ValidationError> {
+        if record.id == 0 {
+            return Err(ValidationError::InvalidId);
+        }
+        
+        if record.name.trim().is_empty() {
+            return Err(ValidationError::EmptyName);
+        }
+        
+        if record.value < 0.0 || record.value > 1000.0 {
+            return Err(ValidationError::InvalidValue);
+        }
+        
+        if !self.valid_categories.contains(&record.category) {
+            return Err(ValidationError::UnknownCategory);
+        }
+        
+        Ok(())
+    }
+    
+    pub fn process_record(&self, record: &DataRecord) -> Result<DataRecord, Box<dyn Error>> {
+        self.validate_record(record)?;
+        
+        let transform_func = self.transformation_rules
+            .get(&record.category)
+            .ok_or(ValidationError::UnknownCategory)?;
+        
+        let transformed_value = transform_func(record.value);
+        
+        Ok(DataRecord {
+            id: record.id,
+            name: record.name.clone(),
+            value: transformed_value,
+            category: record.category.clone(),
+        })
+    }
+    
+    pub fn process_batch(&self, records: Vec<DataRecord>) -> Vec<Result<DataRecord, Box<dyn Error>>> {
+        records
+            .into_iter()
+            .map(|record| self.process_record(&record))
+            .collect()
+    }
+    
+    pub fn add_category(&mut self, category: String, transform_rule: fn(f64) -> f64) {
+        self.valid_categories.push(category.clone());
+        self.transformation_rules.insert(category, transform_rule);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_valid_record_processing() {
+        let processor = DataProcessor::new();
+        let record = DataRecord {
+            id: 1,
+            name: "Test Item".to_string(),
+            value: 100.0,
+            category: "premium".to_string(),
+        };
+        
+        let result = processor.process_record(&record);
+        assert!(result.is_ok());
+        
+        let processed = result.unwrap();
+        assert_eq!(processed.value, 120.0);
+    }
+    
+    #[test]
+    fn test_invalid_record() {
+        let processor = DataProcessor::new();
+        let record = DataRecord {
+            id: 0,
+            name: "".to_string(),
+            value: -10.0,
+            category: "unknown".to_string(),
+        };
+        
+        let result = processor.process_record(&record);
+        assert!(result.is_err());
+    }
+    
+    #[test]
+    fn test_batch_processing() {
+        let processor = DataProcessor::new();
+        let records = vec![
+            DataRecord {
+                id: 1,
+                name: "Item A".to_string(),
+                value: 50.0,
+                category: "standard".to_string(),
+            },
+            DataRecord {
+                id: 2,
+                name: "Item B".to_string(),
+                value: 200.0,
+                category: "economy".to_string(),
+            },
+        ];
+        
+        let results = processor.process_batch(records);
+        assert_eq!(results.len(), 2);
+        assert!(results[0].is_ok());
+        assert!(results[1].is_ok());
+    }
+}

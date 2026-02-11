@@ -1138,3 +1138,119 @@ pub fn filter_by_category(records: Vec<Record>, category: &str) -> Vec<Record> {
         .filter(|r| r.category == category)
         .collect()
 }
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum DataError {
+    #[error("Invalid data format")]
+    InvalidFormat,
+    #[error("Missing required field: {0}")]
+    MissingField(String),
+    #[error("Value out of range: {0}")]
+    OutOfRange(String),
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub timestamp: i64,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
+}
+
+impl DataRecord {
+    pub fn new(id: u32, timestamp: i64) -> Self {
+        Self {
+            id,
+            timestamp,
+            values: Vec::new(),
+            metadata: HashMap::new(),
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), DataError> {
+        if self.id == 0 {
+            return Err(DataError::InvalidFormat);
+        }
+        
+        if self.timestamp < 0 {
+            return Err(DataError::OutOfRange("timestamp".to_string()));
+        }
+
+        if self.values.is_empty() {
+            return Err(DataError::MissingField("values".to_string()));
+        }
+
+        Ok(())
+    }
+
+    pub fn add_value(&mut self, value: f64) {
+        self.values.push(value);
+    }
+
+    pub fn add_metadata(&mut self, key: String, value: String) {
+        self.metadata.insert(key, value);
+    }
+
+    pub fn calculate_average(&self) -> Option<f64> {
+        if self.values.is_empty() {
+            return None;
+        }
+        
+        let sum: f64 = self.values.iter().sum();
+        Some(sum / self.values.len() as f64)
+    }
+}
+
+pub fn process_records(records: Vec<DataRecord>) -> Vec<Result<DataRecord, DataError>> {
+    records
+        .into_iter()
+        .map(|record| {
+            record.validate()?;
+            Ok(record)
+        })
+        .collect()
+}
+
+pub fn filter_valid_records(records: Vec<DataRecord>) -> Vec<DataRecord> {
+    records
+        .into_iter()
+        .filter(|record| record.validate().is_ok())
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_record() {
+        let mut record = DataRecord::new(1, 1625097600);
+        record.add_value(10.5);
+        record.add_value(20.5);
+        
+        assert!(record.validate().is_ok());
+        assert_eq!(record.calculate_average(), Some(15.5));
+    }
+
+    #[test]
+    fn test_invalid_record() {
+        let record = DataRecord::new(0, -1);
+        assert!(record.validate().is_err());
+    }
+
+    #[test]
+    fn test_process_records() {
+        let mut valid_record = DataRecord::new(1, 1625097600);
+        valid_record.add_value(5.0);
+        
+        let invalid_record = DataRecord::new(0, 1625097600);
+        
+        let results = process_records(vec![valid_record, invalid_record]);
+        assert_eq!(results.len(), 2);
+        assert!(results[0].is_ok());
+        assert!(results[1].is_err());
+    }
+}

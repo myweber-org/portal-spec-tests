@@ -148,4 +148,78 @@ mod tests {
         let json_data = r#"{"name": "John",}"#;
         assert!(validator.validate(json_data).is_err());
     }
+}use serde_json::{Value, from_str};
+use std::fs;
+
+pub fn validate_json_schema(json_str: &str, schema_path: &str) -> Result<(), String> {
+    let json_data: Value = from_str(json_str)
+        .map_err(|e| format!("Invalid JSON: {}", e))?;
+
+    let schema_content = fs::read_to_string(schema_path)
+        .map_err(|e| format!("Cannot read schema file: {}", e))?;
+
+    let schema: Value = from_str(&schema_content)
+        .map_err(|e| format!("Invalid schema JSON: {}", e))?;
+
+    if !json_data.is_object() {
+        return Err("JSON data must be an object".to_string());
+    }
+
+    if !schema.is_object() {
+        return Err("Schema must be a JSON object".to_string());
+    }
+
+    validate_against_schema(&json_data, &schema)
+}
+
+fn validate_against_schema(data: &Value, schema: &Value) -> Result<(), String> {
+    if let Some(required_fields) = schema.get("required").and_then(|v| v.as_array()) {
+        let data_obj = data.as_object().unwrap();
+        for field in required_fields {
+            if let Some(field_name) = field.as_str() {
+                if !data_obj.contains_key(field_name) {
+                    return Err(format!("Missing required field: {}", field_name));
+                }
+            }
+        }
+    }
+
+    if let Some(properties) = schema.get("properties").and_then(|v| v.as_object()) {
+        for (key, prop_schema) in properties {
+            if let Some(data_value) = data.get(key) {
+                if let Some(type_str) = prop_schema.get("type").and_then(|v| v.as_str()) {
+                    match type_str {
+                        "string" => {
+                            if !data_value.is_string() {
+                                return Err(format!("Field '{}' must be a string", key));
+                            }
+                        }
+                        "number" => {
+                            if !data_value.is_number() {
+                                return Err(format!("Field '{}' must be a number", key));
+                            }
+                        }
+                        "boolean" => {
+                            if !data_value.is_boolean() {
+                                return Err(format!("Field '{}' must be a boolean", key));
+                            }
+                        }
+                        "array" => {
+                            if !data_value.is_array() {
+                                return Err(format!("Field '{}' must be an array", key));
+                            }
+                        }
+                        "object" => {
+                            if !data_value.is_object() {
+                                return Err(format!("Field '{}' must be an object", key));
+                            }
+                        }
+                        _ => return Err(format!("Unknown type '{}' for field '{}'", type_str, key)),
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
 }

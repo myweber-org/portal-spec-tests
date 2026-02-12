@@ -226,4 +226,94 @@ mod tests {
         fs::remove_file(test_input).unwrap();
         fs::remove_file(test_output).unwrap();
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+pub struct CsvConfig {
+    delimiter: char,
+    selected_columns: Option<Vec<usize>>,
+    has_header: bool,
+}
+
+impl Default for CsvConfig {
+    fn default() -> Self {
+        CsvConfig {
+            delimiter: ',',
+            selected_columns: None,
+            has_header: true,
+        }
+    }
+}
+
+pub struct CsvProcessor {
+    config: CsvConfig,
+}
+
+impl CsvProcessor {
+    pub fn new(config: CsvConfig) -> Self {
+        CsvProcessor { config }
+    }
+
+    pub fn process_file<P: AsRef<Path>>(&self, path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut records = Vec::new();
+        let mut lines = reader.lines();
+
+        if self.config.has_header {
+            lines.next();
+        }
+
+        for line_result in lines {
+            let line = line_result?;
+            let fields: Vec<String> = line
+                .split(self.config.delimiter)
+                .map(|s| s.trim().to_string())
+                .collect();
+
+            let processed_fields = match &self.config.selected_columns {
+                Some(cols) => {
+                    let mut selected = Vec::new();
+                    for &col in cols {
+                        if col < fields.len() {
+                            selected.push(fields[col].clone());
+                        }
+                    }
+                    selected
+                }
+                None => fields,
+            };
+
+            if !processed_fields.is_empty() {
+                records.push(processed_fields);
+            }
+        }
+
+        Ok(records)
+    }
+
+    pub fn filter_records<F>(&self, records: &[Vec<String>], predicate: F) -> Vec<Vec<String>>
+    where
+        F: Fn(&[String]) -> bool,
+    {
+        records
+            .iter()
+            .filter(|record| predicate(record))
+            .cloned()
+            .collect()
+    }
+}
+
+pub fn create_sample_csv() -> Result<(), Box<dyn Error>> {
+    let sample_data = "id,name,age,department\n\
+                       1,Alice,30,Engineering\n\
+                       2,Bob,25,Marketing\n\
+                       3,Charlie,35,Engineering\n\
+                       4,Diana,28,Sales";
+
+    let path = "sample_data.csv";
+    std::fs::write(path, sample_data)?;
+    Ok(())
 }

@@ -1618,3 +1618,143 @@ mod tests {
         assert_eq!(category_a_records.len(), 1);
     }
 }
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug)]
+pub enum ValidationError {
+    InvalidId,
+    InvalidName,
+    InvalidValue,
+    EmptyTags,
+}
+
+impl fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ValidationError::InvalidId => write!(f, "ID must be greater than 0"),
+            ValidationError::InvalidName => write!(f, "Name cannot be empty"),
+            ValidationError::InvalidValue => write!(f, "Value must be between 0.0 and 1000.0"),
+            ValidationError::EmptyTags => write!(f, "At least one tag is required"),
+        }
+    }
+}
+
+impl Error for ValidationError {}
+
+pub fn validate_record(record: &DataRecord) -> Result<(), ValidationError> {
+    if record.id == 0 {
+        return Err(ValidationError::InvalidId);
+    }
+    
+    if record.name.trim().is_empty() {
+        return Err(ValidationError::InvalidName);
+    }
+    
+    if !(0.0..=1000.0).contains(&record.value) {
+        return Err(ValidationError::InvalidValue);
+    }
+    
+    if record.tags.is_empty() {
+        return Err(ValidationError::EmptyTags);
+    }
+    
+    Ok(())
+}
+
+pub fn transform_records(records: Vec<DataRecord>) -> HashMap<String, Vec<DataRecord>> {
+    let mut grouped = HashMap::new();
+    
+    for record in records {
+        if let Ok(_) = validate_record(&record) {
+            for tag in &record.tags {
+                grouped
+                    .entry(tag.clone())
+                    .or_insert_with(Vec::new)
+                    .push(record.clone());
+            }
+        }
+    }
+    
+    grouped
+}
+
+pub fn calculate_statistics(records: &[DataRecord]) -> (f64, f64, f64) {
+    if records.is_empty() {
+        return (0.0, 0.0, 0.0);
+    }
+    
+    let count = records.len() as f64;
+    let sum: f64 = records.iter().map(|r| r.value).sum();
+    let mean = sum / count;
+    
+    let variance: f64 = records.iter()
+        .map(|r| (r.value - mean).powi(2))
+        .sum::<f64>() / count;
+    
+    let std_dev = variance.sqrt();
+    
+    (mean, variance, std_dev)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_valid_record() {
+        let record = DataRecord {
+            id: 1,
+            name: "Test".to_string(),
+            value: 100.0,
+            tags: vec!["tag1".to_string()],
+        };
+        
+        assert!(validate_record(&record).is_ok());
+    }
+    
+    #[test]
+    fn test_invalid_id() {
+        let record = DataRecord {
+            id: 0,
+            name: "Test".to_string(),
+            value: 100.0,
+            tags: vec!["tag1".to_string()],
+        };
+        
+        assert!(matches!(validate_record(&record), Err(ValidationError::InvalidId)));
+    }
+    
+    #[test]
+    fn test_statistics_calculation() {
+        let records = vec![
+            DataRecord {
+                id: 1,
+                name: "A".to_string(),
+                value: 10.0,
+                tags: vec!["test".to_string()],
+            },
+            DataRecord {
+                id: 2,
+                name: "B".to_string(),
+                value: 20.0,
+                tags: vec!["test".to_string()],
+            },
+        ];
+        
+        let (mean, variance, std_dev) = calculate_statistics(&records);
+        
+        assert_eq!(mean, 15.0);
+        assert_eq!(variance, 25.0);
+        assert_eq!(std_dev, 5.0);
+    }
+}

@@ -581,4 +581,158 @@ mod tests {
         assert_eq!(max, 30.0);
         assert_eq!(count, 3);
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufReader, BufWriter};
+use csv::{ReaderBuilder, WriterBuilder};
+
+#[derive(Debug, Clone)]
+pub struct DataPoint {
+    timestamp: String,
+    value: f64,
+    category: String,
+}
+
+impl DataPoint {
+    pub fn new(timestamp: String, value: f64, category: String) -> Self {
+        DataPoint {
+            timestamp,
+            value,
+            category,
+        }
+    }
+
+    pub fn value(&self) -> f64 {
+        self.value
+    }
+
+    pub fn category(&self) -> &str {
+        &self.category
+    }
+}
+
+pub struct DataProcessor {
+    data: Vec<DataPoint>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor { data: Vec::new() }
+    }
+
+    pub fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        let mut csv_reader = ReaderBuilder::new()
+            .has_headers(true)
+            .from_reader(reader);
+
+        for result in csv_reader.records() {
+            let record = result?;
+            if record.len() >= 3 {
+                let timestamp = record[0].to_string();
+                let value: f64 = record[1].parse()?;
+                let category = record[2].to_string();
+                self.data.push(DataPoint::new(timestamp, value, category));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn calculate_statistics(&self) -> (f64, f64, f64) {
+        if self.data.is_empty() {
+            return (0.0, 0.0, 0.0);
+        }
+
+        let sum: f64 = self.data.iter().map(|d| d.value).sum();
+        let count = self.data.len() as f64;
+        let mean = sum / count;
+
+        let variance: f64 = self.data
+            .iter()
+            .map(|d| (d.value - mean).powi(2))
+            .sum::<f64>() / count;
+
+        let std_dev = variance.sqrt();
+
+        (mean, variance, std_dev)
+    }
+
+    pub fn filter_by_category(&self, category: &str) -> Vec<&DataPoint> {
+        self.data
+            .iter()
+            .filter(|d| d.category == category)
+            .collect()
+    }
+
+    pub fn export_to_csv(&self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::create(file_path)?;
+        let writer = BufWriter::new(file);
+        let mut csv_writer = WriterBuilder::new().from_writer(writer);
+
+        csv_writer.write_record(&["timestamp", "value", "category"])?;
+
+        for point in &self.data {
+            csv_writer.write_record(&[
+                &point.timestamp,
+                &point.value.to_string(),
+                &point.category,
+            ])?;
+        }
+
+        csv_writer.flush()?;
+        Ok(())
+    }
+
+    pub fn add_data_point(&mut self, point: DataPoint) {
+        self.data.push(point);
+    }
+
+    pub fn data_count(&self) -> usize {
+        self.data.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_data_processor() {
+        let mut processor = DataProcessor::new();
+        
+        processor.add_data_point(DataPoint::new(
+            "2024-01-01T12:00:00".to_string(),
+            42.5,
+            "temperature".to_string(),
+        ));
+        
+        processor.add_data_point(DataPoint::new(
+            "2024-01-01T13:00:00".to_string(),
+            43.2,
+            "temperature".to_string(),
+        ));
+        
+        processor.add_data_point(DataPoint::new(
+            "2024-01-01T12:00:00".to_string(),
+            65.0,
+            "humidity".to_string(),
+        ));
+
+        assert_eq!(processor.data_count(), 3);
+        
+        let (mean, variance, std_dev) = processor.calculate_statistics();
+        assert!((mean - 50.233333333333334).abs() < 0.0001);
+        assert!((variance - 134.72222222222223).abs() < 0.0001);
+        
+        let temp_data = processor.filter_by_category("temperature");
+        assert_eq!(temp_data.len(), 2);
+        
+        let temp_file = NamedTempFile::new().unwrap();
+        let export_path = temp_file.path().to_str().unwrap();
+        
+        assert!(processor.export_to_csv(export_path).is_ok());
+    }
 }

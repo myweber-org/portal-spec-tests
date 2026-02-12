@@ -270,3 +270,100 @@ mod tests {
         assert_eq!(original_content.to_vec(), decrypted_content);
     }
 }
+use std::fs;
+use std::io::{self, Read, Write};
+use std::path::Path;
+
+const DEFAULT_KEY: u8 = 0xAA;
+
+fn xor_cipher(data: &mut [u8], key: u8) {
+    for byte in data.iter_mut() {
+        *byte ^= key;
+    }
+}
+
+fn process_file(input_path: &str, output_path: &str, key: u8) -> io::Result<()> {
+    let mut file = fs::File::open(input_path)?;
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer)?;
+
+    xor_cipher(&mut buffer, key);
+
+    let mut output_file = fs::File::create(output_path)?;
+    output_file.write_all(&buffer)?;
+
+    Ok(())
+}
+
+fn main() -> io::Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+    
+    if args.len() != 4 {
+        eprintln!("Usage: {} <encrypt|decrypt> <input_file> <output_file>", args[0]);
+        std::process::exit(1);
+    }
+
+    let operation = &args[1];
+    let input_file = &args[2];
+    let output_file = &args[3];
+
+    if !Path::new(input_file).exists() {
+        eprintln!("Error: Input file '{}' does not exist", input_file);
+        std::process::exit(1);
+    }
+
+    match operation.as_str() {
+        "encrypt" | "decrypt" => {
+            process_file(input_file, output_file, DEFAULT_KEY)?;
+            println!("{} operation completed successfully", operation);
+        }
+        _ => {
+            eprintln!("Error: First argument must be 'encrypt' or 'decrypt'");
+            std::process::exit(1);
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_xor_cipher_symmetry() {
+        let original = b"Hello, World!";
+        let mut data = original.to_vec();
+        let key = 0x55;
+
+        xor_cipher(&mut data, key);
+        assert_ne!(data.as_slice(), original);
+
+        xor_cipher(&mut data, key);
+        assert_eq!(data.as_slice(), original);
+    }
+
+    #[test]
+    fn test_file_encryption_decryption() -> io::Result<()> {
+        let content = b"Test data for encryption";
+        let mut input_file = NamedTempFile::new()?;
+        input_file.write_all(content)?;
+
+        let encrypted_file = NamedTempFile::new()?;
+        let decrypted_file = NamedTempFile::new()?;
+
+        let input_path = input_file.path().to_str().unwrap();
+        let encrypted_path = encrypted_file.path().to_str().unwrap();
+        let decrypted_path = decrypted_file.path().to_str().unwrap();
+
+        process_file(input_path, encrypted_path, DEFAULT_KEY)?;
+        process_file(encrypted_path, decrypted_path, DEFAULT_KEY)?;
+
+        let decrypted_content = fs::read(decrypted_path)?;
+        assert_eq!(decrypted_content, content);
+
+        Ok(())
+    }
+}

@@ -455,4 +455,110 @@ mod tests {
         assert!((ds.mean().unwrap() - 17.9).abs() < 0.0001);
         Ok(())
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+pub struct DataProcessor {
+    delimiter: char,
+    has_header: bool,
+}
+
+impl DataProcessor {
+    pub fn new(delimiter: char, has_header: bool) -> Self {
+        DataProcessor {
+            delimiter,
+            has_header,
+        }
+    }
+
+    pub fn process_csv<P: AsRef<Path>>(&self, file_path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        let mut records = Vec::new();
+
+        for (index, line) in reader.lines().enumerate() {
+            let line = line?;
+            
+            if index == 0 && self.has_header {
+                continue;
+            }
+
+            let fields: Vec<String> = line
+                .split(self.delimiter)
+                .map(|s| s.trim().to_string())
+                .collect();
+
+            if !self.validate_record(&fields) {
+                return Err(format!("Invalid record at line {}: {:?}", index + 1, fields).into());
+            }
+
+            records.push(fields);
+        }
+
+        Ok(records)
+    }
+
+    fn validate_record(&self, fields: &[String]) -> bool {
+        !fields.is_empty() && fields.iter().all(|field| !field.is_empty())
+    }
+
+    pub fn calculate_statistics(&self, data: &[Vec<String>], column_index: usize) -> Option<f64> {
+        if data.is_empty() {
+            return None;
+        }
+
+        let values: Vec<f64> = data
+            .iter()
+            .filter_map(|row| row.get(column_index))
+            .filter_map(|s| s.parse().ok())
+            .collect();
+
+        if values.is_empty() {
+            return None;
+        }
+
+        let sum: f64 = values.iter().sum();
+        let count = values.len() as f64;
+        Some(sum / count)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_process_csv_valid() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,city").unwrap();
+        writeln!(temp_file, "Alice,30,New York").unwrap();
+        writeln!(temp_file, "Bob,25,London").unwrap();
+
+        let processor = DataProcessor::new(',', true);
+        let result = processor.process_csv(temp_file.path());
+        
+        assert!(result.is_ok());
+        let data = result.unwrap();
+        assert_eq!(data.len(), 2);
+        assert_eq!(data[0], vec!["Alice", "30", "New York"]);
+    }
+
+    #[test]
+    fn test_calculate_statistics() {
+        let data = vec![
+            vec!["10".to_string(), "20".to_string()],
+            vec!["30".to_string(), "40".to_string()],
+            vec!["50".to_string(), "60".to_string()],
+        ];
+        
+        let processor = DataProcessor::new(',', false);
+        let avg = processor.calculate_statistics(&data, 0);
+        
+        assert!(avg.is_some());
+        assert_eq!(avg.unwrap(), 30.0);
+    }
 }

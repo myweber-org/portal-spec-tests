@@ -110,3 +110,105 @@ mod tests {
         assert_eq!(column, vec!["b".to_string(), "e".to_string()]);
     }
 }
+use std::collections::HashMap;
+
+pub struct DataProcessor {
+    validators: Vec<Box<dyn Fn(&str) -> bool>>,
+    transformers: HashMap<String, Box<dyn Fn(String) -> String>>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            validators: Vec::new(),
+            transformers: HashMap::new(),
+        }
+    }
+
+    pub fn add_validator<F>(&mut self, validator: F)
+    where
+        F: Fn(&str) -> bool + 'static,
+    {
+        self.validators.push(Box::new(validator));
+    }
+
+    pub fn add_transformer<F>(&mut self, name: &str, transformer: F)
+    where
+        F: Fn(String) -> String + 'static,
+    {
+        self.transformers
+            .insert(name.to_string(), Box::new(transformer));
+    }
+
+    pub fn validate(&self, input: &str) -> bool {
+        self.validators.iter().all(|validator| validator(input))
+    }
+
+    pub fn transform(&self, name: &str, input: String) -> Option<String> {
+        self.transformers.get(name).map(|transformer| transformer(input))
+    }
+
+    pub fn process_pipeline(&self, input: &str, pipeline: &[&str]) -> Option<String> {
+        if !self.validate(input) {
+            return None;
+        }
+
+        let mut result = input.to_string();
+        for step in pipeline {
+            match self.transformers.get(*step) {
+                Some(transformer) => result = transformer(result),
+                None => return None,
+            }
+        }
+        Some(result)
+    }
+}
+
+pub fn create_default_processor() -> DataProcessor {
+    let mut processor = DataProcessor::new();
+
+    processor.add_validator(|s| !s.trim().is_empty());
+    processor.add_validator(|s| s.len() <= 1000);
+
+    processor.add_transformer("trim", |s| s.trim().to_string());
+    processor.add_transformer("uppercase", |s| s.to_uppercase());
+    processor.add_transformer("reverse", |s| s.chars().rev().collect());
+
+    processor
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validation() {
+        let processor = create_default_processor();
+        assert!(processor.validate("hello"));
+        assert!(!processor.validate(""));
+        assert!(!processor.validate(&"a".repeat(1001)));
+    }
+
+    #[test]
+    fn test_transformation() {
+        let processor = create_default_processor();
+        assert_eq!(
+            processor.transform("uppercase", "hello".to_string()),
+            Some("HELLO".to_string())
+        );
+        assert_eq!(
+            processor.transform("reverse", "abc".to_string()),
+            Some("cba".to_string())
+        );
+    }
+
+    #[test]
+    fn test_pipeline() {
+        let processor = create_default_processor();
+        let pipeline = vec!["trim", "uppercase", "reverse"];
+        assert_eq!(
+            processor.process_pipeline("  hello world  ", &pipeline),
+            Some("DLROW OLLEH".to_string())
+        );
+    }
+}

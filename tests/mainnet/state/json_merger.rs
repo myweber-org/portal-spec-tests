@@ -204,4 +204,63 @@ mod tests {
         let result = merge_json_files(&paths);
         assert!(result.is_err());
     }
+}use serde_json::{Map, Value};
+
+pub fn merge_json(a: &mut Value, b: &Value) {
+    match (a, b) {
+        (Value::Object(a_map), Value::Object(b_map)) => {
+            for (key, b_value) in b_map {
+                if let Some(a_value) = a_map.get_mut(key) {
+                    merge_json(a_value, b_value);
+                } else {
+                    a_map.insert(key.clone(), b_value.clone());
+                }
+            }
+        }
+        (a, b) => *a = b.clone(),
+    }
+}
+
+pub fn merge_json_vec(values: Vec<Value>) -> Option<Value> {
+    let mut result = Map::new();
+    for value in values {
+        if let Value::Object(map) = value {
+            for (key, val) in map {
+                if let Some(existing) = result.get_mut(&key) {
+                    merge_json(existing, &val);
+                } else {
+                    result.insert(key, val);
+                }
+            }
+        }
+    }
+    Some(Value::Object(result))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_basic_merge() {
+        let mut a = json!({"a": 1, "b": {"c": 2}});
+        let b = json!({"b": {"d": 3}, "e": 4});
+        
+        merge_json(&mut a, &b);
+        
+        assert_eq!(a, json!({"a": 1, "b": {"c": 2, "d": 3}, "e": 4}));
+    }
+
+    #[test]
+    fn test_array_merge() {
+        let values = vec![
+            json!({"a": 1, "b": {"c": 2}}),
+            json!({"b": {"d": 3}, "e": 4}),
+            json!({"f": 5}),
+        ];
+        
+        let result = merge_json_vec(values).unwrap();
+        assert_eq!(result, json!({"a": 1, "b": {"c": 2, "d": 3}, "e": 4, "f": 5}));
+    }
 }

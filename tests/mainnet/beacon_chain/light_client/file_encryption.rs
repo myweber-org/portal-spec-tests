@@ -237,4 +237,77 @@ mod tests {
         
         Ok(())
     }
+}use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce
+};
+use argon2::{
+    password_hash::{
+        rand_core::OsRng,
+        PasswordHasher, SaltString
+    },
+    Argon2
+};
+use std::fs;
+
+pub struct FileEncryptor {
+    cipher: Aes256Gcm,
+}
+
+impl FileEncryptor {
+    pub fn new(password: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let salt = SaltString::generate(&mut OsRng);
+        let argon2 = Argon2::default();
+        let password_hash = argon2.hash_password(password.as_bytes(), &salt)?;
+        
+        let key = Key::<Aes256Gcm>::from_slice(&password_hash.hash.unwrap().as_bytes()[..32]);
+        let cipher = Aes256Gcm::new(key);
+        
+        Ok(Self { cipher })
+    }
+
+    pub fn encrypt_file(&self, input_path: &str, output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let plaintext = fs::read(input_path)?;
+        let nonce = Nonce::generate(&mut OsRng);
+        
+        let ciphertext = self.cipher.encrypt(&nonce, plaintext.as_ref())
+            .map_err(|e| format!("Encryption failed: {}", e))?;
+        
+        let mut output = nonce.to_vec();
+        output.extend_from_slice(&ciphertext);
+        
+        fs::write(output_path, output)?;
+        Ok(())
+    }
+
+    pub fn decrypt_file(&self, input_path: &str, output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let data = fs::read(input_path)?;
+        if data.len() < 12 {
+            return Err("Invalid encrypted file format".into());
+        }
+        
+        let (nonce_bytes, ciphertext) = data.split_at(12);
+        let nonce = Nonce::from_slice(nonce_bytes);
+        
+        let plaintext = self.cipher.decrypt(nonce, ciphertext)
+            .map_err(|e| format!("Decryption failed: {}", e))?;
+        
+        fs::write(output_path, plaintext)?;
+        Ok(())
+    }
+}
+
+pub fn generate_secure_password(length: usize) -> String {
+    use rand::Rng;
+    const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ\
+                            abcdefghijklmnopqrstuvwxyz\
+                            0123456789!@#$%^&*()_+-=[]{}|;:,.<>?";
+    
+    let mut rng = rand::thread_rng();
+    (0..length)
+        .map(|_| {
+            let idx = rng.gen_range(0..CHARSET.len());
+            CHARSET[idx] as char
+        })
+        .collect()
 }

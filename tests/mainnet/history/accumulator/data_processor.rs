@@ -1144,3 +1144,110 @@ mod tests {
         assert_eq!(dataset.count(), 0);
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug)]
+pub struct DataPoint {
+    timestamp: String,
+    value: f64,
+}
+
+pub struct DataProcessor {
+    data_points: Vec<DataPoint>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            data_points: Vec::new(),
+        }
+    }
+
+    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+
+        for (index, line) in reader.lines().enumerate() {
+            let line = line?;
+            
+            if index == 0 {
+                continue;
+            }
+
+            let parts: Vec<&str> = line.split(',').collect();
+            if parts.len() >= 2 {
+                let timestamp = parts[0].to_string();
+                if let Ok(value) = parts[1].parse::<f64>() {
+                    self.data_points.push(DataPoint { timestamp, value });
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn calculate_mean(&self) -> Option<f64> {
+        if self.data_points.is_empty() {
+            return None;
+        }
+
+        let sum: f64 = self.data_points.iter().map(|dp| dp.value).sum();
+        Some(sum / self.data_points.len() as f64)
+    }
+
+    pub fn calculate_standard_deviation(&self) -> Option<f64> {
+        if self.data_points.len() < 2 {
+            return None;
+        }
+
+        let mean = self.calculate_mean()?;
+        let variance: f64 = self.data_points
+            .iter()
+            .map(|dp| (dp.value - mean).powi(2))
+            .sum::<f64>() / (self.data_points.len() - 1) as f64;
+
+        Some(variance.sqrt())
+    }
+
+    pub fn filter_by_threshold(&self, threshold: f64) -> Vec<&DataPoint> {
+        self.data_points
+            .iter()
+            .filter(|dp| dp.value >= threshold)
+            .collect()
+    }
+
+    pub fn count_points(&self) -> usize {
+        self.data_points.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_data_processor() {
+        let mut processor = DataProcessor::new();
+        
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "timestamp,value").unwrap();
+        writeln!(temp_file, "2023-01-01 10:00:00,25.5").unwrap();
+        writeln!(temp_file, "2023-01-01 11:00:00,30.2").unwrap();
+        writeln!(temp_file, "2023-01-01 12:00:00,28.7").unwrap();
+        
+        processor.load_from_csv(temp_file.path()).unwrap();
+        
+        assert_eq!(processor.count_points(), 3);
+        assert!(processor.calculate_mean().unwrap() - 28.1333 < 0.001);
+        assert!(processor.calculate_standard_deviation().unwrap() - 2.351 < 0.001);
+        
+        let filtered = processor.filter_by_threshold(29.0);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].value, 30.2);
+    }
+}

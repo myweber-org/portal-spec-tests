@@ -64,3 +64,78 @@ mod tests {
         assert_eq!(parsed.as_array().unwrap().len(), 3);
     }
 }
+use serde_json::{Value, Map};
+use std::fs;
+use std::path::Path;
+
+pub fn merge_json_files<P: AsRef<Path>>(paths: &[P]) -> Result<Value, String> {
+    let mut merged = Map::new();
+
+    for path in paths {
+        let content = fs::read_to_string(path).map_err(|e| e.to_string())?;
+        let json: Value = serde_json::from_str(&content).map_err(|e| e.to_string())?;
+
+        if let Value::Object(obj) = json {
+            for (key, value) in obj {
+                merge_value(&mut merged, key, value);
+            }
+        } else {
+            return Err("Top-level JSON must be an object".to_string());
+        }
+    }
+
+    Ok(Value::Object(merged))
+}
+
+fn merge_value(map: &mut Map<String, Value>, key: String, new_value: Value) {
+    match map.get(&key) {
+        Some(Value::Object(existing_obj)) => {
+            if let Value::Object(new_obj) = new_value {
+                let mut merged_obj = existing_obj.clone();
+                for (nested_key, nested_value) in new_obj {
+                    merge_value(&mut merged_obj, nested_key, nested_value);
+                }
+                map.insert(key, Value::Object(merged_obj));
+            } else {
+                map.insert(key, new_value);
+            }
+        }
+        Some(Value::Array(existing_arr)) => {
+            if let Value::Array(new_arr) = new_value {
+                let mut merged_arr = existing_arr.clone();
+                merged_arr.extend(new_arr);
+                map.insert(key, Value::Array(merged_arr));
+            } else {
+                map.insert(key, new_value);
+            }
+        }
+        _ => {
+            map.insert(key, new_value);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_merge_objects() {
+        let file1 = NamedTempFile::new().unwrap();
+        let file2 = NamedTempFile::new().unwrap();
+
+        fs::write(&file1, r#"{"a": 1, "b": {"x": 10}}"#).unwrap();
+        fs::write(&file2, r#"{"b": {"y": 20}, "c": 3}"#).unwrap();
+
+        let result = merge_json_files(&[file1.path(), file2.path()]).unwrap();
+        let expected = json!({
+            "a": 1,
+            "b": {"x": 10, "y": 20},
+            "c": 3
+        });
+
+        assert_eq!(result, expected);
+    }
+}

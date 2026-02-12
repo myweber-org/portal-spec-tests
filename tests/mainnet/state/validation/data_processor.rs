@@ -566,4 +566,158 @@ mod tests {
         assert!(mean.abs() < 0.0001);
         assert!((std_dev - 1.0).abs() < 0.0001);
     }
+}use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum DataError {
+    #[error("Invalid data format")]
+    InvalidFormat,
+    #[error("Missing required field: {0}")]
+    MissingField(String),
+    #[error("Value out of range: {0}")]
+    OutOfRange(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataRecord {
+    pub id: u64,
+    pub timestamp: i64,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
+}
+
+impl DataRecord {
+    pub fn new(id: u64, timestamp: i64, values: Vec<f64>) -> Self {
+        Self {
+            id,
+            timestamp,
+            values,
+            metadata: HashMap::new(),
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), DataError> {
+        if self.id == 0 {
+            return Err(DataError::InvalidFormat);
+        }
+        
+        if self.timestamp < 0 {
+            return Err(DataError::OutOfRange("timestamp".to_string()));
+        }
+        
+        if self.values.is_empty() {
+            return Err(DataError::MissingField("values".to_string()));
+        }
+        
+        for (i, &value) in self.values.iter().enumerate() {
+            if !value.is_finite() {
+                return Err(DataError::OutOfRange(format!("values[{}]", i)));
+            }
+        }
+        
+        Ok(())
+    }
+
+    pub fn transform(&mut self, factor: f64) -> Result<(), DataError> {
+        self.validate()?;
+        
+        for value in &mut self.values {
+            *value *= factor;
+        }
+        
+        self.metadata.insert(
+            "transformation_factor".to_string(),
+            factor.to_string()
+        );
+        
+        Ok(())
+    }
+
+    pub fn calculate_statistics(&self) -> Result<Statistics, DataError> {
+        self.validate()?;
+        
+        if self.values.is_empty() {
+            return Err(DataError::MissingField("values".to_string()));
+        }
+        
+        let count = self.values.len();
+        let sum: f64 = self.values.iter().sum();
+        let mean = sum / count as f64;
+        
+        let variance: f64 = self.values.iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>() / count as f64;
+        
+        let min = self.values.iter()
+            .fold(f64::INFINITY, |a, &b| a.min(b));
+        let max = self.values.iter()
+            .fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+        
+        Ok(Statistics {
+            count,
+            sum,
+            mean,
+            variance,
+            min,
+            max,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Statistics {
+    pub count: usize,
+    pub sum: f64,
+    pub mean: f64,
+    pub variance: f64,
+    pub min: f64,
+    pub max: f64,
+}
+
+pub fn process_records(records: &mut [DataRecord], factor: f64) -> Result<Vec<Statistics>, DataError> {
+    let mut results = Vec::with_capacity(records.len());
+    
+    for record in records {
+        record.transform(factor)?;
+        let stats = record.calculate_statistics()?;
+        results.push(stats);
+    }
+    
+    Ok(results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_record() {
+        let record = DataRecord::new(1, 1234567890, vec![1.0, 2.0, 3.0]);
+        assert!(record.validate().is_ok());
+    }
+
+    #[test]
+    fn test_invalid_record() {
+        let record = DataRecord::new(0, -1, vec![]);
+        assert!(record.validate().is_err());
+    }
+
+    #[test]
+    fn test_transform() {
+        let mut record = DataRecord::new(1, 1234567890, vec![1.0, 2.0, 3.0]);
+        assert!(record.transform(2.0).is_ok());
+        assert_eq!(record.values, vec![2.0, 4.0, 6.0]);
+    }
+
+    #[test]
+    fn test_statistics() {
+        let record = DataRecord::new(1, 1234567890, vec![1.0, 2.0, 3.0, 4.0]);
+        let stats = record.calculate_statistics().unwrap();
+        assert_eq!(stats.count, 4);
+        assert_eq!(stats.mean, 2.5);
+        assert_eq!(stats.min, 1.0);
+        assert_eq!(stats.max, 4.0);
+    }
 }

@@ -339,4 +339,92 @@ mod tests {
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].level, Some("ERROR".to_string()));
     }
+}use serde::{Deserialize, Serialize};
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
+enum LogLevel {
+    INFO,
+    WARN,
+    ERROR,
+    DEBUG,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct LogEntry {
+    timestamp: String,
+    level: LogLevel,
+    message: String,
+    module: Option<String>,
+}
+
+struct LogParser {
+    file_path: String,
+}
+
+impl LogParser {
+    fn new(file_path: &str) -> Self {
+        LogParser {
+            file_path: file_path.to_string(),
+        }
+    }
+
+    fn parse_logs(&self) -> Result<Vec<LogEntry>, Box<dyn std::error::Error>> {
+        let path = Path::new(&self.file_path);
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut logs = Vec::new();
+
+        for line in reader.lines() {
+            let line_content = line?;
+            if line_content.trim().is_empty() {
+                continue;
+            }
+            let log_entry: LogEntry = serde_json::from_str(&line_content)?;
+            logs.push(log_entry);
+        }
+
+        Ok(logs)
+    }
+
+    fn filter_by_level(&self, level: LogLevel) -> Result<Vec<LogEntry>, Box<dyn std::error::Error>> {
+        let logs = self.parse_logs()?;
+        let filtered: Vec<LogEntry> = logs
+            .into_iter()
+            .filter(|log| log.level == level)
+            .collect();
+        Ok(filtered)
+    }
+
+    fn count_logs_by_level(&self) -> Result<std::collections::HashMap<LogLevel, usize>, Box<dyn std::error::Error>> {
+        let logs = self.parse_logs()?;
+        let mut counts = std::collections::HashMap::new();
+
+        for log in logs {
+            *counts.entry(log.level).or_insert(0) += 1;
+        }
+
+        Ok(counts)
+    }
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let parser = LogParser::new("logs.json");
+    
+    match parser.parse_logs() {
+        Ok(logs) => println!("Total logs parsed: {}", logs.len()),
+        Err(e) => eprintln!("Failed to parse logs: {}", e),
+    }
+
+    let error_logs = parser.filter_by_level(LogLevel::ERROR)?;
+    println!("Error logs count: {}", error_logs.len());
+
+    let level_counts = parser.count_logs_by_level()?;
+    for (level, count) in level_counts {
+        println!("{:?}: {}", level, count);
+    }
+
+    Ok(())
 }

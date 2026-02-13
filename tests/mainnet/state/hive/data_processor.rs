@@ -194,3 +194,96 @@ mod tests {
         assert_eq!(stats.get("max"), Some(&30.0));
     }
 }
+use csv;
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
+}
+
+struct DataProcessor {
+    records: Vec<Record>,
+}
+
+impl DataProcessor {
+    fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    fn load_from_csv(&mut self, path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(path)?;
+        let mut rdr = csv::Reader::from_reader(file);
+        
+        for result in rdr.deserialize() {
+            let record: Record = result?;
+            self.records.push(record);
+        }
+        
+        Ok(())
+    }
+
+    fn filter_active(&self) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|record| record.active)
+            .collect()
+    }
+
+    fn calculate_average(&self) -> Option<f64> {
+        if self.records.is_empty() {
+            return None;
+        }
+        
+        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        Some(sum / self.records.len() as f64)
+    }
+
+    fn find_by_id(&self, id: u32) -> Option<&Record> {
+        self.records.iter().find(|record| record.id == id)
+    }
+
+    fn export_to_json(&self, path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::create(path)?;
+        serde_json::to_writer_pretty(file, &self.records)?;
+        Ok(())
+    }
+}
+
+fn validate_record(record: &Record) -> bool {
+    !record.name.is_empty() && record.value >= 0.0
+}
+
+fn process_data() -> Result<(), Box<dyn Error>> {
+    let mut processor = DataProcessor::new();
+    
+    processor.load_from_csv("input.csv")?;
+    
+    let active_records = processor.filter_active();
+    println!("Active records: {}", active_records.len());
+    
+    if let Some(avg) = processor.calculate_average() {
+        println!("Average value: {:.2}", avg);
+    }
+    
+    if let Some(record) = processor.find_by_id(42) {
+        println!("Found record: {:?}", record);
+    }
+    
+    for record in &processor.records {
+        if validate_record(record) {
+            println!("Valid record: {}", record.id);
+        }
+    }
+    
+    processor.export_to_json("output.json")?;
+    
+    Ok(())
+}

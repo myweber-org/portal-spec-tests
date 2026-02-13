@@ -253,4 +253,79 @@ mod tests {
         let valid_record = DataRecord::new(1, 1234567890, vec![1.0, 2.0, 3.0]).unwrap();
         assert!(valid_record.validate().is_ok());
     }
+}use csv::{Reader, Writer};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    category: String,
+}
+
+pub fn process_data(input_path: &str, output_path: &str, min_value: f64) -> Result<(), Box<dyn Error>> {
+    let mut reader = Reader::from_path(input_path)?;
+    let mut writer = Writer::from_writer(File::create(output_path)?);
+
+    for result in reader.deserialize() {
+        let record: Record = result?;
+        
+        if record.value >= min_value {
+            writer.serialize(&record)?;
+        }
+    }
+
+    writer.flush()?;
+    Ok(())
+}
+
+pub fn calculate_statistics(path: &str) -> Result<(f64, f64, usize), Box<dyn Error>> {
+    let mut reader = Reader::from_path(path)?;
+    let mut sum = 0.0;
+    let mut count = 0;
+    let mut max_value = f64::MIN;
+
+    for result in reader.deserialize() {
+        let record: Record = result?;
+        sum += record.value;
+        count += 1;
+        
+        if record.value > max_value {
+            max_value = record.value;
+        }
+    }
+
+    let average = if count > 0 { sum / count as f64 } else { 0.0 };
+    Ok((average, max_value, count))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_process_data() {
+        let input_data = "id,name,value,category\n1,ItemA,15.5,Alpha\n2,ItemB,8.2,Beta\n3,ItemC,22.1,Alpha";
+        let input_file = NamedTempFile::new().unwrap();
+        std::fs::write(input_file.path(), input_data).unwrap();
+        
+        let output_file = NamedTempFile::new().unwrap();
+        
+        let result = process_data(
+            input_file.path().to_str().unwrap(),
+            output_file.path().to_str().unwrap(),
+            10.0
+        );
+        
+        assert!(result.is_ok());
+        
+        let output_content = std::fs::read_to_string(output_file.path()).unwrap();
+        assert!(output_content.contains("ItemA"));
+        assert!(!output_content.contains("ItemB"));
+        assert!(output_content.contains("ItemC"));
+    }
 }

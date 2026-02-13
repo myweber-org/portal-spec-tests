@@ -193,4 +193,55 @@ mod tests {
     fn test_empty_input() {
         assert_eq!(clean_data(""), "");
     }
+}use csv::Reader;
+use serde::Deserialize;
+use std::error::Error;
+use std::fs::File;
+
+#[derive(Debug, Deserialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    category: String,
+}
+
+fn validate_record(record: &Record) -> Result<(), String> {
+    if record.name.is_empty() {
+        return Err("Name cannot be empty".to_string());
+    }
+    if record.value < 0.0 {
+        return Err("Value must be non-negative".to_string());
+    }
+    if !["A", "B", "C"].contains(&record.category.as_str()) {
+        return Err("Category must be A, B, or C".to_string());
+    }
+    Ok(())
+}
+
+fn clean_data(file_path: &str) -> Result<Vec<Record>, Box<dyn Error>> {
+    let file = File::open(file_path)?;
+    let mut rdr = Reader::from_reader(file);
+    let mut cleaned_records = Vec::new();
+
+    for result in rdr.deserialize() {
+        let record: Record = result?;
+        match validate_record(&record) {
+            Ok(_) => cleaned_records.push(record),
+            Err(e) => eprintln!("Skipping invalid record: {}", e),
+        }
+    }
+
+    Ok(cleaned_records)
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let cleaned = clean_data("input.csv")?;
+    println!("Cleaned {} valid records", cleaned.len());
+    
+    for record in &cleaned {
+        println!("{:?}", record);
+    }
+    
+    Ok(())
 }

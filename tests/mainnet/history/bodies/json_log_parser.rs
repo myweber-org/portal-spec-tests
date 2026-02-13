@@ -337,4 +337,136 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(result.unwrap().len(), 1);
     }
+}use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use chrono::{DateTime, Utc};
+
+#[derive(Debug, Deserialize, Serialize)]
+struct LogEntry {
+    timestamp: DateTime<Utc>,
+    level: String,
+    message: String,
+    #[serde(default)]
+    metadata: serde_json::Value,
+}
+
+#[derive(Debug)]
+struct LogParser {
+    min_level: String,
+    filter_text: Option<String>,
+}
+
+impl LogParser {
+    fn new(min_level: &str) -> Self {
+        LogParser {
+            min_level: min_level.to_lowercase(),
+            filter_text: None,
+        }
+    }
+
+    fn with_filter(mut self, filter: &str) -> Self {
+        self.filter_text = Some(filter.to_lowercase());
+        self
+    }
+
+    fn parse_file(&self, path: &str) -> Result<Vec<LogEntry>, Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut entries = Vec::new();
+
+        for line in reader.lines() {
+            let line = line?;
+            if let Ok(entry) = serde_json::from_str::<LogEntry>(&line) {
+                if self.should_include(&entry) {
+                    entries.push(entry);
+                }
+            }
+        }
+
+        Ok(entries)
+    }
+
+    fn should_include(&self, entry: &LogEntry) -> bool {
+        let entry_level = entry.level.to_lowercase();
+        
+        let level_priority = |level: &str| match level {
+            "error" => 3,
+            "warn" => 2,
+            "info" => 1,
+            "debug" => 0,
+            _ => 0,
+        };
+
+        if level_priority(&entry_level) < level_priority(&self.min_level) {
+            return false;
+        }
+
+        if let Some(filter) = &self.filter_text {
+            if !entry.message.to_lowercase().contains(filter) {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    fn print_summary(&self, entries: &[LogEntry]) {
+        let mut counts = std::collections::HashMap::new();
+        
+        for entry in entries {
+            *counts.entry(&entry.level).or_insert(0) += 1;
+        }
+
+        println!("Parsed {} log entries:", entries.len());
+        for (level, count) in counts {
+            println!("  {}: {}", level, count);
+        }
+    }
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let parser = LogParser::new("info")
+        .with_filter("connection");
+
+    let entries = parser.parse_file("logs/app.log")?;
+    parser.print_summary(&entries);
+
+    if let Some(first_entry) = entries.first() {
+        println!("\nFirst matching entry:");
+        println!("Timestamp: {}", first_entry.timestamp);
+        println!("Level: {}", first_entry.level);
+        println!("Message: {}", first_entry.message);
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    #[test]
+    fn test_log_parser_filtering() {
+        let test_entry = LogEntry {
+            timestamp: Utc.with_ymd_and_hms(2024, 1, 15, 10, 30, 0).unwrap(),
+            level: "ERROR".to_string(),
+            message: "Database connection failed".to_string(),
+            metadata: serde_json::json!({"service": "database"}),
+        };
+
+        let parser = LogParser::new("warn");
+        assert!(parser.should_include(&test_entry));
+
+        let parser = LogParser::new("error");
+        assert!(parser.should_include(&test_entry));
+
+        let parser = LogParser::new("error").with_filter("connection");
+        assert!(parser.should_include(&test_entry));
+
+        let parser = LogParser::new("error").with_filter("success");
+        assert!(!parser.should_include(&test_entry));
+    }
 }

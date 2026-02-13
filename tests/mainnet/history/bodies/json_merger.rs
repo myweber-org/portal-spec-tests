@@ -612,4 +612,113 @@ mod tests {
 
         assert_eq!(result, expected);
     }
+}use serde_json::{Map, Value};
+use std::collections::HashSet;
+
+pub fn merge_json(base: &mut Value, update: &Value, deep: bool) {
+    match (base, update) {
+        (Value::Object(base_map), Value::Object(update_map)) => {
+            for (key, update_value) in update_map {
+                if deep {
+                    if let Some(base_value) = base_map.get_mut(key) {
+                        merge_json(base_value, update_value, deep);
+                    } else {
+                        base_map.insert(key.clone(), update_value.clone());
+                    }
+                } else {
+                    base_map.insert(key.clone(), update_value.clone());
+                }
+            }
+        }
+        (base, update) => *base = update.clone(),
+    }
+}
+
+pub fn merge_json_with_conflict_resolution(
+    base: &mut Value,
+    update: &Value,
+    strategy: MergeStrategy,
+) -> Vec<String> {
+    let mut conflicts = Vec::new();
+    
+    match (base, update) {
+        (Value::Object(base_map), Value::Object(update_map)) => {
+            let base_keys: HashSet<_> = base_map.keys().collect();
+            let update_keys: HashSet<_> = update_map.keys().collect();
+            
+            for key in base_keys.intersection(&update_keys) {
+                let base_value = base_map.get_mut(*key).unwrap();
+                let update_value = update_map.get(*key).unwrap();
+                
+                if base_value != update_value {
+                    match strategy {
+                        MergeStrategy::PreferBase => {}
+                        MergeStrategy::PreferUpdate => {
+                            *base_value = update_value.clone();
+                        }
+                        MergeStrategy::MergeDeep => {
+                            merge_json(base_value, update_value, true);
+                        }
+                        MergeStrategy::ReportConflict => {
+                            conflicts.push(key.to_string());
+                        }
+                    }
+                }
+            }
+            
+            for key in update_keys.difference(&base_keys) {
+                base_map.insert(key.to_string(), update_map[*key].clone());
+            }
+        }
+        (base, update) if base != update => {
+            *base = update.clone();
+        }
+        _ => {}
+    }
+    
+    conflicts
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum MergeStrategy {
+    PreferBase,
+    PreferUpdate,
+    MergeDeep,
+    ReportConflict,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_shallow_merge() {
+        let mut base = json!({"a": 1, "b": 2});
+        let update = json!({"b": 3, "c": 4});
+        
+        merge_json(&mut base, &update, false);
+        
+        assert_eq!(base, json!({"a": 1, "b": 3, "c": 4}));
+    }
+
+    #[test]
+    fn test_deep_merge() {
+        let mut base = json!({
+            "a": {"x": 1, "y": 2},
+            "b": 3
+        });
+        let update = json!({
+            "a": {"y": 20, "z": 30},
+            "c": 4
+        });
+        
+        merge_json(&mut base, &update, true);
+        
+        assert_eq!(base, json!({
+            "a": {"x": 1, "y": 20, "z": 30},
+            "b": 3,
+            "c": 4
+        }));
+    }
 }

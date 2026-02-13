@@ -435,4 +435,126 @@ mod tests {
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].message.as_deref(), Some("Connection failed"));
     }
+}use serde_json::Value;
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+pub struct LogParser {
+    filters: HashMap<String, String>,
+    format_options: FormatOptions,
+}
+
+pub struct FormatOptions {
+    pub show_timestamp: bool,
+    pub show_level: bool,
+    pub show_component: bool,
+    pub indent: usize,
+}
+
+impl Default for FormatOptions {
+    fn default() -> Self {
+        Self {
+            show_timestamp: true,
+            show_level: true,
+            show_component: true,
+            indent: 2,
+        }
+    }
+}
+
+impl LogParser {
+    pub fn new() -> Self {
+        Self {
+            filters: HashMap::new(),
+            format_options: FormatOptions::default(),
+        }
+    }
+
+    pub fn add_filter(&mut self, key: &str, value: &str) {
+        self.filters.insert(key.to_string(), value.to_string());
+    }
+
+    pub fn parse_file<P: AsRef<Path>>(&self, path: P) -> Result<Vec<Value>, Box<dyn std::error::Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut logs = Vec::new();
+
+        for line in reader.lines() {
+            let line = line?;
+            if let Ok(json_value) = serde_json::from_str::<Value>(&line) {
+                if self.matches_filters(&json_value) {
+                    logs.push(json_value);
+                }
+            }
+        }
+
+        Ok(logs)
+    }
+
+    fn matches_filters(&self, json_value: &Value) -> bool {
+        for (key, expected_value) in &self.filters {
+            if let Some(actual_value) = json_value.get(key) {
+                if actual_value.as_str() != Some(expected_value) {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+        }
+        true
+    }
+
+    pub fn format_log(&self, log: &Value) -> String {
+        let mut output = String::new();
+
+        if self.format_options.show_timestamp {
+            if let Some(timestamp) = log.get("timestamp").and_then(|v| v.as_str()) {
+                output.push_str(&format!("[{}] ", timestamp));
+            }
+        }
+
+        if self.format_options.show_level {
+            if let Some(level) = log.get("level").and_then(|v| v.as_str()) {
+                output.push_str(&format!("{}: ", level.to_uppercase()));
+            }
+        }
+
+        if self.format_options.show_component {
+            if let Some(component) = log.get("component").and_then(|v| v.as_str()) {
+                output.push_str(&format!("{{{}}} ", component));
+            }
+        }
+
+        if let Some(message) = log.get("message").and_then(|v| v.as_str()) {
+            output.push_str(message);
+        }
+
+        if let Some(data) = log.get("data") {
+            if !data.is_null() {
+                let formatted_data = serde_json::to_string_pretty(data).unwrap_or_default();
+                let indented_data = formatted_data
+                    .lines()
+                    .map(|line| format!("{:width$}{}", "", line, width = self.format_options.indent))
+                    .collect::<Vec<String>>()
+                    .join("\n");
+                output.push_str(&format!("\n{}", indented_data));
+            }
+        }
+
+        output
+    }
+}
+
+pub fn analyze_log_levels(logs: &[Value]) -> HashMap<String, usize> {
+    let mut level_counts = HashMap::new();
+    
+    for log in logs {
+        if let Some(level) = log.get("level").and_then(|v| v.as_str()) {
+            *level_counts.entry(level.to_string()).or_insert(0) += 1;
+        }
+    }
+    
+    level_counts
 }

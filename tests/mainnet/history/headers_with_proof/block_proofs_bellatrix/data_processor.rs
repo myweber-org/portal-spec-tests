@@ -706,3 +706,156 @@ mod tests {
         assert_eq!(average, Some(15.0));
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+pub struct DataProcessor {
+    file_path: String,
+    delimiter: char,
+}
+
+impl DataProcessor {
+    pub fn new(file_path: &str, delimiter: char) -> Self {
+        DataProcessor {
+            file_path: file_path.to_string(),
+            delimiter,
+        }
+    }
+
+    pub fn validate_file(&self) -> Result<bool, Box<dyn Error>> {
+        let path = Path::new(&self.file_path);
+        if !path.exists() {
+            return Err("File does not exist".into());
+        }
+
+        let metadata = path.metadata()?;
+        if metadata.len() == 0 {
+            return Err("File is empty".into());
+        }
+
+        Ok(true)
+    }
+
+    pub fn process_records<F>(&self, mut callback: F) -> Result<usize, Box<dyn Error>>
+    where
+        F: FnMut(Vec<String>),
+    {
+        self.validate_file()?;
+
+        let file = File::open(&self.file_path)?;
+        let reader = BufReader::new(file);
+        let mut record_count = 0;
+
+        for line_result in reader.lines() {
+            let line = line_result?;
+            if line.trim().is_empty() {
+                continue;
+            }
+
+            let fields: Vec<String> = line
+                .split(self.delimiter)
+                .map(|s| s.trim().to_string())
+                .collect();
+
+            if !fields.is_empty() {
+                callback(fields);
+                record_count += 1;
+            }
+        }
+
+        Ok(record_count)
+    }
+
+    pub fn calculate_statistics(&self) -> Result<ProcessingStats, Box<dyn Error>> {
+        let mut stats = ProcessingStats::new();
+        let mut field_counts = Vec::new();
+
+        self.process_records(|fields| {
+            stats.total_records += 1;
+            field_counts.push(fields.len());
+        })?;
+
+        if !field_counts.is_empty() {
+            stats.average_fields = field_counts.iter().sum::<usize>() as f64 / field_counts.len() as f64;
+            stats.min_fields = *field_counts.iter().min().unwrap_or(&0);
+            stats.max_fields = *field_counts.iter().max().unwrap_or(&0);
+        }
+
+        Ok(stats)
+    }
+}
+
+pub struct ProcessingStats {
+    pub total_records: usize,
+    pub average_fields: f64,
+    pub min_fields: usize,
+    pub max_fields: usize,
+}
+
+impl ProcessingStats {
+    pub fn new() -> Self {
+        ProcessingStats {
+            total_records: 0,
+            average_fields: 0.0,
+            min_fields: 0,
+            max_fields: 0,
+        }
+    }
+
+    pub fn display(&self) {
+        println!("Total records processed: {}", self.total_records);
+        println!("Average fields per record: {:.2}", self.average_fields);
+        println!("Minimum fields in record: {}", self.min_fields);
+        println!("Maximum fields in record: {}", self.max_fields);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_data_processor_validation() {
+        let temp_file = NamedTempFile::new().unwrap();
+        let processor = DataProcessor::new(temp_file.path().to_str().unwrap(), ',');
+
+        assert!(processor.validate_file().is_ok());
+    }
+
+    #[test]
+    fn test_process_records() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "field1,field2,field3").unwrap();
+        writeln!(temp_file, "data1,data2,data3").unwrap();
+
+        let processor = DataProcessor::new(temp_file.path().to_str().unwrap(), ',');
+        let mut record_count = 0;
+
+        let result = processor.process_records(|fields| {
+            assert_eq!(fields.len(), 3);
+            record_count += 1;
+        });
+
+        assert!(result.is_ok());
+        assert_eq!(record_count, 2);
+    }
+
+    #[test]
+    fn test_calculate_statistics() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "a,b,c").unwrap();
+        writeln!(temp_file, "x,y").unwrap();
+        writeln!(temp_file, "1,2,3,4").unwrap();
+
+        let processor = DataProcessor::new(temp_file.path().to_str().unwrap(), ',');
+        let stats = processor.calculate_statistics().unwrap();
+
+        assert_eq!(stats.total_records, 3);
+        assert_eq!(stats.min_fields, 2);
+        assert_eq!(stats.max_fields, 4);
+    }
+}

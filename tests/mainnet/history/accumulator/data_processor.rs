@@ -1251,3 +1251,92 @@ mod tests {
         assert_eq!(filtered[0].value, 30.2);
     }
 }
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DataRecord {
+    id: u32,
+    value: f64,
+    timestamp: i64,
+}
+
+#[derive(Debug, Error)]
+pub enum ProcessingError {
+    #[error("Invalid data value: {0}")]
+    InvalidValue(f64),
+    #[error("Timestamp out of range: {0}")]
+    InvalidTimestamp(i64),
+    #[error("Serialization error")]
+    SerializationFailed,
+}
+
+pub fn validate_record(record: &DataRecord) -> Result<(), ProcessingError> {
+    if record.value.is_nan() || record.value.is_infinite() {
+        return Err(ProcessingError::InvalidValue(record.value));
+    }
+    
+    if record.timestamp < 0 || record.timestamp > 253402300799 {
+        return Err(ProcessingError::InvalidTimestamp(record.timestamp));
+    }
+    
+    Ok(())
+}
+
+pub fn transform_record(record: DataRecord) -> DataRecord {
+    DataRecord {
+        value: record.value * 1.5,
+        ..record
+    }
+}
+
+pub fn process_records(records: Vec<DataRecord>) -> Result<Vec<DataRecord>, ProcessingError> {
+    let mut processed = Vec::with_capacity(records.len());
+    
+    for record in records {
+        validate_record(&record)?;
+        let transformed = transform_record(record);
+        processed.push(transformed);
+    }
+    
+    Ok(processed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_valid_record() {
+        let record = DataRecord {
+            id: 1,
+            value: 42.5,
+            timestamp: 1609459200,
+        };
+        assert!(validate_record(&record).is_ok());
+    }
+
+    #[test]
+    fn test_validate_invalid_value() {
+        let record = DataRecord {
+            id: 2,
+            value: f64::INFINITY,
+            timestamp: 1609459200,
+        };
+        assert!(matches!(
+            validate_record(&record),
+            Err(ProcessingError::InvalidValue(_))
+        ));
+    }
+
+    #[test]
+    fn test_transform_record() {
+        let record = DataRecord {
+            id: 3,
+            value: 10.0,
+            timestamp: 1609459200,
+        };
+        let transformed = transform_record(record);
+        assert_eq!(transformed.value, 15.0);
+    }
+}

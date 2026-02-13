@@ -1047,3 +1047,151 @@ pub fn create_sample_processor() -> DataProcessor {
 
     processor
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufReader, BufWriter};
+use std::path::Path;
+
+use serde::{Deserialize, Serialize};
+use csv::{ReaderBuilder, WriterBuilder};
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct Record {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub active: bool,
+}
+
+pub struct DataProcessor {
+    records: Vec<Record>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut csv_reader = ReaderBuilder::new()
+            .has_headers(true)
+            .from_reader(reader);
+
+        for result in csv_reader.deserialize() {
+            let record: Record = result?;
+            self.records.push(record);
+        }
+
+        Ok(())
+    }
+
+    pub fn save_to_csv<P: AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn Error>> {
+        let file = File::create(path)?;
+        let writer = BufWriter::new(file);
+        let mut csv_writer = WriterBuilder::new()
+            .has_headers(true)
+            .from_writer(writer);
+
+        for record in &self.records {
+            csv_writer.serialize(record)?;
+        }
+
+        csv_writer.flush()?;
+        Ok(())
+    }
+
+    pub fn filter_active(&self) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|record| record.active)
+            .collect()
+    }
+
+    pub fn filter_by_min_value(&self, min_value: f64) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|record| record.value >= min_value)
+            .collect()
+    }
+
+    pub fn calculate_total_value(&self) -> f64 {
+        self.records
+            .iter()
+            .map(|record| record.value)
+            .sum()
+    }
+
+    pub fn add_record(&mut self, record: Record) {
+        self.records.push(record);
+    }
+
+    pub fn get_record_count(&self) -> usize {
+        self.records.len()
+    }
+
+    pub fn clear(&mut self) {
+        self.records.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_data_processor() {
+        let mut processor = DataProcessor::new();
+        
+        let record1 = Record {
+            id: 1,
+            name: "Test1".to_string(),
+            value: 10.5,
+            active: true,
+        };
+        
+        let record2 = Record {
+            id: 2,
+            name: "Test2".to_string(),
+            value: 5.0,
+            active: false,
+        };
+
+        processor.add_record(record1);
+        processor.add_record(record2);
+
+        assert_eq!(processor.get_record_count(), 2);
+        assert_eq!(processor.filter_active().len(), 1);
+        assert_eq!(processor.filter_by_min_value(10.0).len(), 1);
+        assert_eq!(processor.calculate_total_value(), 15.5);
+    }
+
+    #[test]
+    fn test_csv_operations() -> Result<(), Box<dyn Error>> {
+        let mut processor = DataProcessor::new();
+        
+        let record = Record {
+            id: 1,
+            name: "CSVTest".to_string(),
+            value: 42.0,
+            active: true,
+        };
+        
+        processor.add_record(record);
+
+        let temp_file = NamedTempFile::new()?;
+        let path = temp_file.path();
+
+        processor.save_to_csv(path)?;
+        
+        let mut new_processor = DataProcessor::new();
+        new_processor.load_from_csv(path)?;
+        
+        assert_eq!(new_processor.get_record_count(), 1);
+        Ok(())
+    }
+}

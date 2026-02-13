@@ -1,54 +1,67 @@
-use std::collections::HashSet;
-use std::io::{self, BufRead, Write};
 
-pub fn clean_data(input: &str) -> String {
-    let lines: Vec<&str> = input.lines().collect();
-    let unique_lines: HashSet<&str> = lines.iter().cloned().collect();
-    let mut sorted_lines: Vec<&str> = unique_lines.into_iter().collect();
-    sorted_lines.sort();
-    sorted_lines.join("\n")
+use std::collections::HashSet;
+
+pub struct DataCleaner {
+    unique_items: HashSet<String>,
 }
 
-fn main() {
-    let stdin = io::stdin();
-    let mut input = String::new();
-    
-    println!("Enter data (press Ctrl+D when finished):");
-    for line in stdin.lock().lines() {
-        if let Ok(line) = line {
-            input.push_str(&line);
-            input.push('\n');
-        }
-    }
-    
-    let cleaned = clean_data(&input);
-    
-    let mut output_file = std::fs::File::create("cleaned_output.txt")
-        .expect("Failed to create output file");
-    
-    output_file.write_all(cleaned.as_bytes())
-        .expect("Failed to write to output file");
-    
-    println!("Data cleaned and saved to cleaned_output.txt");
-}use csv::{ReaderBuilder, WriterBuilder};
-use std::error::Error;
-use std::fs::File;
-
-pub fn clean_csv(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
-    let file = File::open(input_path)?;
-    let mut rdr = ReaderBuilder::new().has_headers(true).from_reader(file);
-    let mut wtr = WriterBuilder::new().from_path(output_path)?;
-
-    let headers = rdr.headers()?.clone();
-    wtr.write_record(&headers)?;
-
-    for result in rdr.records() {
-        let record = result?;
-        if record.iter().all(|field| !field.trim().is_empty()) {
-            wtr.write_record(&record)?;
+impl DataCleaner {
+    pub fn new() -> Self {
+        DataCleaner {
+            unique_items: HashSet::new(),
         }
     }
 
-    wtr.flush()?;
-    Ok(())
+    pub fn process(&mut self, input: &str) -> Option<String> {
+        let normalized = input.trim().to_lowercase();
+        
+        if normalized.is_empty() {
+            return None;
+        }
+
+        if self.unique_items.contains(&normalized) {
+            return None;
+        }
+
+        self.unique_items.insert(normalized.clone());
+        Some(normalized)
+    }
+
+    pub fn get_unique_count(&self) -> usize {
+        self.unique_items.len()
+    }
+
+    pub fn clear(&mut self) {
+        self.unique_items.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_duplicate_removal() {
+        let mut cleaner = DataCleaner::new();
+        
+        assert_eq!(cleaner.process("Hello"), Some("hello".to_string()));
+        assert_eq!(cleaner.process("  HELLO  "), None);
+        assert_eq!(cleaner.process("world"), Some("world".to_string()));
+        assert_eq!(cleaner.process(""), None);
+        
+        assert_eq!(cleaner.get_unique_count(), 2);
+    }
+
+    #[test]
+    fn test_clear_functionality() {
+        let mut cleaner = DataCleaner::new();
+        
+        cleaner.process("test");
+        assert_eq!(cleaner.get_unique_count(), 1);
+        
+        cleaner.clear();
+        assert_eq!(cleaner.get_unique_count(), 0);
+        
+        assert_eq!(cleaner.process("test"), Some("test".to_string()));
+    }
 }

@@ -557,4 +557,142 @@ pub fn analyze_log_levels(logs: &[Value]) -> HashMap<String, usize> {
     }
     
     level_counts
+}use serde::Deserialize;
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+
+#[derive(Debug, Deserialize)]
+struct LogEntry {
+    timestamp: String,
+    level: String,
+    service: String,
+    message: String,
+    #[serde(default)]
+    metadata: serde_json::Value,
+}
+
+struct LogParser {
+    min_level: String,
+    service_filter: Option<String>,
+}
+
+impl LogParser {
+    fn new(min_level: &str) -> Self {
+        LogParser {
+            min_level: min_level.to_lowercase(),
+            service_filter: None,
+        }
+    }
+
+    fn with_service_filter(mut self, service: &str) -> Self {
+        self.service_filter = Some(service.to_string());
+        self
+    }
+
+    fn parse_file(&self, path: &str) -> Result<Vec<LogEntry>, Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut entries = Vec::new();
+
+        for line in reader.lines() {
+            let line = line?;
+            if line.trim().is_empty() {
+                continue;
+            }
+
+            match serde_json::from_str::<LogEntry>(&line) {
+                Ok(mut entry) => {
+                    entry.level = entry.level.to_lowercase();
+                    if self.should_include(&entry) {
+                        entries.push(entry);
+                    }
+                }
+                Err(e) => eprintln!("Failed to parse line: {} - {}", line, e),
+            }
+        }
+
+        Ok(entries)
+    }
+
+    fn should_include(&self, entry: &LogEntry) -> bool {
+        if !self.is_level_sufficient(&entry.level) {
+            return false;
+        }
+
+        if let Some(ref service) = self.service_filter {
+            if entry.service != *service {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    fn is_level_sufficient(&self, level: &str) -> bool {
+        let level_order = ["trace", "debug", "info", "warn", "error"];
+        let min_index = level_order.iter().position(|&l| l == self.min_level);
+        let entry_index = level_order.iter().position(|&l| l == level);
+
+        match (min_index, entry_index) {
+            (Some(min), Some(entry)) => entry >= min,
+            _ => false,
+        }
+    }
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let parser = LogParser::new("info")
+        .with_service_filter("api-service");
+
+    let entries = parser.parse_file("logs/app.log")?;
+    
+    println!("Found {} log entries", entries.len());
+    for entry in entries.iter().take(5) {
+        println!("{:?}", entry);
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+    use std::io::Write;
+
+    #[test]
+    fn test_parser_filters_by_level() {
+        let log_data = r#"
+{"timestamp": "2023-01-01T00:00:00Z", "level": "DEBUG", "service": "test", "message": "debug message"}
+{"timestamp": "2023-01-01T00:00:01Z", "level": "INFO", "service": "test", "message": "info message"}
+{"timestamp": "2023-01-01T00:00:02Z", "level": "ERROR", "service": "test", "message": "error message"}
+"#;
+
+        let mut file = NamedTempFile::new().unwrap();
+        write!(file, "{}", log_data).unwrap();
+
+        let parser = LogParser::new("info");
+        let entries = parser.parse_file(file.path().to_str().unwrap()).unwrap();
+        
+        assert_eq!(entries.len(), 2);
+        assert!(entries.iter().all(|e| e.level != "debug"));
+    }
+
+    #[test]
+    fn test_parser_filters_by_service() {
+        let log_data = r#"
+{"timestamp": "2023-01-01T00:00:00Z", "level": "INFO", "service": "api", "message": "api message"}
+{"timestamp": "2023-01-01T00:00:01Z", "level": "INFO", "service": "db", "message": "db message"}
+"#;
+
+        let mut file = NamedTempFile::new().unwrap();
+        write!(file, "{}", log_data).unwrap();
+
+        let parser = LogParser::new("info").with_service_filter("api");
+        let entries = parser.parse_file(file.path().to_str().unwrap()).unwrap();
+        
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].service, "api");
+    }
 }

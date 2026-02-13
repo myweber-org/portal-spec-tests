@@ -318,3 +318,145 @@ mod tests {
         assert_eq!(totals.get("clothing"), Some(&75.25));
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+
+pub struct CsvProcessor {
+    delimiter: char,
+    has_headers: bool,
+}
+
+impl CsvProcessor {
+    pub fn new(delimiter: char, has_headers: bool) -> Self {
+        CsvProcessor {
+            delimiter,
+            has_headers,
+        }
+    }
+
+    pub fn read_file(&self, file_path: &str) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        let mut records = Vec::new();
+
+        for (index, line) in reader.lines().enumerate() {
+            let line = line?;
+            
+            if index == 0 && self.has_headers {
+                continue;
+            }
+
+            let fields: Vec<String> = line
+                .split(self.delimiter)
+                .map(|s| s.trim().to_string())
+                .collect();
+
+            if !fields.is_empty() {
+                records.push(fields);
+            }
+        }
+
+        Ok(records)
+    }
+
+    pub fn validate_numeric_column(&self, data: &[Vec<String>], column_index: usize) -> Result<Vec<f64>, String> {
+        let mut numeric_values = Vec::new();
+
+        for (row_index, row) in data.iter().enumerate() {
+            if column_index >= row.len() {
+                return Err(format!("Row {}: Column index out of bounds", row_index));
+            }
+
+            match row[column_index].parse::<f64>() {
+                Ok(value) => numeric_values.push(value),
+                Err(_) => return Err(format!("Row {}: Invalid numeric value '{}'", row_index, row[column_index])),
+            }
+        }
+
+        Ok(numeric_values)
+    }
+
+    pub fn calculate_column_statistics(&self, numeric_data: &[f64]) -> (f64, f64, f64) {
+        if numeric_data.is_empty() {
+            return (0.0, 0.0, 0.0);
+        }
+
+        let sum: f64 = numeric_data.iter().sum();
+        let count = numeric_data.len() as f64;
+        let mean = sum / count;
+
+        let variance: f64 = numeric_data
+            .iter()
+            .map(|&value| (value - mean).powi(2))
+            .sum::<f64>() / count;
+
+        let std_dev = variance.sqrt();
+
+        (mean, variance, std_dev)
+    }
+
+    pub fn filter_records<F>(&self, data: &[Vec<String>], predicate: F) -> Vec<Vec<String>>
+    where
+        F: Fn(&[String]) -> bool,
+    {
+        data.iter()
+            .filter(|row| predicate(row))
+            .cloned()
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_csv_processor_creation() {
+        let processor = CsvProcessor::new(',', true);
+        assert_eq!(processor.delimiter, ',');
+        assert!(processor.has_headers);
+    }
+
+    #[test]
+    fn test_numeric_validation() {
+        let processor = CsvProcessor::new(',', false);
+        let test_data = vec![
+            vec!["10.5".to_string(), "test".to_string()],
+            vec!["20.0".to_string(), "data".to_string()],
+            vec!["15.75".to_string(), "value".to_string()],
+        ];
+
+        let result = processor.validate_numeric_column(&test_data, 0);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), vec![10.5, 20.0, 15.75]);
+    }
+
+    #[test]
+    fn test_statistics_calculation() {
+        let processor = CsvProcessor::new(',', false);
+        let data = vec![10.0, 20.0, 30.0, 40.0, 50.0];
+        
+        let (mean, variance, std_dev) = processor.calculate_column_statistics(&data);
+        
+        assert_eq!(mean, 30.0);
+        assert_eq!(variance, 200.0);
+        assert!((std_dev - 14.142135623730951).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_record_filtering() {
+        let processor = CsvProcessor::new(',', false);
+        let test_data = vec![
+            vec!["apple".to_string(), "10".to_string()],
+            vec!["banana".to_string(), "20".to_string()],
+            vec!["apple".to_string(), "15".to_string()],
+        ];
+
+        let filtered = processor.filter_records(&test_data, |row| row[0] == "apple");
+        
+        assert_eq!(filtered.len(), 2);
+        assert_eq!(filtered[0][0], "apple");
+        assert_eq!(filtered[1][0], "apple");
+    }
+}

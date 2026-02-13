@@ -216,4 +216,91 @@ mod tests {
         let avg_salary = processor.aggregate_numeric_column("salary").unwrap();
         assert!((avg_salary - 50000.0).abs() < 0.01);
     }
+}use csv::{ReaderBuilder, WriterBuilder};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    id: u32,
+    name: String,
+    category: String,
+    value: f64,
+    active: bool,
+}
+
+fn load_csv(file_path: &str) -> Result<Vec<Record>, Box<dyn Error>> {
+    let file = File::open(file_path)?;
+    let mut reader = ReaderBuilder::new().has_headers(true).from_reader(file);
+    
+    let mut records = Vec::new();
+    for result in reader.deserialize() {
+        let record: Record = result?;
+        records.push(record);
+    }
+    
+    Ok(records)
+}
+
+fn filter_records(records: &[Record], category_filter: &str) -> Vec<Record> {
+    records
+        .iter()
+        .filter(|r| r.category == category_filter && r.active)
+        .cloned()
+        .collect()
+}
+
+fn aggregate_values(records: &[Record]) -> (f64, f64, f64) {
+    let count = records.len() as f64;
+    if count == 0.0 {
+        return (0.0, 0.0, 0.0);
+    }
+    
+    let sum: f64 = records.iter().map(|r| r.value).sum();
+    let avg = sum / count;
+    let max = records.iter().map(|r| r.value).fold(f64::NEG_INFINITY, f64::max);
+    
+    (sum, avg, max)
+}
+
+fn save_filtered_results(records: &[Record], output_path: &str) -> Result<(), Box<dyn Error>> {
+    let file = File::create(output_path)?;
+    let mut writer = WriterBuilder::new().has_headers(true).from_writer(file);
+    
+    for record in records {
+        writer.serialize(record)?;
+    }
+    
+    writer.flush()?;
+    Ok(())
+}
+
+fn process_data_pipeline(input_path: &str, category: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
+    let all_records = load_csv(input_path)?;
+    let filtered = filter_records(&all_records, category);
+    
+    if !filtered.is_empty() {
+        let (total, average, maximum) = aggregate_values(&filtered);
+        println!("Processing category: {}", category);
+        println!("Records found: {}", filtered.len());
+        println!("Total value: {:.2}", total);
+        println!("Average value: {:.2}", average);
+        println!("Maximum value: {:.2}", maximum);
+        
+        save_filtered_results(&filtered, output_path)?;
+        println!("Results saved to: {}", output_path);
+    } else {
+        println!("No active records found for category: {}", category);
+    }
+    
+    Ok(())
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let input_file = "data/input.csv";
+    let output_file = "data/processed_results.csv";
+    let target_category = "electronics";
+    
+    process_data_pipeline(input_file, target_category, output_file)
 }

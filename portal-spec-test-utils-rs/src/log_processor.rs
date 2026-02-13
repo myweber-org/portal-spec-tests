@@ -245,3 +245,118 @@ mod tests {
         assert_eq!(summary.get(&LogLevel::Info), None);
     }
 }
+use std::fs::File;
+use std::io::{self, BufRead, BufReader};
+use std::path::Path;
+use regex::Regex;
+
+pub struct LogProcessor {
+    pattern: Option<Regex>,
+    min_level: Option<String>,
+}
+
+impl LogProcessor {
+    pub fn new() -> Self {
+        LogProcessor {
+            pattern: None,
+            min_level: None,
+        }
+    }
+
+    pub fn set_pattern(&mut self, pattern: &str) -> Result<(), regex::Error> {
+        self.pattern = Some(Regex::new(pattern)?);
+        Ok(())
+    }
+
+    pub fn set_min_level(&mut self, level: &str) {
+        self.min_level = Some(level.to_lowercase());
+    }
+
+    pub fn process_file<P: AsRef<Path>>(&self, path: P) -> io::Result<Vec<String>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut results = Vec::new();
+
+        for line in reader.lines() {
+            let line = line?;
+            if self.matches_criteria(&line) {
+                results.push(line);
+            }
+        }
+
+        Ok(results)
+    }
+
+    fn matches_criteria(&self, line: &str) -> bool {
+        if let Some(ref pattern) = self.pattern {
+            if !pattern.is_match(line) {
+                return false;
+            }
+        }
+
+        if let Some(ref min_level) = self.min_level {
+            let level_pattern = Regex::new(r"\[(ERROR|WARN|INFO|DEBUG|TRACE)\]").unwrap();
+            if let Some(captures) = level_pattern.captures(line) {
+                let line_level = captures.get(1).unwrap().as_str().to_lowercase();
+                let level_order = |lvl: &str| match lvl {
+                    "error" => 0,
+                    "warn" => 1,
+                    "info" => 2,
+                    "debug" => 3,
+                    "trace" => 4,
+                    _ => 5,
+                };
+
+                if level_order(&line_level) > level_order(min_level) {
+                    return false;
+                }
+            }
+        }
+
+        true
+    }
+}
+
+pub fn extract_timestamps(log_lines: &[String]) -> Vec<String> {
+    let timestamp_re = Regex::new(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}").unwrap();
+    log_lines
+        .iter()
+        .filter_map(|line| timestamp_re.find(line))
+        .map(|m| m.as_str().to_string())
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_log_filtering() {
+        let mut log_data = NamedTempFile::new().unwrap();
+        writeln!(log_data, "[INFO] Application started").unwrap();
+        writeln!(log_data, "[ERROR] Failed to connect").unwrap();
+        writeln!(log_data, "[DEBUG] Processing request").unwrap();
+
+        let mut processor = LogProcessor::new();
+        processor.set_min_level("warn").unwrap();
+
+        let results = processor.process_file(log_data.path()).unwrap();
+        assert_eq!(results.len(), 2);
+        assert!(results[0].contains("INFO"));
+        assert!(results[1].contains("ERROR"));
+    }
+
+    #[test]
+    fn test_pattern_matching() {
+        let mut processor = LogProcessor::new();
+        processor.set_pattern(r"connection.*failed").unwrap();
+
+        let test_line = "[ERROR] Database connection failed";
+        assert!(processor.matches_criteria(test_line));
+
+        let test_line2 = "[INFO] User logged in";
+        assert!(!processor.matches_criteria(test_line2));
+    }
+}

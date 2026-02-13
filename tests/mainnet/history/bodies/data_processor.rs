@@ -73,3 +73,142 @@ mod tests {
         assert_eq!(std_dev, 5.0);
     }
 }
+use std::collections::HashMap;
+use std::error::Error;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub timestamp: i64,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
+}
+
+#[derive(Debug)]
+pub enum ValidationError {
+    InvalidId,
+    InvalidTimestamp,
+    EmptyValues,
+    MetadataTooLarge,
+}
+
+impl std::fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ValidationError::InvalidId => write!(f, "ID must be greater than 0"),
+            ValidationError::InvalidTimestamp => write!(f, "Timestamp must be non-negative"),
+            ValidationError::EmptyValues => write!(f, "Values array cannot be empty"),
+            ValidationError::MetadataTooLarge => write!(f, "Metadata exceeds maximum size"),
+        }
+    }
+}
+
+impl Error for ValidationError {}
+
+pub fn validate_record(record: &DataRecord) -> Result<(), ValidationError> {
+    if record.id == 0 {
+        return Err(ValidationError::InvalidId);
+    }
+    
+    if record.timestamp < 0 {
+        return Err(ValidationError::InvalidTimestamp);
+    }
+    
+    if record.values.is_empty() {
+        return Err(ValidationError::EmptyValues);
+    }
+    
+    if record.metadata.len() > 100 {
+        return Err(ValidationError::MetadataTooLarge);
+    }
+    
+    Ok(())
+}
+
+pub fn transform_values(record: &mut DataRecord, multiplier: f64) {
+    for value in record.values.iter_mut() {
+        *value *= multiplier;
+    }
+}
+
+pub fn calculate_statistics(record: &DataRecord) -> (f64, f64, f64) {
+    if record.values.is_empty() {
+        return (0.0, 0.0, 0.0);
+    }
+    
+    let sum: f64 = record.values.iter().sum();
+    let count = record.values.len() as f64;
+    let mean = sum / count;
+    
+    let variance: f64 = record.values.iter()
+        .map(|&v| (v - mean).powi(2))
+        .sum::<f64>() / count;
+    
+    let std_dev = variance.sqrt();
+    
+    (mean, variance, std_dev)
+}
+
+pub fn filter_records(
+    records: Vec<DataRecord>,
+    predicate: impl Fn(&DataRecord) -> bool
+) -> Vec<DataRecord> {
+    records.into_iter()
+        .filter(predicate)
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_validation() {
+        let valid_record = DataRecord {
+            id: 1,
+            timestamp: 1234567890,
+            values: vec![1.0, 2.0, 3.0],
+            metadata: HashMap::new(),
+        };
+        
+        assert!(validate_record(&valid_record).is_ok());
+        
+        let invalid_record = DataRecord {
+            id: 0,
+            timestamp: -1,
+            values: vec![],
+            metadata: HashMap::new(),
+        };
+        
+        assert!(validate_record(&invalid_record).is_err());
+    }
+    
+    #[test]
+    fn test_value_transformation() {
+        let mut record = DataRecord {
+            id: 1,
+            timestamp: 1234567890,
+            values: vec![1.0, 2.0, 3.0],
+            metadata: HashMap::new(),
+        };
+        
+        transform_values(&mut record, 2.0);
+        assert_eq!(record.values, vec![2.0, 4.0, 6.0]);
+    }
+    
+    #[test]
+    fn test_statistics_calculation() {
+        let record = DataRecord {
+            id: 1,
+            timestamp: 1234567890,
+            values: vec![1.0, 2.0, 3.0, 4.0, 5.0],
+            metadata: HashMap::new(),
+        };
+        
+        let (mean, variance, std_dev) = calculate_statistics(&record);
+        assert_eq!(mean, 3.0);
+        assert_eq!(variance, 2.0);
+        assert_eq!(std_dev, 2.0_f64.sqrt());
+    }
+}

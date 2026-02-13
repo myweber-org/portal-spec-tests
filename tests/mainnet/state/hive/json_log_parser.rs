@@ -299,4 +299,140 @@ pub fn print_log_summary(entries: &[LogEntry]) {
                  first.timestamp, 
                  entries.last().map(|e| &e.timestamp).unwrap_or(&first.timestamp));
     }
+}use serde_json::Value;
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug, Clone)]
+pub struct LogEntry {
+    pub timestamp: Option<String>,
+    pub level: Option<String>,
+    pub message: Option<String>,
+    pub fields: HashMap<String, Value>,
+}
+
+pub struct LogParser {
+    pub entries: Vec<LogEntry>,
+}
+
+impl LogParser {
+    pub fn new() -> Self {
+        LogParser {
+            entries: Vec::new(),
+        }
+    }
+
+    pub fn parse_file<P: AsRef<Path>>(&mut self, path: P) -> Result<usize, Box<dyn std::error::Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut count = 0;
+
+        for line in reader.lines() {
+            let line = line?;
+            if let Ok(entry) = self.parse_line(&line) {
+                self.entries.push(entry);
+                count += 1;
+            }
+        }
+
+        Ok(count)
+    }
+
+    pub fn parse_line(&self, line: &str) -> Result<LogEntry, Box<dyn std::error::Error>> {
+        let json_value: Value = serde_json::from_str(line)?;
+        
+        let mut entry = LogEntry {
+            timestamp: json_value.get("timestamp").and_then(|v| v.as_str()).map(String::from),
+            level: json_value.get("level").and_then(|v| v.as_str()).map(String::from),
+            message: json_value.get("message").and_then(|v| v.as_str()).map(String::from),
+            fields: HashMap::new(),
+        };
+
+        if let Value::Object(map) = json_value {
+            for (key, value) in map {
+                match key.as_str() {
+                    "timestamp" | "level" | "message" => continue,
+                    _ => {
+                        entry.fields.insert(key, value.clone());
+                    }
+                }
+            }
+        }
+
+        Ok(entry)
+    }
+
+    pub fn filter_by_level(&self, level: &str) -> Vec<&LogEntry> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.level.as_deref() == Some(level))
+            .collect()
+    }
+
+    pub fn extract_field(&self, field_name: &str) -> Vec<Option<&Value>> {
+        self.entries
+            .iter()
+            .map(|entry| entry.fields.get(field_name))
+            .collect()
+    }
+
+    pub fn get_stats(&self) -> HashMap<String, usize> {
+        let mut stats = HashMap::new();
+        
+        for entry in &self.entries {
+            if let Some(level) = &entry.level {
+                *stats.entry(level.clone()).or_insert(0) += 1;
+            }
+        }
+        
+        stats
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_parse_line() {
+        let parser = LogParser::new();
+        let json_line = r#"{"timestamp":"2024-01-15T10:30:00Z","level":"INFO","message":"System started","user_id":12345,"action":"login"}"#;
+        
+        let entry = parser.parse_line(json_line).unwrap();
+        
+        assert_eq!(entry.timestamp, Some("2024-01-15T10:30:00Z".to_string()));
+        assert_eq!(entry.level, Some("INFO".to_string()));
+        assert_eq!(entry.message, Some("System started".to_string()));
+        assert_eq!(entry.fields.get("user_id"), Some(&json!(12345)));
+        assert_eq!(entry.fields.get("action"), Some(&json!("login")));
+    }
+
+    #[test]
+    fn test_filter_by_level() {
+        let mut parser = LogParser::new();
+        
+        let entry1 = LogEntry {
+            timestamp: Some("2024-01-15T10:30:00Z".to_string()),
+            level: Some("INFO".to_string()),
+            message: Some("System started".to_string()),
+            fields: HashMap::new(),
+        };
+        
+        let entry2 = LogEntry {
+            timestamp: Some("2024-01-15T10:31:00Z".to_string()),
+            level: Some("ERROR".to_string()),
+            message: Some("Connection failed".to_string()),
+            fields: HashMap::new(),
+        };
+        
+        parser.entries.push(entry1);
+        parser.entries.push(entry2);
+        
+        let errors = parser.filter_by_level("ERROR");
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].message.as_deref(), Some("Connection failed"));
+    }
 }

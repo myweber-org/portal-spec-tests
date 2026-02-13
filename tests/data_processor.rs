@@ -524,3 +524,158 @@ mod tests {
         assert_eq!(stats["max"], 3.0);
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufReader, BufWriter};
+use std::path::Path;
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct Record {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub active: bool,
+}
+
+impl Record {
+    pub fn is_valid(&self) -> bool {
+        !self.name.is_empty() && self.value >= 0.0
+    }
+}
+
+pub struct DataProcessor {
+    records: Vec<Record>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut csv_reader = csv::Reader::from_reader(reader);
+
+        for result in csv_reader.deserialize() {
+            let record: Record = result?;
+            self.records.push(record);
+        }
+
+        Ok(())
+    }
+
+    pub fn save_to_csv<P: AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn Error>> {
+        let file = File::create(path)?;
+        let writer = BufWriter::new(file);
+        let mut csv_writer = csv::Writer::from_writer(writer);
+
+        for record in &self.records {
+            csv_writer.serialize(record)?;
+        }
+
+        csv_writer.flush()?;
+        Ok(())
+    }
+
+    pub fn filter_valid_records(&self) -> Vec<Record> {
+        self.records
+            .iter()
+            .filter(|r| r.is_valid())
+            .cloned()
+            .collect()
+    }
+
+    pub fn calculate_total_value(&self) -> f64 {
+        self.records.iter().map(|r| r.value).sum()
+    }
+
+    pub fn add_record(&mut self, record: Record) {
+        self.records.push(record);
+    }
+
+    pub fn clear_invalid_records(&mut self) {
+        self.records.retain(|r| r.is_valid());
+    }
+
+    pub fn get_record_count(&self) -> usize {
+        self.records.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_record_validation() {
+        let valid_record = Record {
+            id: 1,
+            name: "Test".to_string(),
+            value: 10.5,
+            active: true,
+        };
+        assert!(valid_record.is_valid());
+
+        let invalid_record = Record {
+            id: 2,
+            name: "".to_string(),
+            value: -5.0,
+            active: false,
+        };
+        assert!(!invalid_record.is_valid());
+    }
+
+    #[test]
+    fn test_data_processor_operations() {
+        let mut processor = DataProcessor::new();
+        
+        processor.add_record(Record {
+            id: 1,
+            name: "Item1".to_string(),
+            value: 100.0,
+            active: true,
+        });
+        
+        processor.add_record(Record {
+            id: 2,
+            name: "".to_string(),
+            value: -50.0,
+            active: false,
+        });
+
+        assert_eq!(processor.get_record_count(), 2);
+        assert_eq!(processor.filter_valid_records().len(), 1);
+        assert_eq!(processor.calculate_total_value(), 50.0);
+        
+        processor.clear_invalid_records();
+        assert_eq!(processor.get_record_count(), 1);
+    }
+
+    #[test]
+    fn test_csv_serialization() -> Result<(), Box<dyn Error>> {
+        let mut processor = DataProcessor::new();
+        processor.add_record(Record {
+            id: 1,
+            name: "Test".to_string(),
+            value: 42.0,
+            active: true,
+        });
+
+        let temp_file = NamedTempFile::new()?;
+        let path = temp_file.path();
+        
+        processor.save_to_csv(path)?;
+        
+        let mut new_processor = DataProcessor::new();
+        new_processor.load_from_csv(path)?;
+        
+        assert_eq!(new_processor.get_record_count(), 1);
+        Ok(())
+    }
+}

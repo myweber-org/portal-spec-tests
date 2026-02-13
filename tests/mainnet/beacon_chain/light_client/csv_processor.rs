@@ -81,3 +81,107 @@ pub fn uppercase_transformer(value: &str) -> String {
 pub fn trim_transformer(value: &str) -> String {
     value.trim().to_string()
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+
+#[derive(Debug)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    category: String,
+}
+
+impl Record {
+    fn from_csv_line(line: &str) -> Result<Self, Box<dyn Error>> {
+        let parts: Vec<&str> = line.split(',').collect();
+        if parts.len() != 4 {
+            return Err("Invalid CSV format".into());
+        }
+
+        Ok(Record {
+            id: parts[0].parse()?,
+            name: parts[1].to_string(),
+            value: parts[2].parse()?,
+            category: parts[3].to_string(),
+        })
+    }
+}
+
+fn process_csv_file(file_path: &str) -> Result<Vec<Record>, Box<dyn Error>> {
+    let file = File::open(file_path)?;
+    let reader = BufReader::new(file);
+    let mut records = Vec::new();
+
+    for (index, line) in reader.lines().enumerate() {
+        let line = line?;
+        if index == 0 {
+            continue;
+        }
+
+        match Record::from_csv_line(&line) {
+            Ok(record) => records.push(record),
+            Err(e) => eprintln!("Warning: Skipping line {}: {}", index + 1, e),
+        }
+    }
+
+    Ok(records)
+}
+
+fn aggregate_by_category(records: &[Record]) -> Vec<(String, f64, usize)> {
+    use std::collections::HashMap;
+
+    let mut aggregation: HashMap<String, (f64, usize)> = HashMap::new();
+
+    for record in records {
+        let entry = aggregation
+            .entry(record.category.clone())
+            .or_insert((0.0, 0));
+        entry.0 += record.value;
+        entry.1 += 1;
+    }
+
+    aggregation
+        .into_iter()
+        .map(|(category, (total, count))| (category, total, count))
+        .collect()
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let records = process_csv_file("data.csv")?;
+    
+    println!("Processed {} records", records.len());
+    
+    let aggregation = aggregate_by_category(&records);
+    
+    println!("\nAggregation by category:");
+    for (category, total, count) in aggregation {
+        println!("{}: ${:.2} ({} items)", category, total, count);
+    }
+    
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_record_parsing() {
+        let line = "1,ProductA,29.99,Electronics";
+        let record = Record::from_csv_line(line).unwrap();
+        
+        assert_eq!(record.id, 1);
+        assert_eq!(record.name, "ProductA");
+        assert_eq!(record.value, 29.99);
+        assert_eq!(record.category, "Electronics");
+    }
+
+    #[test]
+    fn test_invalid_record() {
+        let line = "1,ProductA";
+        let result = Record::from_csv_line(line);
+        assert!(result.is_err());
+    }
+}

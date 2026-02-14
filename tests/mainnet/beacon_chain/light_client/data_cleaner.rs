@@ -149,3 +149,51 @@ mod tests {
         assert_eq!(sorted_result, vec![1, 2, 3, 4]);
     }
 }
+use std::collections::HashSet;
+use std::io::{self, BufRead, Write};
+
+pub fn clean_data(input: &str) -> String {
+    let lines: Vec<&str> = input.lines().collect();
+    let unique_lines: HashSet<&str> = lines.iter().copied().collect();
+    
+    let mut sorted_lines: Vec<&str> = unique_lines.into_iter().collect();
+    sorted_lines.sort_unstable();
+    
+    sorted_lines.join("\n")
+}
+
+pub fn process_stream() -> io::Result<()> {
+    let stdin = io::stdin();
+    let stdout = io::stdout();
+    
+    let mut input = String::new();
+    for line in stdin.lock().lines() {
+        input.push_str(&line?);
+        input.push('\n');
+    }
+    
+    let cleaned = clean_data(&input);
+    
+    let mut handle = stdout.lock();
+    handle.write_all(cleaned.as_bytes())?;
+    handle.flush()?;
+    
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_clean_data() {
+        let input = "banana\napple\ncherry\napple\nbanana";
+        let expected = "apple\nbanana\ncherry";
+        assert_eq!(clean_data(input), expected);
+    }
+
+    #[test]
+    fn test_empty_input() {
+        assert_eq!(clean_data(""), "");
+    }
+}

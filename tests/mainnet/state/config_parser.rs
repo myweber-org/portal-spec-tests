@@ -249,4 +249,78 @@ impl AppConfig {
     pub fn to_toml(&self) -> Result<String, toml::ser::Error> {
         toml::to_string_pretty(self)
     }
+}use std::fs;
+use std::collections::HashMap;
+use std::error::Error;
+
+pub type Config = HashMap<String, String>;
+
+pub fn parse_config_file(path: &str) -> Result<Config, Box<dyn Error>> {
+    let content = fs::read_to_string(path)?;
+    let mut config = HashMap::new();
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+
+        if let Some((key, value)) = trimmed.split_once('=') {
+            let key = key.trim().to_string();
+            let value = value.trim().to_string();
+            
+            if !key.is_empty() {
+                config.insert(key, value);
+            }
+        }
+    }
+
+    Ok(config)
+}
+
+pub fn get_config_value(config: &Config, key: &str) -> Option<&String> {
+    config.get(key)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_parse_valid_config() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "HOST=localhost\nPORT=8080\n# This is a comment\nDB_NAME=testdb").unwrap();
+        
+        let config = parse_config_file(temp_file.path().to_str().unwrap()).unwrap();
+        
+        assert_eq!(config.get("HOST"), Some(&"localhost".to_string()));
+        assert_eq!(config.get("PORT"), Some(&"8080".to_string()));
+        assert_eq!(config.get("DB_NAME"), Some(&"testdb".to_string()));
+        assert_eq!(config.get("NONEXISTENT"), None);
+    }
+
+    #[test]
+    fn test_parse_empty_config() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "").unwrap();
+        
+        let config = parse_config_file(temp_file.path().to_str().unwrap()).unwrap();
+        assert!(config.is_empty());
+    }
+
+    #[test]
+    fn test_parse_invalid_lines() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "KEY_WITHOUT_VALUE=\n=EMPTY_KEY\nONLY_KEY\nVALID_KEY=valid_value").unwrap();
+        
+        let config = parse_config_file(temp_file.path().to_str().unwrap()).unwrap();
+        
+        assert_eq!(config.get("VALID_KEY"), Some(&"valid_value".to_string()));
+        assert_eq!(config.get("KEY_WITHOUT_VALUE"), Some(&"".to_string()));
+        assert_eq!(config.get(""), None);
+        assert_eq!(config.get("ONLY_KEY"), None);
+    }
 }

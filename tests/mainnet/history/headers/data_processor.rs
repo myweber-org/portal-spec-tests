@@ -786,4 +786,114 @@ mod tests {
         assert!(!output_content.contains("ItemB"));
         assert!(output_content.contains("ItemC"));
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+pub struct DataProcessor {
+    file_path: String,
+}
+
+impl DataProcessor {
+    pub fn new(file_path: &str) -> Self {
+        DataProcessor {
+            file_path: file_path.to_string(),
+        }
+    }
+
+    pub fn process_csv(&self, filter_column: usize, filter_value: &str) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let path = Path::new(&self.file_path);
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        
+        let mut results = Vec::new();
+        
+        for (index, line) in reader.lines().enumerate() {
+            let line = line?;
+            
+            if index == 0 {
+                results.push(line.split(',').map(|s| s.to_string()).collect());
+                continue;
+            }
+            
+            let columns: Vec<&str> = line.split(',').collect();
+            
+            if columns.len() > filter_column && columns[filter_column] == filter_value {
+                results.push(columns.iter().map(|&s| s.to_string()).collect());
+            }
+        }
+        
+        Ok(results)
+    }
+    
+    pub fn calculate_average(&self, column_index: usize) -> Result<f64, Box<dyn Error>> {
+        let path = Path::new(&self.file_path);
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        
+        let mut sum = 0.0;
+        let mut count = 0;
+        
+        for (index, line) in reader.lines().enumerate() {
+            let line = line?;
+            
+            if index == 0 {
+                continue;
+            }
+            
+            let columns: Vec<&str> = line.split(',').collect();
+            
+            if columns.len() > column_index {
+                if let Ok(value) = columns[column_index].parse::<f64>() {
+                    sum += value;
+                    count += 1;
+                }
+            }
+        }
+        
+        if count > 0 {
+            Ok(sum / count as f64)
+        } else {
+            Ok(0.0)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+    
+    #[test]
+    fn test_process_csv() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,name,age,city").unwrap();
+        writeln!(temp_file, "1,John,25,New York").unwrap();
+        writeln!(temp_file, "2,Jane,30,London").unwrap();
+        writeln!(temp_file, "3,Bob,25,Paris").unwrap();
+        
+        let processor = DataProcessor::new(temp_file.path().to_str().unwrap());
+        let result = processor.process_csv(2, "25").unwrap();
+        
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0], vec!["id", "name", "age", "city"]);
+        assert_eq!(result[1], vec!["1", "John", "25", "New York"]);
+        assert_eq!(result[2], vec!["3", "Bob", "25", "Paris"]);
+    }
+    
+    #[test]
+    fn test_calculate_average() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,value").unwrap();
+        writeln!(temp_file, "1,10.5").unwrap();
+        writeln!(temp_file, "2,20.5").unwrap();
+        writeln!(temp_file, "3,30.5").unwrap();
+        
+        let processor = DataProcessor::new(temp_file.path().to_str().unwrap());
+        let average = processor.calculate_average(1).unwrap();
+        
+        assert!((average - 20.5).abs() < 0.001);
+    }
 }

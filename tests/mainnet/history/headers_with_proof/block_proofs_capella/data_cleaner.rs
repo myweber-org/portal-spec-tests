@@ -65,4 +65,59 @@ mod tests {
         let duplicate = cleaner.clean_pipeline("  Hello  World  ");
         assert!(duplicate.is_none());
     }
+}use std::collections::HashSet;
+
+pub fn clean_strings(strings: Vec<String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut cleaned = Vec::new();
+    
+    for s in strings {
+        let normalized = s.trim().to_lowercase();
+        if !normalized.is_empty() && seen.insert(normalized.clone()) {
+            cleaned.push(normalized);
+        }
+    }
+    
+    cleaned.sort();
+    cleaned
+}
+
+pub fn remove_duplicates<T: Eq + std::hash::Hash + Clone>(items: Vec<T>) -> Vec<T> {
+    let mut seen = HashSet::new();
+    let mut result = Vec::new();
+    
+    for item in items {
+        if seen.insert(item.clone()) {
+            result.push(item);
+        }
+    }
+    
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_clean_strings() {
+        let input = vec![
+            "  Hello  ".to_string(),
+            "hello".to_string(),
+            "WORLD".to_string(),
+            "world ".to_string(),
+            "".to_string(),
+            "  ".to_string(),
+        ];
+        
+        let result = clean_strings(input);
+        assert_eq!(result, vec!["hello", "world"]);
+    }
+
+    #[test]
+    fn test_remove_duplicates() {
+        let input = vec![1, 2, 2, 3, 1, 4, 5, 4];
+        let result = remove_duplicates(input);
+        assert_eq!(result, vec![1, 2, 3, 4, 5]);
+    }
 }

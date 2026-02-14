@@ -99,4 +99,105 @@ mod tests {
         assert_eq!(result.len(), 2);
         assert_eq!(result[0], vec!["John", "30", "New York"]);
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::str::FromStr;
+
+#[derive(Debug)]
+pub struct CsvParser {
+    headers: Vec<String>,
+    records: Vec<Vec<String>>,
+}
+
+impl CsvParser {
+    pub fn new() -> Self {
+        CsvParser {
+            headers: Vec::new(),
+            records: Vec::new(),
+        }
+    }
+
+    pub fn parse_file(&mut self, path: &str, has_headers: bool) -> Result<(), Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut lines = reader.lines();
+
+        if has_headers {
+            if let Some(header_line) = lines.next() {
+                let header_line = header_line?;
+                self.headers = header_line.split(',').map(|s| s.trim().to_string()).collect();
+            }
+        }
+
+        for line_result in lines {
+            let line = line_result?;
+            let record: Vec<String> = line.split(',').map(|s| s.trim().to_string()).collect();
+            self.records.push(record);
+        }
+
+        Ok(())
+    }
+
+    pub fn get_column<T: FromStr>(&self, column_index: usize) -> Result<Vec<T>, Box<dyn Error>>
+    where
+        T::Err: Error + 'static,
+    {
+        let mut column_data = Vec::new();
+        for record in &self.records {
+            if column_index < record.len() {
+                let value = record[column_index].parse::<T>()?;
+                column_data.push(value);
+            }
+        }
+        Ok(column_data)
+    }
+
+    pub fn get_header_column<T: FromStr>(&self, header_name: &str) -> Result<Vec<T>, Box<dyn Error>>
+    where
+        T::Err: Error + 'static,
+    {
+        let column_index = self.headers
+            .iter()
+            .position(|h| h == header_name)
+            .ok_or_else(|| format!("Header '{}' not found", header_name))?;
+        
+        self.get_column(column_index)
+    }
+
+    pub fn record_count(&self) -> usize {
+        self.records.len()
+    }
+
+    pub fn column_count(&self) -> usize {
+        if !self.records.is_empty() {
+            self.records[0].len()
+        } else {
+            0
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_csv_parsing() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,city").unwrap();
+        writeln!(temp_file, "Alice,30,New York").unwrap();
+        writeln!(temp_file, "Bob,25,London").unwrap();
+        
+        let mut parser = CsvParser::new();
+        let result = parser.parse_file(temp_file.path().to_str().unwrap(), true);
+        assert!(result.is_ok());
+        assert_eq!(parser.record_count(), 2);
+        assert_eq!(parser.column_count(), 3);
+        
+        let ages: Vec<i32> = parser.get_header_column("age").unwrap();
+        assert_eq!(ages, vec![30, 25]);
+    }
 }

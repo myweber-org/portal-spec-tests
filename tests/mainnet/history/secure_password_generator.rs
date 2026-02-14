@@ -376,4 +376,126 @@ fn main() {
         }
         Err(e) => println!("Error: {}", e),
     }
+}use rand::Rng;
+use std::io;
+
+#[derive(Debug)]
+pub struct PasswordGenerator {
+    length: usize,
+    use_lowercase: bool,
+    use_uppercase: bool,
+    use_digits: bool,
+    use_special: bool,
+}
+
+impl PasswordGenerator {
+    pub fn new(length: usize) -> Self {
+        Self {
+            length,
+            use_lowercase: true,
+            use_uppercase: true,
+            use_digits: true,
+            use_special: true,
+        }
+    }
+
+    pub fn lowercase(mut self, enable: bool) -> Self {
+        self.use_lowercase = enable;
+        self
+    }
+
+    pub fn uppercase(mut self, enable: bool) -> Self {
+        self.use_uppercase = enable;
+        self
+    }
+
+    pub fn digits(mut self, enable: bool) -> Self {
+        self.use_digits = enable;
+        self
+    }
+
+    pub fn special(mut self, enable: bool) -> Self {
+        self.use_special = enable;
+        self
+    }
+
+    pub fn generate(&self) -> Result<String, &'static str> {
+        if self.length == 0 {
+            return Err("Password length must be greater than zero");
+        }
+
+        let mut character_set = Vec::new();
+        
+        if self.use_lowercase {
+            character_set.extend(b'a'..=b'z');
+        }
+        if self.use_uppercase {
+            character_set.extend(b'A'..=b'Z');
+        }
+        if self.use_digits {
+            character_set.extend(b'0'..=b'9');
+        }
+        if self.use_special {
+            character_set.extend(b"!@#$%^&*()_+-=[]{}|;:,.<>?");
+        }
+
+        if character_set.is_empty() {
+            return Err("At least one character set must be enabled");
+        }
+
+        let mut rng = rand::thread_rng();
+        let password: String = (0..self.length)
+            .map(|_| {
+                let idx = rng.gen_range(0..character_set.len());
+                character_set[idx] as char
+            })
+            .collect();
+
+        Ok(password)
+    }
+}
+
+fn main() {
+    println!("Secure Password Generator");
+    println!("=========================");
+
+    let mut input = String::new();
+    
+    println!("Enter password length (default: 16): ");
+    io::stdin().read_line(&mut input).unwrap();
+    let length: usize = input.trim().parse().unwrap_or(16);
+    
+    let generator = PasswordGenerator::new(length)
+        .lowercase(true)
+        .uppercase(true)
+        .digits(true)
+        .special(true);
+
+    match generator.generate() {
+        Ok(password) => {
+            println!("\nGenerated Password: {}", password);
+            println!("Password Strength: {}", evaluate_strength(&password));
+        }
+        Err(e) => println!("Error: {}", e),
+    }
+}
+
+fn evaluate_strength(password: &str) -> &'static str {
+    let has_lower = password.chars().any(|c| c.is_lowercase());
+    let has_upper = password.chars().any(|c| c.is_uppercase());
+    let has_digit = password.chars().any(|c| c.is_digit(10));
+    let has_special = password.chars().any(|c| !c.is_alphanumeric());
+    
+    let criteria_met = [has_lower, has_upper, has_digit, has_special]
+        .iter()
+        .filter(|&&c| c)
+        .count();
+
+    match criteria_met {
+        4 if password.len() >= 12 => "Very Strong",
+        4 => "Strong",
+        3 => "Moderate",
+        2 => "Weak",
+        _ => "Very Weak",
+    }
 }

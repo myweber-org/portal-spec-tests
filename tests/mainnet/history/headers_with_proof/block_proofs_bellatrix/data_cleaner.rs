@@ -134,4 +134,98 @@ mod tests {
         assert_eq!(valid, 1);
         assert_eq!(invalid, 2);
     }
+}use std::collections::HashSet;
+
+pub struct DataCleaner {
+    deduplication_enabled: bool,
+    normalization_enabled: bool,
+}
+
+impl DataCleaner {
+    pub fn new(deduplication: bool, normalization: bool) -> Self {
+        DataCleaner {
+            deduplication_enabled: deduplication,
+            normalization_enabled: normalization,
+        }
+    }
+
+    pub fn clean_dataset(&self, data: Vec<String>) -> Vec<String> {
+        let mut processed_data = data;
+
+        if self.deduplication_enabled {
+            processed_data = Self::remove_duplicates(processed_data);
+        }
+
+        if self.normalization_enabled {
+            processed_data = Self::normalize_entries(processed_data);
+        }
+
+        processed_data
+    }
+
+    fn remove_duplicates(data: Vec<String>) -> Vec<String> {
+        let mut seen = HashSet::new();
+        data.into_iter()
+            .filter(|item| seen.insert(item.clone()))
+            .collect()
+    }
+
+    fn normalize_entries(data: Vec<String>) -> Vec<String> {
+        data.into_iter()
+            .map(|entry| {
+                entry.trim().to_lowercase()
+            })
+            .collect()
+    }
+
+    pub fn validate_data(&self, data: &[String]) -> bool {
+        !data.is_empty() && data.iter().all(|item| !item.trim().is_empty())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_deduplication() {
+        let cleaner = DataCleaner::new(true, false);
+        let data = vec![
+            "apple".to_string(),
+            "banana".to_string(),
+            "apple".to_string(),
+            "cherry".to_string(),
+        ];
+        
+        let cleaned = cleaner.clean_dataset(data);
+        assert_eq!(cleaned.len(), 3);
+        assert!(cleaned.contains(&"apple".to_string()));
+        assert!(cleaned.contains(&"banana".to_string()));
+        assert!(cleaned.contains(&"cherry".to_string()));
+    }
+
+    #[test]
+    fn test_normalization() {
+        let cleaner = DataCleaner::new(false, true);
+        let data = vec![
+            "  APPLE  ".to_string(),
+            "Banana".to_string(),
+            "  CHERRY  ".to_string(),
+        ];
+        
+        let cleaned = cleaner.clean_dataset(data);
+        assert_eq!(cleaned[0], "apple");
+        assert_eq!(cleaned[1], "banana");
+        assert_eq!(cleaned[2], "cherry");
+    }
+
+    #[test]
+    fn test_validation() {
+        let cleaner = DataCleaner::new(false, false);
+        let valid_data = vec!["valid".to_string(), "data".to_string()];
+        let invalid_data = vec!["".to_string(), "   ".to_string()];
+        
+        assert!(cleaner.validate_data(&valid_data));
+        assert!(!cleaner.validate_data(&invalid_data));
+    }
 }

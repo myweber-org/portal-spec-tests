@@ -594,3 +594,110 @@ pub fn decrypt_file(input_path: &str, key_path: &str, output_path: &str) -> Resu
     
     Ok(())
 }
+use std::fs;
+use std::io::{self, Read, Write};
+use std::path::Path;
+
+const BUFFER_SIZE: usize = 8192;
+
+pub fn xor_cipher(data: &mut [u8], key: &[u8]) {
+    for (i, byte) in data.iter_mut().enumerate() {
+        *byte ^= key[i % key.len()];
+    }
+}
+
+pub fn process_file(input_path: &Path, output_path: &Path, key: &[u8]) -> io::Result<()> {
+    let mut input_file = fs::File::open(input_path)?;
+    let mut output_file = fs::File::create(output_path)?;
+    
+    let mut buffer = [0u8; BUFFER_SIZE];
+    
+    loop {
+        let bytes_read = input_file.read(&mut buffer)?;
+        if bytes_read == 0 {
+            break;
+        }
+        
+        let data_slice = &mut buffer[..bytes_read];
+        xor_cipher(data_slice, key);
+        output_file.write_all(data_slice)?;
+    }
+    
+    Ok(())
+}
+
+pub fn encrypt_file(input_path: &str, output_path: &str, password: &str) -> io::Result<()> {
+    let key = derive_key(password);
+    process_file(Path::new(input_path), Path::new(output_path), &key)
+}
+
+pub fn decrypt_file(input_path: &str, output_path: &str, password: &str) -> io::Result<()> {
+    encrypt_file(input_path, output_path, password)
+}
+
+fn derive_key(password: &str) -> Vec<u8> {
+    let mut key = Vec::with_capacity(32);
+    let password_bytes = password.as_bytes();
+    
+    for i in 0..32 {
+        let idx = i % password_bytes.len();
+        let mut byte = password_bytes[idx];
+        byte = byte.wrapping_add((i * 7) as u8);
+        byte = byte.rotate_left(3);
+        key.push(byte);
+    }
+    
+    key
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_xor_cipher_symmetry() {
+        let mut data = b"Hello, World!".to_vec();
+        let original = data.clone();
+        let key = b"secret";
+        
+        xor_cipher(&mut data, key);
+        assert_ne!(data, original);
+        
+        xor_cipher(&mut data, key);
+        assert_eq!(data, original);
+    }
+
+    #[test]
+    fn test_file_encryption() -> io::Result<()> {
+        let input_temp = NamedTempFile::new()?;
+        let output_temp = NamedTempFile::new()?;
+        let decrypt_temp = NamedTempFile::new()?;
+        
+        let test_data = b"Test data for encryption";
+        fs::write(input_temp.path(), test_data)?;
+        
+        let password = "test_password";
+        
+        encrypt_file(
+            input_temp.path().to_str().unwrap(),
+            output_temp.path().to_str().unwrap(),
+            password,
+        )?;
+        
+        let encrypted = fs::read(output_temp.path())?;
+        assert_ne!(encrypted, test_data);
+        
+        decrypt_file(
+            output_temp.path().to_str().unwrap(),
+            decrypt_temp.path().to_str().unwrap(),
+            password,
+        )?;
+        
+        let decrypted = fs::read(decrypt_temp.path())?;
+        assert_eq!(decrypted, test_data);
+        
+        Ok(())
+    }
+}

@@ -163,3 +163,87 @@ pub fn write_merged_json(output_path: &str, json_value: &JsonValue) -> Result<()
     fs::write(output_path, json_string)?;
     Ok(())
 }
+use serde_json::{Value, Map};
+use std::fs;
+use std::path::Path;
+
+pub fn merge_json_files<P: AsRef<Path>>(paths: &[P]) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut merged = Map::new();
+
+    for path in paths {
+        let content = fs::read_to_string(path)?;
+        let json: Value = serde_json::from_str(&content)?;
+
+        if let Value::Object(obj) = json {
+            for (key, value) in obj {
+                merge_value(&mut merged, key, value);
+            }
+        }
+    }
+
+    Ok(Value::Object(merged))
+}
+
+fn merge_value(map: &mut Map<String, Value>, key: String, new_value: Value) {
+    match map.get_mut(&key) {
+        Some(existing) => {
+            if let (Value::Object(ref mut existing_obj), Value::Object(new_obj)) = (existing, &new_value) {
+                for (nested_key, nested_value) in new_obj {
+                    merge_value(existing_obj, nested_key.clone(), nested_value.clone());
+                }
+            } else if existing != &new_value {
+                *existing = Value::Array(vec![existing.clone(), new_value]);
+            }
+        }
+        None => {
+            map.insert(key, new_value);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_merge_json() {
+        let json1 = json!({
+            "name": "Alice",
+            "settings": {
+                "theme": "dark"
+            }
+        });
+
+        let json2 = json!({
+            "age": 30,
+            "settings": {
+                "font_size": 14
+            }
+        });
+
+        let merged = merge_json(&json1, &json2);
+        assert_eq!(merged["name"], "Alice");
+        assert_eq!(merged["age"], 30);
+        assert_eq!(merged["settings"]["theme"], "dark");
+        assert_eq!(merged["settings"]["font_size"], 14);
+    }
+
+    fn merge_json(a: &Value, b: &Value) -> Value {
+        let mut map = Map::new();
+        
+        if let Value::Object(obj) = a {
+            for (key, value) in obj {
+                map.insert(key.clone(), value.clone());
+            }
+        }
+
+        if let Value::Object(obj) = b {
+            for (key, value) in obj {
+                merge_value(&mut map, key.clone(), value.clone());
+            }
+        }
+
+        Value::Object(map)
+    }
+}

@@ -382,4 +382,107 @@ mod tests {
         let avg = processor.calculate_average();
         assert_eq!(avg, None);
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+pub struct DataProcessor {
+    delimiter: char,
+    has_header: bool,
+}
+
+impl DataProcessor {
+    pub fn new(delimiter: char, has_header: bool) -> Self {
+        DataProcessor {
+            delimiter,
+            has_header,
+        }
+    }
+
+    pub fn process_file<P: AsRef<Path>>(&self, path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut records = Vec::new();
+        let mut lines = reader.lines();
+
+        if self.has_header {
+            lines.next();
+        }
+
+        for line_result in lines {
+            let line = line_result?;
+            let record: Vec<String> = line
+                .split(self.delimiter)
+                .map(|s| s.trim().to_string())
+                .collect();
+            
+            if !record.is_empty() {
+                records.push(record);
+            }
+        }
+
+        Ok(records)
+    }
+
+    pub fn validate_records(&self, records: &[Vec<String>], expected_columns: usize) -> Vec<usize> {
+        let mut invalid_rows = Vec::new();
+        
+        for (index, record) in records.iter().enumerate() {
+            if record.len() != expected_columns {
+                invalid_rows.push(index);
+            }
+        }
+        
+        invalid_rows
+    }
+
+    pub fn extract_column(&self, records: &[Vec<String>], column_index: usize) -> Vec<String> {
+        records
+            .iter()
+            .filter_map(|record| record.get(column_index).cloned())
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_csv_processing() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,city").unwrap();
+        writeln!(temp_file, "Alice,30,New York").unwrap();
+        writeln!(temp_file, "Bob,25,London").unwrap();
+        writeln!(temp_file, "Charlie,35,Paris").unwrap();
+
+        let processor = DataProcessor::new(',', true);
+        let records = processor.process_file(temp_file.path()).unwrap();
+        
+        assert_eq!(records.len(), 3);
+        assert_eq!(records[0], vec!["Alice", "30", "New York"]);
+        
+        let invalid_rows = processor.validate_records(&records, 3);
+        assert!(invalid_rows.is_empty());
+        
+        let ages = processor.extract_column(&records, 1);
+        assert_eq!(ages, vec!["30", "25", "35"]);
+    }
+
+    #[test]
+    fn test_invalid_data() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "col1,col2,col3").unwrap();
+        writeln!(temp_file, "value1,value2").unwrap();
+        writeln!(temp_file, "value3,value4,value5,value6").unwrap();
+
+        let processor = DataProcessor::new(',', true);
+        let records = processor.process_file(temp_file.path()).unwrap();
+        
+        let invalid_rows = processor.validate_records(&records, 3);
+        assert_eq!(invalid_rows.len(), 2);
+    }
 }

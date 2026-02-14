@@ -146,4 +146,124 @@ mod tests {
         // Note: In real usage, you'd need to adjust the config path logic
         // This test demonstrates the validation logic works
     }
+}use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::Path;
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AppConfig {
+    pub server_port: u16,
+    pub database_url: String,
+    pub log_level: String,
+    pub enable_cache: bool,
+    pub cache_ttl: u32,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        AppConfig {
+            server_port: 8080,
+            database_url: String::from("postgresql://localhost:5432/mydb"),
+            log_level: String::from("info"),
+            enable_cache: true,
+            cache_ttl: 300,
+        }
+    }
+}
+
+impl AppConfig {
+    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
+        let content = fs::read_to_string(path)?;
+        let config: AppConfig = toml::from_str(&content)?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.server_port == 0 {
+            return Err("Server port cannot be zero".to_string());
+        }
+        if self.database_url.is_empty() {
+            return Err("Database URL cannot be empty".to_string());
+        }
+        let valid_log_levels = ["trace", "debug", "info", "warn", "error"];
+        if !valid_log_levels.contains(&self.log_level.as_str()) {
+            return Err(format!("Invalid log level: {}", self.log_level));
+        }
+        if self.cache_ttl > 86400 {
+            return Err("Cache TTL cannot exceed 86400 seconds".to_string());
+        }
+        Ok(())
+    }
+
+    pub fn merge_with_defaults(mut self) -> Self {
+        let default = AppConfig::default();
+        if self.server_port == 0 {
+            self.server_port = default.server_port;
+        }
+        if self.database_url.is_empty() {
+            self.database_url = default.database_url;
+        }
+        if self.log_level.is_empty() {
+            self.log_level = default.log_level;
+        }
+        self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_default_config() {
+        let config = AppConfig::default();
+        assert_eq!(config.server_port, 8080);
+        assert_eq!(config.log_level, "info");
+        assert!(config.enable_cache);
+    }
+
+    #[test]
+    fn test_config_validation() {
+        let mut config = AppConfig::default();
+        config.server_port = 0;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_config_from_file() {
+        let toml_content = r#"
+            server_port = 9090
+            database_url = "postgresql://localhost:5432/testdb"
+            log_level = "debug"
+            enable_cache = false
+            cache_ttl = 600
+        "#;
+
+        let mut file = NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), toml_content).unwrap();
+
+        let config = AppConfig::from_file(file.path()).unwrap();
+        assert_eq!(config.server_port, 9090);
+        assert_eq!(config.log_level, "debug");
+        assert!(!config.enable_cache);
+    }
+
+    #[test]
+    fn test_merge_with_defaults() {
+        let config = AppConfig {
+            server_port: 0,
+            database_url: String::new(),
+            log_level: String::new(),
+            enable_cache: false,
+            cache_ttl: 100,
+        };
+
+        let merged = config.merge_with_defaults();
+        assert_eq!(merged.server_port, 8080);
+        assert_eq!(merged.database_url, "postgresql://localhost:5432/mydb");
+        assert_eq!(merged.log_level, "info");
+        assert!(!merged.enable_cache);
+    }
 }

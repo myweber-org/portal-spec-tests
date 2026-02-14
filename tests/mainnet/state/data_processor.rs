@@ -226,3 +226,116 @@ mod tests {
         assert!((normalized[2] - 1.0).abs() < 0.001);
     }
 }
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataPoint {
+    timestamp: i64,
+    value: f64,
+    category: String,
+}
+
+#[derive(Debug)]
+pub enum ProcessingError {
+    InvalidTimestamp,
+    InvalidValue,
+    EmptyCategory,
+    TransformationFailed,
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProcessingError::InvalidTimestamp => write!(f, "Timestamp must be positive"),
+            ProcessingError::InvalidValue => write!(f, "Value must be within valid range"),
+            ProcessingError::EmptyCategory => write!(f, "Category cannot be empty"),
+            ProcessingError::TransformationFailed => write!(f, "Data transformation failed"),
+        }
+    }
+}
+
+impl Error for ProcessingError {}
+
+impl DataPoint {
+    pub fn new(timestamp: i64, value: f64, category: String) -> Result<Self, ProcessingError> {
+        if timestamp <= 0 {
+            return Err(ProcessingError::InvalidTimestamp);
+        }
+        if !value.is_finite() {
+            return Err(ProcessingError::InvalidValue);
+        }
+        if category.trim().is_empty() {
+            return Err(ProcessingError::EmptyCategory);
+        }
+
+        Ok(Self {
+            timestamp,
+            value,
+            category,
+        })
+    }
+
+    pub fn transform(&self, multiplier: f64) -> Result<Self, ProcessingError> {
+        if !multiplier.is_finite() || multiplier <= 0.0 {
+            return Err(ProcessingError::TransformationFailed);
+        }
+
+        let transformed_value = self.value * multiplier;
+        
+        Ok(Self {
+            timestamp: self.timestamp,
+            value: transformed_value,
+            category: self.category.clone(),
+        })
+    }
+
+    pub fn normalize(&self, min: f64, max: f64) -> Result<f64, ProcessingError> {
+        if min >= max || !min.is_finite() || !max.is_finite() {
+            return Err(ProcessingError::TransformationFailed);
+        }
+
+        let normalized = (self.value - min) / (max - min);
+        if normalized.is_finite() {
+            Ok(normalized)
+        } else {
+            Err(ProcessingError::TransformationFailed)
+        }
+    }
+}
+
+pub fn process_dataset(points: Vec<DataPoint>) -> Result<Vec<DataPoint>, ProcessingError> {
+    if points.is_empty() {
+        return Err(ProcessingError::TransformationFailed);
+    }
+
+    let mut processed = Vec::with_capacity(points.len());
+    for point in points {
+        let transformed = point.transform(2.0)?;
+        processed.push(transformed);
+    }
+
+    Ok(processed)
+}
+
+pub fn calculate_statistics(points: &[DataPoint]) -> Result<(f64, f64), ProcessingError> {
+    if points.is_empty() {
+        return Err(ProcessingError::TransformationFailed);
+    }
+
+    let sum: f64 = points.iter().map(|p| p.value).sum();
+    let count = points.len() as f64;
+    let mean = sum / count;
+
+    let variance: f64 = points.iter()
+        .map(|p| (p.value - mean).powi(2))
+        .sum::<f64>() / count;
+    
+    let std_dev = variance.sqrt();
+
+    if mean.is_finite() && std_dev.is_finite() {
+        Ok((mean, std_dev))
+    } else {
+        Err(ProcessingError::TransformationFailed)
+    }
+}

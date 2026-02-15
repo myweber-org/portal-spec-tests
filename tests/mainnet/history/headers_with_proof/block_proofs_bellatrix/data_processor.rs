@@ -116,3 +116,128 @@ mod tests {
         assert_eq!(total_values, 3);
     }
 }
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug)]
+pub struct ValidationError {
+    details: String,
+}
+
+impl ValidationError {
+    fn new(msg: &str) -> ValidationError {
+        ValidationError {
+            details: msg.to_string(),
+        }
+    }
+}
+
+impl fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.details)
+    }
+}
+
+impl Error for ValidationError {
+    fn description(&self) -> &str {
+        &self.details
+    }
+}
+
+pub struct DataRecord {
+    pub id: u32,
+    pub value: f64,
+    pub timestamp: u64,
+}
+
+impl DataRecord {
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        if self.id == 0 {
+            return Err(ValidationError::new("ID cannot be zero"));
+        }
+        if self.value < 0.0 || self.value > 1000.0 {
+            return Err(ValidationError::new("Value must be between 0 and 1000"));
+        }
+        if self.timestamp == 0 {
+            return Err(ValidationError::new("Timestamp cannot be zero"));
+        }
+        Ok(())
+    }
+}
+
+pub fn process_records(records: Vec<DataRecord>) -> Vec<Result<DataRecord, ValidationError>> {
+    records
+        .into_iter()
+        .map(|mut record| {
+            record.validate()?;
+            record.value = transform_value(record.value);
+            Ok(record)
+        })
+        .collect()
+}
+
+fn transform_value(value: f64) -> f64 {
+    (value * 1.05).round()
+}
+
+pub fn calculate_average(records: &[DataRecord]) -> Option<f64> {
+    if records.is_empty() {
+        return None;
+    }
+    let sum: f64 = records.iter().map(|r| r.value).sum();
+    Some(sum / records.len() as f64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_record() {
+        let record = DataRecord {
+            id: 1,
+            value: 500.0,
+            timestamp: 1234567890,
+        };
+        assert!(record.validate().is_ok());
+    }
+
+    #[test]
+    fn test_invalid_id() {
+        let record = DataRecord {
+            id: 0,
+            value: 500.0,
+            timestamp: 1234567890,
+        };
+        assert!(record.validate().is_err());
+    }
+
+    #[test]
+    fn test_value_transformation() {
+        let result = transform_value(100.0);
+        assert_eq!(result, 105.0);
+    }
+
+    #[test]
+    fn test_average_calculation() {
+        let records = vec![
+            DataRecord {
+                id: 1,
+                value: 10.0,
+                timestamp: 100,
+            },
+            DataRecord {
+                id: 2,
+                value: 20.0,
+                timestamp: 200,
+            },
+            DataRecord {
+                id: 3,
+                value: 30.0,
+                timestamp: 300,
+            },
+        ];
+        let avg = calculate_average(&records).unwrap();
+        assert_eq!(avg, 20.0);
+    }
+}

@@ -1,177 +1,109 @@
-
-use csv::{ReaderBuilder, WriterBuilder};
-use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fs::File;
-use std::path::Path;
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct Record {
-    pub id: u32,
-    pub name: String,
-    pub value: f64,
-    pub category: String,
-}
-
-impl Record {
-    pub fn is_valid(&self) -> bool {
-        !self.name.is_empty() && self.value >= 0.0 && !self.category.is_empty()
-    }
-}
+use std::io::{BufRead, BufReader};
+use std::collections::HashMap;
 
 pub struct DataProcessor {
-    records: Vec<Record>,
+    data: Vec<f64>,
+    frequency_map: HashMap<String, u32>,
 }
 
 impl DataProcessor {
     pub fn new() -> Self {
         DataProcessor {
-            records: Vec::new(),
+            data: Vec::new(),
+            frequency_map: HashMap::new(),
         }
     }
 
-    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<usize, Box<dyn Error>> {
-        let file = File::open(path)?;
-        let mut rdr = ReaderBuilder::new().has_headers(true).from_reader(file);
+    pub fn load_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
         
-        self.records.clear();
-        let mut count = 0;
-        
-        for result in rdr.deserialize() {
-            let record: Record = result?;
-            if record.is_valid() {
-                self.records.push(record);
-                count += 1;
+        for line in reader.lines() {
+            let line = line?;
+            let parts: Vec<&str> = line.split(',').collect();
+            
+            if let Some(value) = parts.get(0) {
+                if let Ok(num) = value.parse::<f64>() {
+                    self.data.push(num);
+                }
+            }
+            
+            if let Some(category) = parts.get(1) {
+                *self.frequency_map.entry(category.to_string()).or_insert(0) += 1;
             }
         }
         
-        Ok(count)
-    }
-
-    pub fn save_to_csv<P: AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn Error>> {
-        let file = File::create(path)?;
-        let mut wtr = WriterBuilder::new().has_headers(true).from_writer(file);
-        
-        for record in &self.records {
-            wtr.serialize(record)?;
-        }
-        
-        wtr.flush()?;
         Ok(())
     }
 
-    pub fn filter_by_category(&self, category: &str) -> Vec<Record> {
-        self.records
-            .iter()
-            .filter(|r| r.category == category)
-            .cloned()
-            .collect()
-    }
-
-    pub fn calculate_average(&self) -> Option<f64> {
-        if self.records.is_empty() {
+    pub fn calculate_mean(&self) -> Option<f64> {
+        if self.data.is_empty() {
             return None;
         }
         
-        let sum: f64 = self.records.iter().map(|r| r.value).sum();
-        Some(sum / self.records.len() as f64)
+        let sum: f64 = self.data.iter().sum();
+        Some(sum / self.data.len() as f64)
     }
 
-    pub fn add_record(&mut self, record: Record) {
-        if record.is_valid() {
-            self.records.push(record);
+    pub fn calculate_median(&mut self) -> Option<f64> {
+        if self.data.is_empty() {
+            return None;
+        }
+        
+        self.data.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let mid = self.data.len() / 2;
+        
+        if self.data.len() % 2 == 0 {
+            Some((self.data[mid - 1] + self.data[mid]) / 2.0)
+        } else {
+            Some(self.data[mid])
         }
     }
 
-    pub fn get_records(&self) -> &[Record] {
-        &self.records
+    pub fn get_frequency_distribution(&self) -> &HashMap<String, u32> {
+        &self.frequency_map
     }
 
-    pub fn clear(&mut self) {
-        self.records.clear();
+    pub fn filter_data(&self, threshold: f64) -> Vec<f64> {
+        self.data.iter()
+            .filter(|&&x| x > threshold)
+            .cloned()
+            .collect()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_record_validation() {
-        let valid_record = Record {
-            id: 1,
-            name: "Test".to_string(),
-            value: 10.5,
-            category: "A".to_string(),
-        };
-        assert!(valid_record.is_valid());
-
-        let invalid_record = Record {
-            id: 2,
-            name: "".to_string(),
-            value: -5.0,
-            category: "B".to_string(),
-        };
-        assert!(!invalid_record.is_valid());
-    }
-
-    #[test]
-    fn test_data_processor() {
+    fn test_data_processing() {
         let mut processor = DataProcessor::new();
         
-        let record = Record {
-            id: 1,
-            name: "Sample".to_string(),
-            value: 100.0,
-            category: "Test".to_string(),
-        };
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "15.5,CategoryA").unwrap();
+        writeln!(temp_file, "22.3,CategoryB").unwrap();
+        writeln!(temp_file, "18.7,CategoryA").unwrap();
+        writeln!(temp_file, "25.1,CategoryC").unwrap();
         
-        processor.add_record(record.clone());
-        assert_eq!(processor.get_records().len(), 1);
+        let result = processor.load_csv(temp_file.path().to_str().unwrap());
+        assert!(result.is_ok());
         
-        let avg = processor.calculate_average();
-        assert_eq!(avg, Some(100.0));
+        let mean = processor.calculate_mean().unwrap();
+        assert!((mean - 20.4).abs() < 0.01);
         
-        let filtered = processor.filter_by_category("Test");
-        assert_eq!(filtered.len(), 1);
+        let median = processor.calculate_median().unwrap();
+        assert!((median - 20.5).abs() < 0.01);
         
-        processor.clear();
-        assert!(processor.get_records().is_empty());
-    }
-
-    #[test]
-    fn test_csv_operations() -> Result<(), Box<dyn Error>> {
-        let mut processor = DataProcessor::new();
+        let distribution = processor.get_frequency_distribution();
+        assert_eq!(distribution.get("CategoryA"), Some(&2));
+        assert_eq!(distribution.get("CategoryB"), Some(&1));
         
-        let record1 = Record {
-            id: 1,
-            name: "First".to_string(),
-            value: 50.0,
-            category: "Alpha".to_string(),
-        };
-        
-        let record2 = Record {
-            id: 2,
-            name: "Second".to_string(),
-            value: 75.0,
-            category: "Beta".to_string(),
-        };
-        
-        processor.add_record(record1);
-        processor.add_record(record2);
-        
-        let temp_file = NamedTempFile::new()?;
-        let path = temp_file.path();
-        
-        processor.save_to_csv(path)?;
-        
-        let mut new_processor = DataProcessor::new();
-        let count = new_processor.load_from_csv(path)?;
-        
-        assert_eq!(count, 2);
-        assert_eq!(new_processor.get_records().len(), 2);
-        
-        Ok(())
+        let filtered = processor.filter_data(20.0);
+        assert_eq!(filtered.len(), 2);
     }
 }

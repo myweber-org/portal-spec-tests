@@ -475,3 +475,161 @@ mod tests {
         assert!((stats.2 - 8.164965).abs() < 0.001);
     }
 }
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    id: u32,
+    value: f64,
+    timestamp: u64,
+}
+
+#[derive(Debug)]
+pub enum DataError {
+    InvalidId,
+    InvalidValue,
+    InvalidTimestamp,
+    TransformationError(String),
+}
+
+impl fmt::Display for DataError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DataError::InvalidId => write!(f, "Invalid record ID"),
+            DataError::InvalidValue => write!(f, "Invalid value field"),
+            DataError::InvalidTimestamp => write!(f, "Invalid timestamp"),
+            DataError::TransformationError(msg) => write!(f, "Transformation error: {}", msg),
+        }
+    }
+}
+
+impl Error for DataError {}
+
+impl DataRecord {
+    pub fn new(id: u32, value: f64, timestamp: u64) -> Result<Self, DataError> {
+        if id == 0 {
+            return Err(DataError::InvalidId);
+        }
+        if !value.is_finite() {
+            return Err(DataError::InvalidValue);
+        }
+        if timestamp == 0 {
+            return Err(DataError::InvalidTimestamp);
+        }
+
+        Ok(Self {
+            id,
+            value,
+            timestamp,
+        })
+    }
+
+    pub fn transform(&self, multiplier: f64) -> Result<Self, DataError> {
+        if !multiplier.is_finite() || multiplier <= 0.0 {
+            return Err(DataError::TransformationError(
+                "Invalid multiplier value".to_string(),
+            ));
+        }
+
+        let transformed_value = self.value * multiplier;
+        Ok(Self {
+            id: self.id,
+            value: transformed_value,
+            timestamp: self.timestamp,
+        })
+    }
+
+    pub fn normalize(&self, min: f64, max: f64) -> Result<f64, DataError> {
+        if min >= max || !min.is_finite() || !max.is_finite() {
+            return Err(DataError::TransformationError(
+                "Invalid normalization range".to_string(),
+            ));
+        }
+
+        let normalized = (self.value - min) / (max - min);
+        if normalized.is_finite() {
+            Ok(normalized)
+        } else {
+            Err(DataError::TransformationError(
+                "Normalization produced invalid result".to_string(),
+            ))
+        }
+    }
+}
+
+pub fn process_records(records: &[DataRecord]) -> Result<Vec<DataRecord>, DataError> {
+    let mut processed = Vec::with_capacity(records.len());
+
+    for record in records {
+        let transformed = record.transform(2.0)?;
+        processed.push(transformed);
+    }
+
+    Ok(processed)
+}
+
+pub fn calculate_statistics(records: &[DataRecord]) -> (f64, f64, f64) {
+    if records.is_empty() {
+        return (0.0, 0.0, 0.0);
+    }
+
+    let sum: f64 = records.iter().map(|r| r.value).sum();
+    let count = records.len() as f64;
+    let mean = sum / count;
+
+    let variance: f64 = records
+        .iter()
+        .map(|r| (r.value - mean).powi(2))
+        .sum::<f64>()
+        / count;
+
+    let std_dev = variance.sqrt();
+
+    (mean, variance, std_dev)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_record_creation() {
+        let record = DataRecord::new(1, 10.5, 1234567890);
+        assert!(record.is_ok());
+    }
+
+    #[test]
+    fn test_invalid_id() {
+        let record = DataRecord::new(0, 10.5, 1234567890);
+        assert!(matches!(record, Err(DataError::InvalidId)));
+    }
+
+    #[test]
+    fn test_record_transformation() {
+        let record = DataRecord::new(1, 10.0, 1234567890).unwrap();
+        let transformed = record.transform(3.0).unwrap();
+        assert_eq!(transformed.value, 30.0);
+    }
+
+    #[test]
+    fn test_normalization() {
+        let record = DataRecord::new(1, 15.0, 1234567890).unwrap();
+        let normalized = record.normalize(10.0, 20.0).unwrap();
+        assert_eq!(normalized, 0.5);
+    }
+
+    #[test]
+    fn test_statistics_calculation() {
+        let records = vec![
+            DataRecord::new(1, 10.0, 1000).unwrap(),
+            DataRecord::new(2, 20.0, 2000).unwrap(),
+            DataRecord::new(3, 30.0, 3000).unwrap(),
+        ];
+
+        let (mean, variance, std_dev) = calculate_statistics(&records);
+        assert_eq!(mean, 20.0);
+        assert_eq!(variance, 66.66666666666667);
+        assert_eq!(std_dev, 8.16496580927726);
+    }
+}

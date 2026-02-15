@@ -373,3 +373,90 @@ mod tests {
         assert!(ids.contains(&"c"));
     }
 }
+use serde_json::{Value, Map};
+use std::fs;
+use std::path::Path;
+
+pub fn merge_json_files<P: AsRef<Path>>(paths: &[P]) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut result = Map::new();
+
+    for path in paths {
+        let content = fs::read_to_string(path)?;
+        let json: Value = serde_json::from_str(&content)?;
+
+        if let Value::Object(obj) = json {
+            for (key, value) in obj {
+                merge_value(&mut result, key, value);
+            }
+        }
+    }
+
+    Ok(Value::Object(result))
+}
+
+fn merge_value(map: &mut Map<String, Value>, key: String, new_value: Value) {
+    match map.get_mut(&key) {
+        Some(existing_value) => {
+            if let (Value::Object(existing_obj), Value::Object(new_obj)) = (existing_value, &new_value) {
+                let mut existing_obj = existing_obj.clone();
+                for (nested_key, nested_value) in new_obj {
+                    merge_value(&mut existing_obj, nested_key.clone(), nested_value.clone());
+                }
+                map.insert(key, Value::Object(existing_obj));
+            } else if existing_value != &new_value {
+                let merged_array = if let (Value::Array(existing_arr), Value::Array(new_arr)) = (existing_value, &new_value) {
+                    let mut combined = existing_arr.clone();
+                    combined.extend(new_arr.clone());
+                    Value::Array(combined)
+                } else {
+                    Value::Array(vec![existing_value.clone(), new_value.clone()])
+                };
+                map.insert(key, merged_array);
+            }
+        }
+        None => {
+            map.insert(key, new_value);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_merge_json_files() {
+        let file1 = NamedTempFile::new().unwrap();
+        let file2 = NamedTempFile::new().unwrap();
+
+        fs::write(&file1, r#"{"a": 1, "b": {"x": 10}}"#).unwrap();
+        fs::write(&file2, r#"{"b": {"y": 20}, "c": 3}"#).unwrap();
+
+        let result = merge_json_files(&[file1.path(), file2.path()]).unwrap();
+        let expected = json!({
+            "a": 1,
+            "b": {"x": 10, "y": 20},
+            "c": 3
+        });
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_merge_conflict_resolution() {
+        let file1 = NamedTempFile::new().unwrap();
+        let file2 = NamedTempFile::new().unwrap();
+
+        fs::write(&file1, r#"{"key": "first"}"#).unwrap();
+        fs::write(&file2, r#"{"key": "second"}"#).unwrap();
+
+        let result = merge_json_files(&[file1.path(), file2.path()]).unwrap();
+        let expected = json!({
+            "key": ["first", "second"]
+        });
+
+        assert_eq!(result, expected);
+    }
+}

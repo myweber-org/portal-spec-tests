@@ -219,4 +219,93 @@ impl Config {
     pub fn get(&self, key: &str) -> Option<&String> {
         self.settings.get(key)
     }
+}use std::env;
+use std::fs::File;
+use std::io::Read;
+use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AppConfig {
+    pub database_url: String,
+    pub server_port: u16,
+    pub log_level: String,
+    pub cache_ttl: u64,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        AppConfig {
+            database_url: String::from("postgresql://localhost:5432/mydb"),
+            server_port: 8080,
+            log_level: String::from("info"),
+            cache_ttl: 300,
+        }
+    }
+}
+
+pub struct ConfigLoader {
+    config_path: String,
+    env_prefix: String,
+}
+
+impl ConfigLoader {
+    pub fn new(config_path: &str, env_prefix: &str) -> Self {
+        ConfigLoader {
+            config_path: config_path.to_string(),
+            env_prefix: env_prefix.to_string(),
+        }
+    }
+
+    pub fn load(&self) -> Result<AppConfig, Box<dyn std::error::Error>> {
+        let mut config = self.load_from_file()?;
+        self.override_from_env(&mut config)?;
+        Ok(config)
+    }
+
+    fn load_from_file(&self) -> Result<AppConfig, Box<dyn std::error::Error>> {
+        let mut file = File::open(&self.config_path)?;
+        let mut contents = String::new();
+        file.read_to_string(&mut contents)?;
+        
+        let config: AppConfig = toml::from_str(&contents)?;
+        Ok(config)
+    }
+
+    fn override_from_env(&self, config: &mut AppConfig) -> Result<(), Box<dyn std::error::Error>> {
+        let env_vars: HashMap<String, String> = env::vars()
+            .filter(|(k, _)| k.starts_with(&self.env_prefix))
+            .collect();
+
+        for (key, value) in env_vars {
+            let config_key = key.trim_start_matches(&self.env_prefix).to_lowercase();
+            
+            match config_key.as_str() {
+                "database_url" => config.database_url = value,
+                "server_port" => config.server_port = value.parse()?,
+                "log_level" => config.log_level = value,
+                "cache_ttl" => config.cache_ttl = value.parse()?,
+                _ => {}
+            }
+        }
+
+        Ok(())
+    }
+}
+
+pub fn validate_config(config: &AppConfig) -> Result<(), String> {
+    if config.database_url.is_empty() {
+        return Err("Database URL cannot be empty".to_string());
+    }
+    
+    if config.server_port == 0 {
+        return Err("Server port must be greater than 0".to_string());
+    }
+    
+    let valid_log_levels = ["error", "warn", "info", "debug", "trace"];
+    if !valid_log_levels.contains(&config.log_level.as_str()) {
+        return Err(format!("Invalid log level: {}", config.log_level));
+    }
+    
+    Ok(())
 }

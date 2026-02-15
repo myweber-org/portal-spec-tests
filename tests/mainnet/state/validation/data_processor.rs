@@ -964,4 +964,147 @@ mod tests {
         assert_eq!(groups.get("Group1").unwrap().len(), 2);
         assert_eq!(groups.get("Group2").unwrap().len(), 1);
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::collections::HashMap;
+
+pub struct DataProcessor {
+    data: Vec<f64>,
+    metadata: HashMap<String, String>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            data: Vec::new(),
+            metadata: HashMap::new(),
+        }
+    }
+
+    pub fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        
+        for (index, line) in reader.lines().enumerate() {
+            let line = line?;
+            if index == 0 {
+                self.parse_header(&line);
+                continue;
+            }
+            
+            if let Ok(value) = line.trim().parse::<f64>() {
+                self.data.push(value);
+            }
+        }
+        
+        Ok(())
+    }
+
+    fn parse_header(&mut self, header_line: &str) {
+        for part in header_line.split(',') {
+            let parts: Vec<&str> = part.split(':').collect();
+            if parts.len() == 2 {
+                self.metadata.insert(
+                    parts[0].trim().to_string(),
+                    parts[1].trim().to_string()
+                );
+            }
+        }
+    }
+
+    pub fn calculate_statistics(&self) -> Statistics {
+        if self.data.is_empty() {
+            return Statistics::default();
+        }
+
+        let sum: f64 = self.data.iter().sum();
+        let count = self.data.len();
+        let mean = sum / count as f64;
+        
+        let variance: f64 = self.data.iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>() / count as f64;
+        
+        let std_dev = variance.sqrt();
+        
+        let mut sorted_data = self.data.clone();
+        sorted_data.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        
+        let median = if count % 2 == 0 {
+            (sorted_data[count/2 - 1] + sorted_data[count/2]) / 2.0
+        } else {
+            sorted_data[count/2]
+        };
+
+        Statistics {
+            count,
+            mean,
+            median,
+            std_dev,
+            min: *sorted_data.first().unwrap_or(&0.0),
+            max: *sorted_data.last().unwrap_or(&0.0),
+        }
+    }
+
+    pub fn filter_by_threshold(&self, threshold: f64) -> Vec<f64> {
+        self.data.iter()
+            .filter(|&&x| x >= threshold)
+            .cloned()
+            .collect()
+    }
+
+    pub fn get_metadata(&self, key: &str) -> Option<&String> {
+        self.metadata.get(key)
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct Statistics {
+    pub count: usize,
+    pub mean: f64,
+    pub median: f64,
+    pub std_dev: f64,
+    pub min: f64,
+    pub max: f64,
+}
+
+impl std::fmt::Display for Statistics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Statistics: count={}, mean={:.2}, median={:.2}, std_dev={:.2}, min={:.2}, max={:.2}",
+            self.count, self.mean, self.median, self.std_dev, self.min, self.max
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_data_processing() {
+        let mut processor = DataProcessor::new();
+        
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "source:test,version:1.0").unwrap();
+        writeln!(temp_file, "10.5").unwrap();
+        writeln!(temp_file, "20.3").unwrap();
+        writeln!(temp_file, "15.7").unwrap();
+        
+        let result = processor.load_from_csv(temp_file.path().to_str().unwrap());
+        assert!(result.is_ok());
+        
+        let stats = processor.calculate_statistics();
+        assert_eq!(stats.count, 3);
+        assert_eq!(stats.mean, 15.5);
+        
+        let filtered = processor.filter_by_threshold(15.0);
+        assert_eq!(filtered.len(), 2);
+        
+        assert_eq!(processor.get_metadata("source"), Some(&"test".to_string()));
+    }
 }

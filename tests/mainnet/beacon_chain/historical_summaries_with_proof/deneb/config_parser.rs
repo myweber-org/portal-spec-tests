@@ -421,4 +421,144 @@ mod tests {
         let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
         assert_eq!(config.get("DATABASE_URL"), Some(&"postgres://postgres:5432/db".to_string()));
     }
+}use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::Path;
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AppConfig {
+    pub server: ServerConfig,
+    pub database: DatabaseConfig,
+    pub logging: LoggingConfig,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ServerConfig {
+    pub host: String,
+    pub port: u16,
+    pub tls_enabled: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DatabaseConfig {
+    pub url: String,
+    pub max_connections: u32,
+    pub timeout_seconds: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LoggingConfig {
+    pub level: String,
+    pub file_path: Option<String>,
+    pub rotation: String,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        AppConfig {
+            server: ServerConfig {
+                host: "127.0.0.1".to_string(),
+                port: 8080,
+                tls_enabled: false,
+            },
+            database: DatabaseConfig {
+                url: "postgresql://localhost:5432/mydb".to_string(),
+                max_connections: 10,
+                timeout_seconds: 30,
+            },
+            logging: LoggingConfig {
+                level: "info".to_string(),
+                file_path: None,
+                rotation: "daily".to_string(),
+            },
+        }
+    }
+}
+
+impl AppConfig {
+    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
+        let content = fs::read_to_string(path)?;
+        let config: AppConfig = toml::from_str(&content)?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    pub fn from_file_or_default<P: AsRef<Path>>(path: P) -> Self {
+        match Self::from_file(path) {
+            Ok(config) => config,
+            Err(e) => {
+                eprintln!("Failed to load config: {}. Using defaults.", e);
+                Self::default()
+            }
+        }
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if self.server.port == 0 {
+            return Err("Server port cannot be zero".to_string());
+        }
+        if self.database.max_connections == 0 {
+            return Err("Database max connections cannot be zero".to_string());
+        }
+        if !["trace", "debug", "info", "warn", "error"].contains(&self.logging.level.as_str()) {
+            return Err(format!("Invalid log level: {}", self.logging.level));
+        }
+        Ok(())
+    }
+
+    pub fn to_toml(&self) -> Result<String, toml::ser::Error> {
+        toml::to_string_pretty(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_default_config() {
+        let config = AppConfig::default();
+        assert_eq!(config.server.host, "127.0.0.1");
+        assert_eq!(config.server.port, 8080);
+        assert_eq!(config.database.max_connections, 10);
+        assert_eq!(config.logging.level, "info");
+    }
+
+    #[test]
+    fn test_config_validation() {
+        let mut config = AppConfig::default();
+        config.server.port = 0;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_from_file() {
+        let toml_content = r#"
+            [server]
+            host = "0.0.0.0"
+            port = 9000
+            tls_enabled = true
+
+            [database]
+            url = "postgresql://prod:5432/appdb"
+            max_connections = 50
+            timeout_seconds = 60
+
+            [logging]
+            level = "debug"
+            file_path = "/var/log/app.log"
+            rotation = "hourly"
+        "#;
+
+        let temp_file = NamedTempFile::new().unwrap();
+        fs::write(temp_file.path(), toml_content).unwrap();
+
+        let config = AppConfig::from_file(temp_file.path()).unwrap();
+        assert_eq!(config.server.host, "0.0.0.0");
+        assert_eq!(config.server.port, 9000);
+        assert_eq!(config.database.max_connections, 50);
+        assert_eq!(config.logging.level, "debug");
+        assert_eq!(config.logging.file_path, Some("/var/log/app.log".to_string()));
+    }
 }

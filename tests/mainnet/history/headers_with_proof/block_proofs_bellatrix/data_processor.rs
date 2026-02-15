@@ -1,231 +1,80 @@
-use std::error::Error;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
-use std::path::Path;
 
-pub struct DataProcessor {
-    delimiter: char,
-    has_header: bool,
-}
-
-impl DataProcessor {
-    pub fn new(delimiter: char, has_header: bool) -> Self {
-        DataProcessor {
-            delimiter,
-            has_header,
-        }
-    }
-
-    pub fn process_file<P: AsRef<Path>>(&self, file_path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
-        let file = File::open(file_path)?;
-        let reader = BufReader::new(file);
-        let mut records = Vec::new();
-        let mut lines = reader.lines();
-
-        if self.has_header {
-            lines.next();
-        }
-
-        for line_result in lines {
-            let line = line_result?;
-            let fields: Vec<String> = line.split(self.delimiter)
-                .map(|s| s.trim().to_string())
-                .collect();
-            
-            if !fields.is_empty() {
-                records.push(fields);
-            }
-        }
-
-        Ok(records)
-    }
-
-    pub fn validate_record(&self, record: &[String], expected_fields: usize) -> bool {
-        record.len() == expected_fields && record.iter().all(|field| !field.is_empty())
-    }
-
-    pub fn extract_column(&self, data: &[Vec<String>], column_index: usize) -> Vec<String> {
-        data.iter()
-            .filter_map(|record| record.get(column_index).cloned())
-            .collect()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
-
-    #[test]
-    fn test_process_file() {
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "name,age,city").unwrap();
-        writeln!(temp_file, "Alice,30,New York").unwrap();
-        writeln!(temp_file, "Bob,25,London").unwrap();
-
-        let processor = DataProcessor::new(',', true);
-        let result = processor.process_file(temp_file.path()).unwrap();
-        
-        assert_eq!(result.len(), 2);
-        assert_eq!(result[0], vec!["Alice", "30", "New York"]);
-    }
-
-    #[test]
-    fn test_validate_record() {
-        let processor = DataProcessor::new(',', false);
-        let valid_record = vec!["data".to_string(), "value".to_string()];
-        let invalid_record = vec!["".to_string(), "value".to_string()];
-        
-        assert!(processor.validate_record(&valid_record, 2));
-        assert!(!processor.validate_record(&invalid_record, 2));
-    }
-
-    #[test]
-    fn test_extract_column() {
-        let processor = DataProcessor::new(',', false);
-        let data = vec![
-            vec!["a".to_string(), "b".to_string()],
-            vec!["c".to_string(), "d".to_string()],
-        ];
-        
-        let column = processor.extract_column(&data, 1);
-        assert_eq!(column, vec!["b".to_string(), "d".to_string()]);
-    }
-}
 use std::collections::HashMap;
-use std::error::Error;
-use std::fmt;
-
-#[derive(Debug, Clone)]
-pub struct DataRecord {
-    pub id: u32,
-    pub name: String,
-    pub value: f64,
-    pub category: String,
-}
-
-#[derive(Debug)]
-pub enum DataError {
-    InvalidId,
-    InvalidValue,
-    MissingField,
-    CategoryNotFound,
-}
-
-impl fmt::Display for DataError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            DataError::InvalidId => write!(f, "Invalid record ID"),
-            DataError::InvalidValue => write!(f, "Invalid numeric value"),
-            DataError::MissingField => write!(f, "Required field is missing"),
-            DataError::CategoryNotFound => write!(f, "Category not found in mapping"),
-        }
-    }
-}
-
-impl Error for DataError {}
 
 pub struct DataProcessor {
-    records: Vec<DataRecord>,
-    category_mapping: HashMap<String, String>,
+    cache: HashMap<String, Vec<f64>>,
 }
 
 impl DataProcessor {
     pub fn new() -> Self {
         DataProcessor {
-            records: Vec::new(),
-            category_mapping: HashMap::new(),
+            cache: HashMap::new(),
         }
     }
 
-    pub fn add_record(&mut self, record: DataRecord) -> Result<(), DataError> {
-        self.validate_record(&record)?;
-        self.records.push(record);
-        Ok(())
+    pub fn process_dataset(&mut self, key: &str, data: &[f64]) -> Result<Vec<f64>, String> {
+        if data.is_empty() {
+            return Err("Empty dataset provided".to_string());
+        }
+
+        if let Some(cached) = self.cache.get(key) {
+            return Ok(cached.clone());
+        }
+
+        let validated = self.validate_data(data)?;
+        let normalized = self.normalize_data(&validated);
+        let transformed = self.apply_transformations(&normalized);
+
+        self.cache.insert(key.to_string(), transformed.clone());
+        Ok(transformed)
     }
 
-    pub fn add_category_mapping(&mut self, from: String, to: String) {
-        self.category_mapping.insert(from, to);
+    fn validate_data(&self, data: &[f64]) -> Result<Vec<f64>, String> {
+        let mut result = Vec::with_capacity(data.len());
+        
+        for &value in data {
+            if value.is_nan() || value.is_infinite() {
+                return Err(format!("Invalid numeric value detected: {}", value));
+            }
+            result.push(value);
+        }
+        
+        Ok(result)
     }
 
-    pub fn process_records(&mut self) -> Result<Vec<DataRecord>, DataError> {
-        let mut processed = Vec::with_capacity(self.records.len());
-        
-        for record in &self.records {
-            let transformed = self.transform_record(record)?;
-            processed.push(transformed);
+    fn normalize_data(&self, data: &[f64]) -> Vec<f64> {
+        if data.len() < 2 {
+            return data.to_vec();
         }
-        
-        Ok(processed)
+
+        let mean: f64 = data.iter().sum::<f64>() / data.len() as f64;
+        let variance: f64 = data.iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>() / data.len() as f64;
+        let std_dev = variance.sqrt();
+
+        if std_dev.abs() < f64::EPSILON {
+            return vec![0.0; data.len()];
+        }
+
+        data.iter()
+            .map(|&x| (x - mean) / std_dev)
+            .collect()
     }
 
-    pub fn calculate_statistics(&self) -> HashMap<String, f64> {
-        let mut stats = HashMap::new();
-        
-        if self.records.is_empty() {
-            return stats;
-        }
-        
-        let total: f64 = self.records.iter().map(|r| r.value).sum();
-        let count = self.records.len() as f64;
-        let average = total / count;
-        
-        let max_value = self.records.iter()
-            .map(|r| r.value)
-            .fold(f64::MIN, |a, b| a.max(b));
-        
-        let min_value = self.records.iter()
-            .map(|r| r.value)
-            .fold(f64::MAX, |a, b| a.min(b));
-        
-        stats.insert("total".to_string(), total);
-        stats.insert("average".to_string(), average);
-        stats.insert("max".to_string(), max_value);
-        stats.insert("min".to_string(), min_value);
-        stats.insert("count".to_string(), count);
-        
-        stats
+    fn apply_transformations(&self, data: &[f64]) -> Vec<f64> {
+        data.iter()
+            .map(|&x| x.powi(2).ln_1p())
+            .collect()
     }
 
-    fn validate_record(&self, record: &DataRecord) -> Result<(), DataError> {
-        if record.id == 0 {
-            return Err(DataError::InvalidId);
-        }
-        
-        if record.value.is_nan() || record.value.is_infinite() {
-            return Err(DataError::InvalidValue);
-        }
-        
-        if record.name.is_empty() || record.category.is_empty() {
-            return Err(DataError::MissingField);
-        }
-        
-        Ok(())
+    pub fn clear_cache(&mut self) {
+        self.cache.clear();
     }
 
-    fn transform_record(&self, record: &DataRecord) -> Result<DataRecord, DataError> {
-        let normalized_category = if let Some(mapped) = self.category_mapping.get(&record.category) {
-            mapped.clone()
-        } else if record.category.is_empty() {
-            return Err(DataError::CategoryNotFound);
-        } else {
-            record.category.clone()
-        };
-        
-        let normalized_name = record.name.trim().to_string();
-        let adjusted_value = if record.value < 0.0 {
-            0.0
-        } else {
-            record.value
-        };
-        
-        Ok(DataRecord {
-            id: record.id,
-            name: normalized_name,
-            value: adjusted_value,
-            category: normalized_category,
-        })
+    pub fn cache_stats(&self) -> (usize, usize) {
+        let total_items: usize = self.cache.values().map(|v| v.len()).sum();
+        (self.cache.len(), total_items)
     }
 }
 
@@ -234,47 +83,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_add_valid_record() {
+    fn test_empty_dataset() {
         let mut processor = DataProcessor::new();
-        let record = DataRecord {
-            id: 1,
-            name: "Test".to_string(),
-            value: 42.5,
-            category: "A".to_string(),
-        };
-        
-        assert!(processor.add_record(record).is_ok());
-        assert_eq!(processor.calculate_statistics()["count"], 1.0);
+        let result = processor.process_dataset("test", &[]);
+        assert!(result.is_err());
     }
 
     #[test]
-    fn test_invalid_record() {
+    fn test_valid_processing() {
         let mut processor = DataProcessor::new();
-        let record = DataRecord {
-            id: 0,
-            name: "".to_string(),
-            value: f64::NAN,
-            category: "".to_string(),
-        };
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         
-        assert!(processor.add_record(record).is_err());
+        let result = processor.process_dataset("valid", &data);
+        assert!(result.is_ok());
+        
+        let processed = result.unwrap();
+        assert_eq!(processed.len(), data.len());
     }
 
     #[test]
-    fn test_category_mapping() {
+    fn test_cache_functionality() {
         let mut processor = DataProcessor::new();
-        processor.add_category_mapping("OLD".to_string(), "NEW".to_string());
+        let data = vec![10.0, 20.0, 30.0];
         
-        let record = DataRecord {
-            id: 1,
-            name: "Test".to_string(),
-            value: 10.0,
-            category: "OLD".to_string(),
-        };
+        let first_result = processor.process_dataset("cached", &data).unwrap();
+        let second_result = processor.process_dataset("cached", &data).unwrap();
         
-        processor.add_record(record).unwrap();
-        let processed = processor.process_records().unwrap();
+        assert_eq!(first_result, second_result);
         
-        assert_eq!(processed[0].category, "NEW");
+        let (unique_keys, total_values) = processor.cache_stats();
+        assert_eq!(unique_keys, 1);
+        assert_eq!(total_values, 3);
     }
 }

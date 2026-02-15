@@ -401,3 +401,33 @@ pub fn write_merged_json<P: AsRef<Path>>(output_path: P, value: &Value) -> Resul
     serde_json::to_writer_pretty(file, value)?;
     Ok(())
 }
+use serde_json::{Map, Value};
+use std::fs;
+use std::io;
+use std::path::Path;
+
+pub fn merge_json_files<P: AsRef<Path>>(input_paths: &[P], output_path: P) -> io::Result<()> {
+    let mut merged_object = Map::new();
+
+    for path in input_paths {
+        let content = fs::read_to_string(path)?;
+        let json_value: Value = serde_json::from_str(&content)?;
+
+        if let Value::Object(obj) = json_value {
+            for (key, value) in obj {
+                merged_object.insert(key, value);
+            }
+        } else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Input JSON must be an object",
+            ));
+        }
+    }
+
+    let merged_json = Value::Object(merged_object);
+    let pretty_json = serde_json::to_string_pretty(&merged_json)?;
+    fs::write(output_path, pretty_json)?;
+
+    Ok(())
+}

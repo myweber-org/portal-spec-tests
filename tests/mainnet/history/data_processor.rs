@@ -1,186 +1,114 @@
-
+use csv::{ReaderBuilder, WriterBuilder};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::error::Error;
-use std::fmt;
+use std::fs::File;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DataRecord {
-    pub id: u64,
-    pub timestamp: i64,
-    pub values: HashMap<String, f64>,
-    pub tags: Vec<String>,
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    id: u32,
+    name: String,
+    category: String,
+    value: f64,
+    active: bool,
 }
 
-#[derive(Debug)]
-pub enum ProcessingError {
-    InvalidData(String),
-    TransformationError(String),
-    ValidationError(String),
-}
-
-impl fmt::Display for ProcessingError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ProcessingError::InvalidData(msg) => write!(f, "Invalid data: {}", msg),
-            ProcessingError::TransformationError(msg) => write!(f, "Transformation error: {}", msg),
-            ProcessingError::ValidationError(msg) => write!(f, "Validation error: {}", msg),
-        }
-    }
-}
-
-impl Error for ProcessingError {}
-
-pub struct DataProcessor {
-    validation_rules: Vec<Box<dyn Fn(&DataRecord) -> Result<(), ProcessingError>>>,
-    transformation_pipeline: Vec<Box<dyn Fn(DataRecord) -> Result<DataRecord, ProcessingError>>>,
+struct DataProcessor {
+    records: Vec<Record>,
 }
 
 impl DataProcessor {
-    pub fn new() -> Self {
-        DataProcessor {
-            validation_rules: Vec::new(),
-            transformation_pipeline: Vec::new(),
-        }
+    fn new() -> Self {
+        DataProcessor { records: Vec::new() }
     }
 
-    pub fn add_validation_rule<F>(&mut self, rule: F)
-    where
-        F: Fn(&DataRecord) -> Result<(), ProcessingError> + 'static,
-    {
-        self.validation_rules.push(Box::new(rule));
-    }
+    fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let mut rdr = ReaderBuilder::new()
+            .has_headers(true)
+            .from_reader(file);
 
-    pub fn add_transformation<F>(&mut self, transform: F)
-    where
-        F: Fn(DataRecord) -> Result<DataRecord, ProcessingError> + 'static,
-    {
-        self.transformation_pipeline.push(Box::new(transform));
-    }
-
-    pub fn process(&self, mut record: DataRecord) -> Result<DataRecord, ProcessingError> {
-        for rule in &self.validation_rules {
-            rule(&record)?;
+        for result in rdr.deserialize() {
+            let record: Record = result?;
+            self.records.push(record);
         }
 
-        for transform in &self.transformation_pipeline {
-            record = transform(record)?;
-        }
-
-        Ok(record)
+        Ok(())
     }
 
-    pub fn batch_process(&self, records: Vec<DataRecord>) -> Vec<Result<DataRecord, ProcessingError>> {
-        records.into_iter().map(|record| self.process(record)).collect()
+    fn filter_by_category(&self, category: &str) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|record| record.category == category)
+            .collect()
+    }
+
+    fn calculate_average(&self) -> f64 {
+        if self.records.is_empty() {
+            return 0.0;
+        }
+
+        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        sum / self.records.len() as f64
+    }
+
+    fn export_active_records(&self, output_path: &str) -> Result<(), Box<dyn Error>> {
+        let active_records: Vec<&Record> = self
+            .records
+            .iter()
+            .filter(|record| record.active)
+            .collect();
+
+        let file = File::create(output_path)?;
+        let mut wtr = WriterBuilder::new()
+            .has_headers(true)
+            .from_writer(file);
+
+        for record in active_records {
+            wtr.serialize(record)?;
+        }
+
+        wtr.flush()?;
+        Ok(())
+    }
+
+    fn add_record(&mut self, id: u32, name: String, category: String, value: f64, active: bool) {
+        let record = Record {
+            id,
+            name,
+            category,
+            value,
+            active,
+        };
+        self.records.push(record);
+    }
+
+    fn remove_record(&mut self, id: u32) -> Option<Record> {
+        if let Some(pos) = self.records.iter().position(|r| r.id == id) {
+            Some(self.records.remove(pos))
+        } else {
+            None
+        }
     }
 }
 
-fn validate_timestamp(record: &DataRecord) -> Result<(), ProcessingError> {
-    if record.timestamp < 0 {
-        return Err(ProcessingError::ValidationError(
-            "Timestamp cannot be negative".to_string(),
-        ));
-    }
-    Ok(())
-}
-
-fn validate_values(record: &DataRecord) -> Result<(), ProcessingError> {
-    if record.values.is_empty() {
-        return Err(ProcessingError::ValidationError(
-            "Record must contain at least one value".to_string(),
-        ));
-    }
-
-    for (key, value) in &record.values {
-        if value.is_nan() || value.is_infinite() {
-            return Err(ProcessingError::ValidationError(format!(
-                "Invalid value for key '{}': {}",
-                key, value
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn normalize_values(mut record: DataRecord) -> Result<DataRecord, ProcessingError> {
-    let mean: f64 = record.values.values().sum::<f64>() / record.values.len() as f64;
-    
-    for value in record.values.values_mut() {
-        *value = (*value - mean).abs();
-    }
-
-    record.tags.push("normalized".to_string());
-    Ok(record)
-}
-
-pub fn create_default_processor() -> DataProcessor {
+fn process_data_sample() -> Result<(), Box<dyn Error>> {
     let mut processor = DataProcessor::new();
     
-    processor.add_validation_rule(validate_timestamp);
-    processor.add_validation_rule(validate_values);
-    processor.add_transformation(normalize_values);
+    processor.add_record(1, "Item A".to_string(), "Electronics".to_string(), 299.99, true);
+    processor.add_record(2, "Item B".to_string(), "Books".to_string(), 24.50, true);
+    processor.add_record(3, "Item C".to_string(), "Electronics".to_string(), 599.99, false);
     
-    processor
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_validation() {
-        let processor = create_default_processor();
-        
-        let valid_record = DataRecord {
-            id: 1,
-            timestamp: 1234567890,
-            values: [("temperature".to_string(), 25.5)].iter().cloned().collect(),
-            tags: vec!["sensor".to_string()],
-        };
-
-        assert!(processor.process(valid_record).is_ok());
-
-        let invalid_record = DataRecord {
-            id: 2,
-            timestamp: -1,
-            values: [("pressure".to_string(), 1013.25)].iter().cloned().collect(),
-            tags: vec![],
-        };
-
-        assert!(processor.process(invalid_record).is_err());
+    let electronics = processor.filter_by_category("Electronics");
+    println!("Found {} electronics items", electronics.len());
+    
+    let avg_value = processor.calculate_average();
+    println!("Average value: {:.2}", avg_value);
+    
+    processor.export_active_records("active_records.csv")?;
+    
+    if let Some(removed) = processor.remove_record(2) {
+        println!("Removed record: {:?}", removed);
     }
-
-    #[test]
-    fn test_normalization() {
-        let processor = create_default_processor();
-        
-        let record = DataRecord {
-            id: 3,
-            timestamp: 1234567890,
-            values: [
-                ("a".to_string(), 10.0),
-                ("b".to_string(), 20.0),
-                ("c".to_string(), 30.0),
-            ]
-            .iter()
-            .cloned()
-            .collect(),
-            tags: vec!["test".to_string()],
-        };
-
-        let result = processor.process(record).unwrap();
-        assert!(result.tags.contains(&"normalized".to_string()));
-        
-        let mean = 20.0;
-        let expected_values: HashMap<String, f64> = [
-            ("a".to_string(), (10.0 - mean).abs()),
-            ("b".to_string(), (20.0 - mean).abs()),
-            ("c".to_string(), (30.0 - mean).abs()),
-        ]
-        .iter()
-        .cloned()
-        .collect();
-
-        assert_eq!(result.values, expected_values);
-    }
+    
+    Ok(())
 }

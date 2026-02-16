@@ -148,4 +148,30 @@ mod tests {
         let result = clean_data(input);
         assert!(result.is_empty());
     }
+}use csv::{Reader, Writer};
+use std::error::Error;
+use std::fs::File;
+
+pub fn clean_csv(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
+    let mut reader = Reader::from_path(input_path)?;
+    let mut writer = Writer::from_path(output_path)?;
+
+    let headers = reader.headers()?.clone();
+    writer.write_record(&headers)?;
+
+    for result in reader.records() {
+        let record = result?;
+        let filtered_record: Vec<String> = record
+            .iter()
+            .filter(|field| !field.trim().is_empty())
+            .map(|s| s.to_string())
+            .collect();
+
+        if filtered_record.len() == headers.len() {
+            writer.write_record(&filtered_record)?;
+        }
+    }
+
+    writer.flush()?;
+    Ok(())
 }

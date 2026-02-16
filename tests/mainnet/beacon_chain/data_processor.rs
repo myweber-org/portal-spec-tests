@@ -1107,3 +1107,155 @@ mod tests {
         assert_eq!(processor.get_records_count(), 0);
     }
 }
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use thiserror::Error;
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DataRecord {
+    pub id: u64,
+    pub timestamp: i64,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
+}
+
+#[derive(Error, Debug)]
+pub enum ProcessingError {
+    #[error("Invalid data format")]
+    InvalidFormat,
+    #[error("Data validation failed: {0}")]
+    ValidationFailed(String),
+    #[error("Transformation error: {0}")]
+    TransformationError(String),
+}
+
+pub struct DataProcessor {
+    validation_rules: Vec<ValidationRule>,
+    transformation_pipeline: Vec<Transformation>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            validation_rules: Vec::new(),
+            transformation_pipeline: Vec::new(),
+        }
+    }
+
+    pub fn add_validation_rule(&mut self, rule: ValidationRule) {
+        self.validation_rules.push(rule);
+    }
+
+    pub fn add_transformation(&mut self, transformation: Transformation) {
+        self.transformation_pipeline.push(transformation);
+    }
+
+    pub fn process(&self, record: &DataRecord) -> Result<DataRecord, ProcessingError> {
+        self.validate(record)?;
+        self.transform(record)
+    }
+
+    fn validate(&self, record: &DataRecord) -> Result<(), ProcessingError> {
+        for rule in &self.validation_rules {
+            rule.apply(record)?;
+        }
+        Ok(())
+    }
+
+    fn transform(&self, record: &DataRecord) -> Result<DataRecord, ProcessingError> {
+        let mut result = record.clone();
+        for transformation in &self.transformation_pipeline {
+            result = transformation.apply(&result)?;
+        }
+        Ok(result)
+    }
+}
+
+pub trait ValidationRule {
+    fn apply(&self, record: &DataRecord) -> Result<(), ProcessingError>;
+}
+
+pub trait Transformation {
+    fn apply(&self, record: &DataRecord) -> Result<DataRecord, ProcessingError>;
+}
+
+pub struct RangeValidation {
+    field_name: String,
+    min_value: f64,
+    max_value: f64,
+}
+
+impl RangeValidation {
+    pub fn new(field_name: &str, min_value: f64, max_value: f64) -> Self {
+        RangeValidation {
+            field_name: field_name.to_string(),
+            min_value,
+            max_value,
+        }
+    }
+}
+
+impl ValidationRule for RangeValidation {
+    fn apply(&self, record: &DataRecord) -> Result<(), ProcessingError> {
+        if let Some(value_str) = record.metadata.get(&self.field_name) {
+            if let Ok(value) = value_str.parse::<f64>() {
+                if value >= self.min_value && value <= self.max_value {
+                    return Ok(());
+                }
+            }
+        }
+        Err(ProcessingError::ValidationFailed(format!(
+            "Field '{}' out of range [{}, {}]",
+            self.field_name, self.min_value, self.max_value
+        )))
+    }
+}
+
+pub struct NormalizationTransformation {
+    scale_factor: f64,
+}
+
+impl NormalizationTransformation {
+    pub fn new(scale_factor: f64) -> Self {
+        NormalizationTransformation { scale_factor }
+    }
+}
+
+impl Transformation for NormalizationTransformation {
+    fn apply(&self, record: &DataRecord) -> Result<DataRecord, ProcessingError> {
+        let mut new_record = record.clone();
+        new_record.values = record
+            .values
+            .iter()
+            .map(|&v| v * self.scale_factor)
+            .collect();
+        Ok(new_record)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_data_processing() {
+        let mut processor = DataProcessor::new();
+        processor.add_validation_rule(Box::new(RangeValidation::new("temperature", -50.0, 100.0)));
+        processor.add_transformation(Box::new(NormalizationTransformation::new(0.01)));
+
+        let mut metadata = HashMap::new();
+        metadata.insert("temperature".to_string(), "25.5".to_string());
+        
+        let record = DataRecord {
+            id: 1,
+            timestamp: 1625097600,
+            values: vec![100.0, 200.0, 300.0],
+            metadata,
+        };
+
+        let result = processor.process(&record);
+        assert!(result.is_ok());
+        let processed = result.unwrap();
+        assert_eq!(processed.values, vec![1.0, 2.0, 3.0]);
+    }
+}

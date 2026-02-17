@@ -245,3 +245,58 @@ mod tests {
         Ok(())
     }
 }
+use std::fs;
+use std::io::{self, Read, Write};
+use std::path::Path;
+
+const DEFAULT_KEY: u8 = 0x55;
+
+fn xor_encrypt_decrypt(data: &mut [u8], key: u8) {
+    for byte in data.iter_mut() {
+        *byte ^= key;
+    }
+}
+
+fn process_file(input_path: &Path, output_path: &Path, key: u8) -> io::Result<()> {
+    let mut file = fs::File::open(input_path)?;
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer)?;
+
+    xor_encrypt_decrypt(&mut buffer, key);
+
+    let mut output_file = fs::File::create(output_path)?;
+    output_file.write_all(&buffer)?;
+
+    Ok(())
+}
+
+fn main() -> io::Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+    
+    if args.len() < 3 {
+        eprintln!("Usage: {} <input_file> <output_file> [key]", args[0]);
+        eprintln!("If key is not provided, default key 0x55 will be used.");
+        std::process::exit(1);
+    }
+
+    let input_path = Path::new(&args[1]);
+    let output_path = Path::new(&args[2]);
+    
+    let key = if args.len() >= 4 {
+        u8::from_str_radix(&args[3], 16).unwrap_or(DEFAULT_KEY)
+    } else {
+        DEFAULT_KEY
+    };
+
+    if !input_path.exists() {
+        eprintln!("Error: Input file does not exist");
+        std::process::exit(1);
+    }
+
+    match process_file(input_path, output_path, key) {
+        Ok(_) => println!("File processed successfully with key 0x{:02x}", key),
+        Err(e) => eprintln!("Error processing file: {}", e),
+    }
+
+    Ok(())
+}

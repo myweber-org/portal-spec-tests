@@ -430,4 +430,64 @@ pub fn merge_json_files<P: AsRef<Path>>(input_paths: &[P], output_path: P) -> io
     fs::write(output_path, pretty_json)?;
 
     Ok(())
+}use std::collections::HashMap;
+use std::fs::{self, File};
+use std::io::{BufReader, Read};
+use std::path::Path;
+
+type JsonValue = serde_json::Value;
+type JsonResult = Result<JsonValue, Box<dyn std::error::Error>>;
+
+pub fn merge_json_files(file_paths: &[&str]) -> JsonResult {
+    let mut merged = HashMap::new();
+
+    for path_str in file_paths {
+        let path = Path::new(path_str);
+        let file_name = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown")
+            .to_string();
+
+        let file = File::open(path)?;
+        let mut reader = BufReader::new(file);
+        let mut content = String::new();
+        reader.read_to_string(&mut content)?;
+
+        let json_data: JsonValue = serde_json::from_str(&content)?;
+        merged.insert(file_name, json_data);
+    }
+
+    Ok(serde_json::to_value(merged)?)
+}
+
+pub fn merge_and_write(output_path: &str, input_paths: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
+    let merged = merge_json_files(input_paths)?;
+    let json_string = serde_json::to_string_pretty(&merged)?;
+    fs::write(output_path, json_string)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_basic_merge() {
+        let file1 = NamedTempFile::new().unwrap();
+        let file2 = NamedTempFile::new().unwrap();
+
+        fs::write(file1.path(), r#"{"key1": "value1"}"#).unwrap();
+        fs::write(file2.path(), r#"{"key2": 42}"#).unwrap();
+
+        let paths = &[
+            file1.path().to_str().unwrap(),
+            file2.path().to_str().unwrap(),
+        ];
+
+        let result = merge_json_files(paths).unwrap();
+        assert!(result.get("file1").is_some());
+        assert!(result.get("file2").is_some());
+    }
 }

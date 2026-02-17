@@ -192,4 +192,85 @@ mod tests {
         assert_eq!(config.get("PORT").unwrap(), "8080");
         assert_eq!(config.get("HOST").unwrap(), "localhost:8080");
     }
+}use std::fs;
+use std::collections::HashMap;
+use toml::Value;
+
+#[derive(Debug, Clone)]
+pub struct Config {
+    pub settings: HashMap<String, String>,
+    pub thresholds: HashMap<String, f64>,
+    pub enabled_features: Vec<String>,
+}
+
+impl Config {
+    pub fn from_file(path: &str) -> Result<Self, String> {
+        let content = fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read config file: {}", e))?;
+
+        let parsed: Value = content.parse()
+            .map_err(|e| format!("Invalid TOML format: {}", e))?;
+
+        let mut settings = HashMap::new();
+        let mut thresholds = HashMap::new();
+        let mut enabled_features = Vec::new();
+
+        if let Some(table) = parsed.get("settings").and_then(|v| v.as_table()) {
+            for (key, value) in table {
+                if let Some(str_val) = value.as_str() {
+                    settings.insert(key.clone(), str_val.to_string());
+                }
+            }
+        }
+
+        if let Some(table) = parsed.get("thresholds").and_then(|v| v.as_table()) {
+            for (key, value) in table {
+                if let Some(float_val) = value.as_float() {
+                    thresholds.insert(key.clone(), float_val);
+                }
+            }
+        }
+
+        if let Some(array) = parsed.get("features").and_then(|v| v.as_array()) {
+            for value in array {
+                if let Some(str_val) = value.as_str() {
+                    enabled_features.push(str_val.to_string());
+                }
+            }
+        }
+
+        Ok(Config {
+            settings,
+            thresholds,
+            enabled_features,
+        })
+    }
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if !self.settings.contains_key("mode") {
+            errors.push("Missing required setting: 'mode'".to_string());
+        }
+
+        for (name, &value) in &self.thresholds {
+            if value < 0.0 || value > 1.0 {
+                errors.push(format!("Threshold '{}' must be between 0.0 and 1.0", name));
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+
+    pub fn get_setting(&self, key: &str) -> Option<&String> {
+        self.settings.get(key)
+    }
+
+    pub fn get_threshold(&self, key: &str) -> Option<&f64> {
+        self.thresholds.get(key)
+    }
 }

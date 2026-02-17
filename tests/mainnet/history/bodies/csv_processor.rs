@@ -214,4 +214,88 @@ mod tests {
         let total = calculate_total(&records);
         assert_eq!(total, 40.0);
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+pub struct CsvProcessor {
+    file_path: String,
+    delimiter: char,
+}
+
+impl CsvProcessor {
+    pub fn new(file_path: &str, delimiter: char) -> Self {
+        CsvProcessor {
+            file_path: file_path.to_string(),
+            delimiter,
+        }
+    }
+
+    pub fn filter_rows<F>(&self, predicate: F) -> Result<Vec<Vec<String>>, Box<dyn Error>>
+    where
+        F: Fn(&[String]) -> bool,
+    {
+        let path = Path::new(&self.file_path);
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut filtered_rows = Vec::new();
+
+        for line_result in reader.lines() {
+            let line = line_result?;
+            let fields: Vec<String> = line
+                .split(self.delimiter)
+                .map(|s| s.trim().to_string())
+                .collect();
+
+            if predicate(&fields) {
+                filtered_rows.push(fields);
+            }
+        }
+
+        Ok(filtered_rows)
+    }
+
+    pub fn count_rows(&self) -> Result<usize, Box<dyn Error>> {
+        let path = Path::new(&self.file_path);
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        Ok(reader.lines().count())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_filter_rows() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,name,age").unwrap();
+        writeln!(temp_file, "1,Alice,30").unwrap();
+        writeln!(temp_file, "2,Bob,25").unwrap();
+        writeln!(temp_file, "3,Charlie,35").unwrap();
+
+        let processor = CsvProcessor::new(temp_file.path().to_str().unwrap(), ',');
+        let result = processor
+            .filter_rows(|fields| fields.get(2).and_then(|age| age.parse::<i32>().ok()) > Some(30))
+            .unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0][1], "Charlie");
+    }
+
+    #[test]
+    fn test_count_rows() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "header1,header2").unwrap();
+        writeln!(temp_file, "value1,value2").unwrap();
+        writeln!(temp_file, "value3,value4").unwrap();
+
+        let processor = CsvProcessor::new(temp_file.path().to_str().unwrap(), ',');
+        let count = processor.count_rows().unwrap();
+        assert_eq!(count, 3);
+    }
 }

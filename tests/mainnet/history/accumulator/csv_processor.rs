@@ -3,120 +3,124 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
+#[derive(Debug)]
+pub struct CsvRecord {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+}
+
+#[derive(Debug)]
+pub enum CsvError {
+    IoError(std::io::Error),
+    ParseError(String),
+    ValidationError(String),
+}
+
+impl From<std::io::Error> for CsvError {
+    fn from(err: std::io::Error) -> Self {
+        CsvError::IoError(err)
+    }
+}
+
 pub struct CsvProcessor {
-    delimiter: char,
-    has_header: bool,
+    records: Vec<CsvRecord>,
 }
 
 impl CsvProcessor {
-    pub fn new(delimiter: char, has_header: bool) -> Self {
+    pub fn new() -> Self {
         CsvProcessor {
-            delimiter,
-            has_header,
+            records: Vec::new(),
         }
     }
 
-    pub fn parse_file<P: AsRef<Path>>(&self, path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+    pub fn load_from_file<P: AsRef<Path>>(&mut self, path: P) -> Result<(), CsvError> {
         let file = File::open(path)?;
         let reader = BufReader::new(file);
-        let mut records = Vec::new();
-        let mut lines = reader.lines();
-
-        if self.has_header {
-            lines.next();
-        }
-
-        for line_result in lines {
-            let line = line_result?;
-            let record: Vec<String> = line
-                .split(self.delimiter)
-                .map(|s| s.trim().to_string())
-                .collect();
+        
+        for (line_num, line) in reader.lines().enumerate() {
+            let line = line?;
+            if line.trim().is_empty() || line.starts_with('#') {
+                continue;
+            }
             
-            if !record.is_empty() && !record.iter().all(|s| s.is_empty()) {
-                records.push(record);
-            }
+            let record = self.parse_line(&line, line_num + 1)?;
+            self.validate_record(&record, line_num + 1)?;
+            self.records.push(record);
         }
-
-        Ok(records)
-    }
-
-    pub fn validate_records(&self, records: &[Vec<String>], expected_columns: usize) -> Result<(), String> {
-        for (index, record) in records.iter().enumerate() {
-            if record.len() != expected_columns {
-                return Err(format!(
-                    "Record {} has {} columns, expected {}",
-                    index + 1,
-                    record.len(),
-                    expected_columns
-                ));
-            }
-        }
+        
         Ok(())
     }
 
-    pub fn extract_column(&self, records: &[Vec<String>], column_index: usize) -> Result<Vec<String>, String> {
-        if records.is_empty() {
-            return Ok(Vec::new());
+    fn parse_line(&self, line: &str, line_num: usize) -> Result<CsvRecord, CsvError> {
+        let parts: Vec<&str> = line.split(',').map(|s| s.trim()).collect();
+        
+        if parts.len() != 3 {
+            return Err(CsvError::ParseError(
+                format!("Line {}: Expected 3 columns, found {}", line_num, parts.len())
+            ));
         }
+        
+        let id = parts[0].parse::<u32>()
+            .map_err(|e| CsvError::ParseError(
+                format!("Line {}: Invalid ID '{}': {}", line_num, parts[0], e)
+            ))?;
+        
+        let name = parts[1].to_string();
+        
+        let value = parts[2].parse::<f64>()
+            .map_err(|e| CsvError::ParseError(
+                format!("Line {}: Invalid value '{}': {}", line_num, parts[2], e)
+            ))?;
+        
+        Ok(CsvRecord { id, name, value })
+    }
 
-        let mut column_data = Vec::with_capacity(records.len());
-        for (row_index, record) in records.iter().enumerate() {
-            if column_index >= record.len() {
-                return Err(format!(
-                    "Column index {} out of bounds for record {}",
-                    column_index,
-                    row_index + 1
-                ));
-            }
-            column_data.push(record[column_index].clone());
+    fn validate_record(&self, record: &CsvRecord, line_num: usize) -> Result<(), CsvError> {
+        if record.name.is_empty() {
+            return Err(CsvError::ValidationError(
+                format!("Line {}: Name cannot be empty", line_num)
+            ));
         }
-        Ok(column_data)
+        
+        if record.value < 0.0 {
+            return Err(CsvError::ValidationError(
+                format!("Line {}: Value cannot be negative: {}", line_num, record.value)
+            ));
+        }
+        
+        Ok(())
+    }
+
+    pub fn total_value(&self) -> f64 {
+        self.records.iter().map(|r| r.value).sum()
+    }
+
+    pub fn average_value(&self) -> Option<f64> {
+        if self.records.is_empty() {
+            None
+        } else {
+            Some(self.total_value() / self.records.len() as f64)
+        }
+    }
+
+    pub fn find_by_id(&self, id: u32) -> Option<&CsvRecord> {
+        self.records.iter().find(|r| r.id == id)
+    }
+
+    pub fn records(&self) -> &[CsvRecord] {
+        &self.records
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
-
-    #[test]
-    fn test_csv_parsing() {
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "name,age,city").unwrap();
-        writeln!(temp_file, "Alice,30,New York").unwrap();
-        writeln!(temp_file, "Bob,25,London").unwrap();
-
-        let processor = CsvProcessor::new(',', true);
-        let records = processor.parse_file(temp_file.path()).unwrap();
-        
-        assert_eq!(records.len(), 2);
-        assert_eq!(records[0], vec!["Alice", "30", "New York"]);
-        assert_eq!(records[1], vec!["Bob", "25", "London"]);
-    }
-
-    #[test]
-    fn test_validation() {
-        let records = vec![
-            vec!["a".to_string(), "b".to_string(), "c".to_string()],
-            vec!["d".to_string(), "e".to_string()],
-        ];
-        
-        let processor = CsvProcessor::new(',', false);
-        let result = processor.validate_records(&records, 3);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_column_extraction() {
-        let records = vec![
-            vec!["Alice".to_string(), "30".to_string()],
-            vec!["Bob".to_string(), "25".to_string()],
-        ];
-        
-        let processor = CsvProcessor::new(',', false);
-        let names = processor.extract_column(&records, 0).unwrap();
-        assert_eq!(names, vec!["Alice", "Bob"]);
+impl std::fmt::Display for CsvError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CsvError::IoError(e) => write!(f, "IO error: {}", e),
+            CsvError::ParseError(msg) => write!(f, "Parse error: {}", msg),
+            CsvError::ValidationError(msg) => write!(f, "Validation error: {}", msg),
+        }
     }
 }
+
+impl Error for CsvError {}

@@ -379,3 +379,207 @@ mod tests {
         assert!(processor.data.len() <= original_len);
     }
 }
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    id: u32,
+    name: String,
+    value: f64,
+    category: String,
+}
+
+#[derive(Debug)]
+pub enum ProcessingError {
+    InvalidData(String),
+    TransformationError(String),
+    ValidationError(String),
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProcessingError::InvalidData(msg) => write!(f, "Invalid data: {}", msg),
+            ProcessingError::TransformationError(msg) => write!(f, "Transformation error: {}", msg),
+            ProcessingError::ValidationError(msg) => write!(f, "Validation error: {}", msg),
+        }
+    }
+}
+
+impl Error for ProcessingError {}
+
+impl DataRecord {
+    pub fn new(id: u32, name: String, value: f64, category: String) -> Result<Self, ProcessingError> {
+        if name.is_empty() {
+            return Err(ProcessingError::InvalidData("Name cannot be empty".to_string()));
+        }
+        if value < 0.0 {
+            return Err(ProcessingError::InvalidData("Value cannot be negative".to_string()));
+        }
+        if category.is_empty() {
+            return Err(ProcessingError::InvalidData("Category cannot be empty".to_string()));
+        }
+
+        Ok(Self {
+            id,
+            name,
+            value,
+            category,
+        })
+    }
+
+    pub fn validate(&self) -> Result<(), ProcessingError> {
+        if self.name.len() > 100 {
+            return Err(ProcessingError::ValidationError("Name too long".to_string()));
+        }
+        if self.value > 1_000_000.0 {
+            return Err(ProcessingError::ValidationError("Value exceeds maximum".to_string()));
+        }
+        Ok(())
+    }
+
+    pub fn transform(&mut self, multiplier: f64) -> Result<(), ProcessingError> {
+        if multiplier <= 0.0 {
+            return Err(ProcessingError::TransformationError("Multiplier must be positive".to_string()));
+        }
+        self.value *= multiplier;
+        Ok(())
+    }
+
+    pub fn get_normalized_value(&self, max_value: f64) -> f64 {
+        if max_value <= 0.0 {
+            return 0.0;
+        }
+        self.value / max_value
+    }
+}
+
+pub struct DataProcessor {
+    records: Vec<DataRecord>,
+    category_stats: HashMap<String, CategoryStatistics>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CategoryStatistics {
+    total_value: f64,
+    count: usize,
+    average_value: f64,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        Self {
+            records: Vec::new(),
+            category_stats: HashMap::new(),
+        }
+    }
+
+    pub fn add_record(&mut self, record: DataRecord) -> Result<(), ProcessingError> {
+        record.validate()?;
+        self.records.push(record);
+        self.update_statistics();
+        Ok(())
+    }
+
+    pub fn process_records(&mut self, multiplier: f64) -> Result<(), ProcessingError> {
+        for record in &mut self.records {
+            record.transform(multiplier)?;
+        }
+        self.update_statistics();
+        Ok(())
+    }
+
+    pub fn get_category_statistics(&self, category: &str) -> Option<&CategoryStatistics> {
+        self.category_stats.get(category)
+    }
+
+    pub fn get_total_value(&self) -> f64 {
+        self.records.iter().map(|r| r.value).sum()
+    }
+
+    fn update_statistics(&mut self) {
+        self.category_stats.clear();
+        let mut category_totals: HashMap<String, (f64, usize)> = HashMap::new();
+
+        for record in &self.records {
+            let entry = category_totals
+                .entry(record.category.clone())
+                .or_insert((0.0, 0));
+            entry.0 += record.value;
+            entry.1 += 1;
+        }
+
+        for (category, (total, count)) in category_totals {
+            let average = if count > 0 { total / count as f64 } else { 0.0 };
+            self.category_stats.insert(
+                category,
+                CategoryStatistics {
+                    total_value: total,
+                    count,
+                    average_value: average,
+                },
+            );
+        }
+    }
+
+    pub fn filter_by_threshold(&self, threshold: f64) -> Vec<&DataRecord> {
+        self.records
+            .iter()
+            .filter(|record| record.value >= threshold)
+            .collect()
+    }
+}
+
+impl Default for DataProcessor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_record_creation() {
+        let record = DataRecord::new(1, "Test".to_string(), 100.0, "CategoryA".to_string());
+        assert!(record.is_ok());
+    }
+
+    #[test]
+    fn test_invalid_record_creation() {
+        let record = DataRecord::new(1, "".to_string(), 100.0, "CategoryA".to_string());
+        assert!(record.is_err());
+    }
+
+    #[test]
+    fn test_record_transformation() {
+        let mut record = DataRecord::new(1, "Test".to_string(), 100.0, "CategoryA".to_string()).unwrap();
+        assert!(record.transform(2.0).is_ok());
+        assert_eq!(record.value, 200.0);
+    }
+
+    #[test]
+    fn test_data_processor_statistics() {
+        let mut processor = DataProcessor::new();
+        let record1 = DataRecord::new(1, "Item1".to_string(), 100.0, "CategoryA".to_string()).unwrap();
+        let record2 = DataRecord::new(2, "Item2".to_string(), 200.0, "CategoryA".to_string()).unwrap();
+        let record3 = DataRecord::new(3, "Item3".to_string(), 300.0, "CategoryB".to_string()).unwrap();
+
+        processor.add_record(record1).unwrap();
+        processor.add_record(record2).unwrap();
+        processor.add_record(record3).unwrap();
+
+        let stats_a = processor.get_category_statistics("CategoryA").unwrap();
+        assert_eq!(stats_a.total_value, 300.0);
+        assert_eq!(stats_a.count, 2);
+        assert_eq!(stats_a.average_value, 150.0);
+
+        let stats_b = processor.get_category_statistics("CategoryB").unwrap();
+        assert_eq!(stats_b.total_value, 300.0);
+        assert_eq!(stats_b.count, 1);
+        assert_eq!(stats_b.average_value, 300.0);
+    }
+}

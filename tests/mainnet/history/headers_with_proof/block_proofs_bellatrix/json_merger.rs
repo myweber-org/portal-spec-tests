@@ -320,4 +320,56 @@ pub fn write_merged_json(output_path: &str, json_value: &serde_json::Value) -> R
     let json_string = serde_json::to_string_pretty(json_value)?;
     fs::write(output_path, json_string)?;
     Ok(())
+}use serde_json::{json, Value};
+use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
+
+pub fn merge_json_files(file_paths: &[&str], output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let mut merged_array = Vec::new();
+    let mut seen_keys = HashMap::new();
+
+    for file_path in file_paths {
+        let path = Path::new(file_path);
+        if !path.exists() {
+            eprintln!("Warning: File {} not found, skipping.", file_path);
+            continue;
+        }
+
+        let content = fs::read_to_string(path)?;
+        let json_value: Value = serde_json::from_str(&content)?;
+
+        match json_value {
+            Value::Array(arr) => {
+                for item in arr {
+                    if let Some(key) = item.get("id").and_then(Value::as_str) {
+                        if seen_keys.contains_key(key) {
+                            eprintln!("Duplicate key '{}' found, skipping.", key);
+                            continue;
+                        }
+                        seen_keys.insert(key.to_string(), true);
+                    }
+                    merged_array.push(item);
+                }
+            }
+            Value::Object(obj) => {
+                if let Some(key) = obj.get("id").and_then(Value::as_str) {
+                    if seen_keys.contains_key(key) {
+                        eprintln!("Duplicate key '{}' found, skipping.", key);
+                        continue;
+                    }
+                    seen_keys.insert(key.to_string(), true);
+                }
+                merged_array.push(json!(obj));
+            }
+            _ => {
+                eprintln!("Unsupported JSON structure in file {}, skipping.", file_path);
+            }
+        }
+    }
+
+    let output_json = json!(merged_array);
+    fs::write(output_path, output_json.to_string())?;
+    println!("Successfully merged JSON files into {}", output_path);
+    Ok(())
 }

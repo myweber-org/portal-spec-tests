@@ -152,3 +152,55 @@ pub fn merge_json_files(file_paths: &[&str]) -> Result<serde_json::Value, Box<dy
 
     Ok(serde_json::Value::Object(merged_map))
 }
+use serde_json::{Map, Value};
+use std::env;
+use std::fs::File;
+use std::io::{BufReader, Write};
+use std::path::Path;
+
+fn merge_json_objects(objs: Vec<Map<String, Value>>) -> Map<String, Value> {
+    let mut result = Map::new();
+    for obj in objs {
+        for (key, value) in obj {
+            result.insert(key, value);
+        }
+    }
+    result
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<String> = env::args().collect();
+    if args.len() < 3 {
+        eprintln!("Usage: {} <output_file> <input_file1> [input_file2 ...]", args[0]);
+        std::process::exit(1);
+    }
+
+    let output_path = &args[1];
+    let input_paths = &args[2..];
+
+    let mut json_objects = Vec::new();
+
+    for path_str in input_paths {
+        let path = Path::new(path_str);
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let json_value: Value = serde_json::from_reader(reader)?;
+
+        if let Value::Object(obj) = json_value {
+            json_objects.push(obj);
+        } else {
+            eprintln!("Error: {} does not contain a JSON object", path_str);
+            std::process::exit(1);
+        }
+    }
+
+    let merged = merge_json_objects(json_objects);
+    let output_value = Value::Object(merged);
+
+    let mut output_file = File::create(output_path)?;
+    serde_json::to_writer_pretty(&mut output_file, &output_value)?;
+    output_file.flush()?;
+
+    println!("Successfully merged {} files into {}", input_paths.len(), output_path);
+    Ok(())
+}

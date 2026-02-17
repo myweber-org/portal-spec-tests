@@ -562,3 +562,119 @@ mod tests {
         assert_eq!(config.logging.file_path, Some("/var/log/app.log".to_string()));
     }
 }
+use std::collections::HashMap;
+use std::env;
+use std::fs;
+
+#[derive(Debug, Clone)]
+pub struct Config {
+    values: HashMap<String, String>,
+}
+
+impl Config {
+    pub fn from_file(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let content = fs::read_to_string(path)?;
+        let mut values = HashMap::new();
+
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+
+            if let Some((key, value)) = trimmed.split_once('=') {
+                let key = key.trim().to_string();
+                let processed_value = Self::interpolate_env(value.trim());
+                values.insert(key, processed_value);
+            }
+        }
+
+        Ok(Config { values })
+    }
+
+    fn interpolate_env(value: &str) -> String {
+        let mut result = value.to_string();
+        for (key, env_value) in env::vars() {
+            let placeholder = format!("${{{}}}", key);
+            if result.contains(&placeholder) {
+                result = result.replace(&placeholder, &env_value);
+            }
+        }
+        result
+    }
+
+    pub fn get(&self, key: &str) -> Option<&String> {
+        self.values.get(key)
+    }
+
+    pub fn get_or_default(&self, key: &str, default: &str) -> String {
+        self.values.get(key).cloned().unwrap_or(default.to_string())
+    }
+
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.values.contains_key(key)
+    }
+
+    pub fn merge(&mut self, other: Config) {
+        for (key, value) in other.values {
+            self.values.insert(key, value);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_config_parsing() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "DATABASE_URL=postgres://localhost:5432").unwrap();
+        writeln!(file, "# This is a comment").unwrap();
+        writeln!(file, "MAX_CONNECTIONS=100").unwrap();
+        writeln!(file, "").unwrap();
+        writeln!(file, "TIMEOUT=30").unwrap();
+
+        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.get("DATABASE_URL").unwrap(), "postgres://localhost:5432");
+        assert_eq!(config.get("MAX_CONNECTIONS").unwrap(), "100");
+        assert_eq!(config.get("TIMEOUT").unwrap(), "30");
+        assert!(!config.contains_key("NONEXISTENT"));
+    }
+
+    #[test]
+    fn test_env_interpolation() {
+        env::set_var("APP_PORT", "8080");
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "PORT=${{APP_PORT}}").unwrap();
+        writeln!(file, "HOST=localhost:${{APP_PORT}}").unwrap();
+
+        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.get("PORT").unwrap(), "8080");
+        assert_eq!(config.get("HOST").unwrap(), "localhost:8080");
+    }
+
+    #[test]
+    fn test_merge_configs() {
+        let mut config1 = Config {
+            values: HashMap::from([
+                ("key1".to_string(), "value1".to_string()),
+                ("key2".to_string(), "value2".to_string()),
+            ]),
+        };
+
+        let config2 = Config {
+            values: HashMap::from([
+                ("key2".to_string(), "overridden".to_string()),
+                ("key3".to_string(), "value3".to_string()),
+            ]),
+        };
+
+        config1.merge(config2);
+        assert_eq!(config1.get("key1").unwrap(), "value1");
+        assert_eq!(config1.get("key2").unwrap(), "overridden");
+        assert_eq!(config1.get("key3").unwrap(), "value3");
+    }
+}

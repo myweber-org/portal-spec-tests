@@ -176,4 +176,112 @@ mod tests {
         let interfaces = list_interfaces();
         assert!(!interfaces.is_empty());
     }
+}use std::collections::HashMap;
+use std::net::Ipv4Addr;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Protocol {
+    TCP,
+    UDP,
+    ICMP,
+    Unknown(u8),
+}
+
+#[derive(Debug)]
+pub struct PacketHeader {
+    pub source_ip: Ipv4Addr,
+    pub destination_ip: Ipv4Addr,
+    pub protocol: Protocol,
+    pub payload_size: usize,
+}
+
+pub struct PacketAnalyzer {
+    protocol_stats: HashMap<Protocol, u32>,
+    total_packets: u32,
+}
+
+impl PacketAnalyzer {
+    pub fn new() -> Self {
+        PacketAnalyzer {
+            protocol_stats: HashMap::new(),
+            total_packets: 0,
+        }
+    }
+
+    pub fn analyze_packet(&mut self, header: PacketHeader) {
+        self.total_packets += 1;
+        *self.protocol_stats.entry(header.protocol.clone()).or_insert(0) += 1;
+
+        println!("Packet analyzed: {:?}", header);
+    }
+
+    pub fn get_protocol_distribution(&self) -> HashMap<Protocol, f32> {
+        let mut distribution = HashMap::new();
+        
+        for (protocol, count) in &self.protocol_stats {
+            let percentage = (*count as f32 / self.total_packets as f32) * 100.0;
+            distribution.insert(protocol.clone(), percentage);
+        }
+        
+        distribution
+    }
+
+    pub fn print_statistics(&self) {
+        println!("Total packets analyzed: {}", self.total_packets);
+        println!("Protocol distribution:");
+        
+        for (protocol, percentage) in self.get_protocol_distribution() {
+            println!("  {:?}: {:.2}%", protocol, percentage);
+        }
+    }
+}
+
+impl Protocol {
+    pub fn from_u8(value: u8) -> Self {
+        match value {
+            6 => Protocol::TCP,
+            17 => Protocol::UDP,
+            1 => Protocol::ICMP,
+            _ => Protocol::Unknown(value),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_packet_analysis() {
+        let mut analyzer = PacketAnalyzer::new();
+        
+        let packet1 = PacketHeader {
+            source_ip: Ipv4Addr::new(192, 168, 1, 1),
+            destination_ip: Ipv4Addr::new(192, 168, 1, 2),
+            protocol: Protocol::TCP,
+            payload_size: 512,
+        };
+        
+        let packet2 = PacketHeader {
+            source_ip: Ipv4Addr::new(10, 0, 0, 1),
+            destination_ip: Ipv4Addr::new(10, 0, 0, 2),
+            protocol: Protocol::UDP,
+            payload_size: 256,
+        };
+        
+        analyzer.analyze_packet(packet1);
+        analyzer.analyze_packet(packet2);
+        
+        assert_eq!(analyzer.total_packets, 2);
+        assert_eq!(analyzer.protocol_stats.get(&Protocol::TCP), Some(&1));
+        assert_eq!(analyzer.protocol_stats.get(&Protocol::UDP), Some(&1));
+    }
+
+    #[test]
+    fn test_protocol_conversion() {
+        assert_eq!(Protocol::from_u8(6), Protocol::TCP);
+        assert_eq!(Protocol::from_u8(17), Protocol::UDP);
+        assert_eq!(Protocol::from_u8(1), Protocol::ICMP);
+        assert_eq!(Protocol::from_u8(99), Protocol::Unknown(99));
+    }
 }

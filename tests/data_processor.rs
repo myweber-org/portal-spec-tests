@@ -490,3 +490,168 @@ mod tests {
         assert!((max - 30.1).abs() < 0.01);
     }
 }
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use thiserror::Error;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataRecord {
+    pub id: u64,
+    pub timestamp: i64,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
+}
+
+#[derive(Debug, Error)]
+pub enum ProcessingError {
+    #[error("Invalid data format")]
+    InvalidFormat,
+    #[error("Data validation failed: {0}")]
+    ValidationFailed(String),
+    #[error("Transformation error: {0}")]
+    TransformationError(String),
+}
+
+pub struct DataProcessor {
+    config: ProcessingConfig,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProcessingConfig {
+    pub max_values: usize,
+    pub require_timestamp: bool,
+    pub allowed_metadata_keys: Vec<String>,
+}
+
+impl DataProcessor {
+    pub fn new(config: ProcessingConfig) -> Self {
+        DataProcessor { config }
+    }
+
+    pub fn validate_record(&self, record: &DataRecord) -> Result<(), ProcessingError> {
+        if record.values.len() > self.config.max_values {
+            return Err(ProcessingError::ValidationFailed(format!(
+                "Too many values: {} > {}",
+                record.values.len(),
+                self.config.max_values
+            )));
+        }
+
+        if self.config.require_timestamp && record.timestamp <= 0 {
+            return Err(ProcessingError::ValidationFailed(
+                "Invalid timestamp".to_string(),
+            ));
+        }
+
+        for key in record.metadata.keys() {
+            if !self.config.allowed_metadata_keys.contains(key) {
+                return Err(ProcessingError::ValidationFailed(format!(
+                    "Disallowed metadata key: {}",
+                    key
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn transform_record(
+        &self,
+        record: &DataRecord,
+    ) -> Result<TransformedRecord, ProcessingError> {
+        self.validate_record(record)?;
+
+        let sum: f64 = record.values.iter().sum();
+        let avg = if !record.values.is_empty() {
+            sum / record.values.len() as f64
+        } else {
+            0.0
+        };
+
+        let variance: f64 = if record.values.len() > 1 {
+            let mean = avg;
+            record
+                .values
+                .iter()
+                .map(|&x| (x - mean).powi(2))
+                .sum::<f64>()
+                / (record.values.len() - 1) as f64
+        } else {
+            0.0
+        };
+
+        Ok(TransformedRecord {
+            original_id: record.id,
+            processed_timestamp: chrono::Utc::now().timestamp(),
+            statistics: RecordStatistics {
+                value_count: record.values.len(),
+                sum,
+                average: avg,
+                variance,
+                metadata_count: record.metadata.len(),
+            },
+        })
+    }
+
+    pub fn batch_process(
+        &self,
+        records: Vec<DataRecord>,
+    ) -> Result<BatchResult, ProcessingError> {
+        let mut successful = Vec::new();
+        let mut failed = Vec::new();
+
+        for record in records {
+            match self.transform_record(&record) {
+                Ok(transformed) => successful.push(transformed),
+                Err(e) => failed.push((record.id, e.to_string())),
+            }
+        }
+
+        Ok(BatchResult {
+            total_processed: records.len(),
+            successful_count: successful.len(),
+            failed_count: failed.len(),
+            successful,
+            failed,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TransformedRecord {
+    pub original_id: u64,
+    pub processed_timestamp: i64,
+    pub statistics: RecordStatistics,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RecordStatistics {
+    pub value_count: usize,
+    pub sum: f64,
+    pub average: f64,
+    pub variance: f64,
+    pub metadata_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BatchResult {
+    pub total_processed: usize,
+    pub successful_count: usize,
+    pub failed_count: usize,
+    pub successful: Vec<TransformedRecord>,
+    pub failed: Vec<(u64, String)>,
+}
+
+impl Default for ProcessingConfig {
+    fn default() -> Self {
+        ProcessingConfig {
+            max_values: 100,
+            require_timestamp: true,
+            allowed_metadata_keys: vec![
+                "source".to_string(),
+                "version".to_string(),
+                "type".to_string(),
+            ],
+        }
+    }
+}

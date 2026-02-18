@@ -1,82 +1,42 @@
 use std::error::Error;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufWriter, Write};
 use std::path::Path;
 
-pub struct CsvMerger {
-    delimiter: char,
-    skip_header: bool,
-}
+pub fn merge_csv_files<P: AsRef<Path>>(
+    input_paths: &[P],
+    output_path: P,
+    write_headers: bool,
+) -> Result<(), Box<dyn Error>> {
+    let output_file = File::create(output_path)?;
+    let mut writer = BufWriter::new(output_file);
+    let mut headers_written = false;
 
-impl CsvMerger {
-    pub fn new(delimiter: char, skip_header: bool) -> Self {
-        CsvMerger {
-            delimiter,
-            skip_header,
+    for (index, input_path) in input_paths.iter().enumerate() {
+        let file = File::open(input_path)?;
+        let mut rdr = csv::Reader::from_reader(file);
+        let headers = rdr.headers()?.clone();
+
+        if index == 0 && write_headers {
+            writer.write_all(headers.as_bytes())?;
+            writer.write_all(b"\n")?;
+            headers_written = true;
+        }
+
+        for result in rdr.records() {
+            let record = result?;
+            if !headers_written && write_headers {
+                writer.write_all(headers.as_bytes())?;
+                writer.write_all(b"\n")?;
+                headers_written = true;
+            }
+            writer.write_all(record.as_slice())?;
+            writer.write_all(b"\n")?;
         }
     }
 
-    pub fn merge_files<P: AsRef<Path>>(
-        &self,
-        input_paths: &[P],
-        output_path: P,
-    ) -> Result<(), Box<dyn Error>> {
-        let mut output_file = File::create(output_path)?;
-        let mut first_file = true;
-
-        for path in input_paths {
-            let file = File::open(path)?;
-            let reader = BufReader::new(file);
-            let mut lines = reader.lines();
-
-            if self.skip_header && !first_file {
-                lines.next();
-            }
-
-            for line_result in lines {
-                let line = line_result?;
-                writeln!(output_file, "{}", line)?;
-            }
-
-            first_file = false;
-        }
-
-        Ok(())
-    }
-
-    pub fn merge_with_custom_processing<P: AsRef<Path>, F>(
-        &self,
-        input_paths: &[P],
-        output_path: P,
-        mut processor: F,
-    ) -> Result<(), Box<dyn Error>>
-    where
-        F: FnMut(&str) -> Option<String>,
-    {
-        let mut output_file = File::create(output_path)?;
-        let mut first_file = true;
-
-        for path in input_paths {
-            let file = File::open(path)?;
-            let reader = BufReader::new(file);
-            let mut lines = reader.lines();
-
-            if self.skip_header && !first_file {
-                lines.next();
-            }
-
-            for line_result in lines {
-                let original_line = line_result?;
-                if let Some(processed_line) = processor(&original_line) {
-                    writeln!(output_file, "{}", processed_line)?;
-                }
-            }
-
-            first_file = false;
-        }
-
-        Ok(())
-    }
+    writer.flush()?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -86,48 +46,27 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_basic_merge() {
+    fn test_merge_csv_files() {
+        let csv1 = "name,age\nAlice,30\nBob,25";
+        let csv2 = "name,age\nCharlie,35\nDiana,28";
+
         let file1 = NamedTempFile::new().unwrap();
+        std::fs::write(file1.path(), csv1).unwrap();
         let file2 = NamedTempFile::new().unwrap();
+        std::fs::write(file2.path(), csv2).unwrap();
+
         let output_file = NamedTempFile::new().unwrap();
+        let input_paths = [file1.path(), file2.path()];
 
-        std::fs::write(&file1, "a,b,c\n1,2,3\n4,5,6").unwrap();
-        std::fs::write(&file2, "a,b,c\n7,8,9\n10,11,12").unwrap();
-
-        let merger = CsvMerger::new(',', true);
-        merger
-            .merge_files(&[&file1, &file2], &output_file)
-            .unwrap();
+        merge_csv_files(&input_paths, output_file.path(), true).unwrap();
 
         let mut content = String::new();
-        std::fs::File::open(&output_file)
+        File::open(output_file.path())
             .unwrap()
             .read_to_string(&mut content)
             .unwrap();
 
-        assert_eq!(content, "a,b,c\n1,2,3\n4,5,6\n7,8,9\n10,11,12\n");
-    }
-
-    #[test]
-    fn test_keep_all_headers() {
-        let file1 = NamedTempFile::new().unwrap();
-        let file2 = NamedTempFile::new().unwrap();
-        let output_file = NamedTempFile::new().unwrap();
-
-        std::fs::write(&file1, "header1,header2\nvalue1,value2").unwrap();
-        std::fs::write(&file2, "header1,header2\nvalue3,value4").unwrap();
-
-        let merger = CsvMerger::new(',', false);
-        merger
-            .merge_files(&[&file1, &file2], &output_file)
-            .unwrap();
-
-        let mut content = String::new();
-        std::fs::File::open(&output_file)
-            .unwrap()
-            .read_to_string(&mut content)
-            .unwrap();
-
-        assert_eq!(content, "header1,header2\nvalue1,value2\nheader1,header2\nvalue3,value4\n");
+        let expected = "name,age\nAlice,30\nBob,25\nCharlie,35\nDiana,28\n";
+        assert_eq!(content, expected);
     }
 }

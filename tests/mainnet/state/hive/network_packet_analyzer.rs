@@ -1,71 +1,112 @@
-use pcap::{Capture, Device};
-use std::error::Error;
+use std::collections::HashMap;
+use std::net::{IpAddr, Ipv4Addr};
+
+#[derive(Debug, Clone)]
+pub struct NetworkPacket {
+    source_ip: IpAddr,
+    destination_ip: IpAddr,
+    protocol: Protocol,
+    payload: Vec<u8>,
+    timestamp: u64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Protocol {
+    TCP,
+    UDP,
+    ICMP,
+    Unknown(u8),
+}
 
 pub struct PacketAnalyzer {
-    capture: Capture<pcap::Active>,
+    packet_count: usize,
+    protocol_stats: HashMap<Protocol, usize>,
+    ip_traffic: HashMap<IpAddr, usize>,
 }
 
 impl PacketAnalyzer {
-    pub fn new(interface_name: &str) -> Result<Self, Box<dyn Error>> {
-        let device = Device::list()?
-            .into_iter()
-            .find(|dev| dev.name == interface_name)
-            .ok_or_else(|| format!("Interface {} not found", interface_name))?;
-
-        let capture = Capture::from_device(device)?
-            .promisc(true)
-            .snaplen(65535)
-            .timeout(1000)
-            .open()?;
-
-        Ok(PacketAnalyzer { capture })
+    pub fn new() -> Self {
+        PacketAnalyzer {
+            packet_count: 0,
+            protocol_stats: HashMap::new(),
+            ip_traffic: HashMap::new(),
+        }
     }
 
-    pub fn start_capture(&mut self, packet_count: usize) -> Result<(), Box<dyn Error>> {
-        println!("Starting packet capture on interface...");
+    pub fn analyze_packet(&mut self, packet: &NetworkPacket) {
+        self.packet_count += 1;
         
-        for i in 0..packet_count {
-            match self.capture.next_packet() {
-                Ok(packet) => {
-                    println!("Packet {}: {} bytes captured", i + 1, packet.header.len);
-                    self.analyze_packet(&packet);
-                }
-                Err(e) => eprintln!("Error capturing packet: {}", e),
-            }
+        *self.protocol_stats.entry(packet.protocol.clone()).or_insert(0) += 1;
+        *self.ip_traffic.entry(packet.source_ip).or_insert(0) += 1;
+        *self.ip_traffic.entry(packet.destination_ip).or_insert(0) += 1;
+        
+        self.detect_anomalies(packet);
+    }
+
+    fn detect_anomalies(&self, packet: &NetworkPacket) {
+        if packet.payload.len() > 1500 {
+            println!("Warning: Oversized packet detected from {:?}", packet.source_ip);
         }
         
-        println!("Capture completed.");
-        Ok(())
+        if packet.source_ip == IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)) {
+            println!("Alert: Packet with invalid source IP detected");
+        }
     }
 
-    fn analyze_packet(&self, packet: &pcap::Packet) {
-        if packet.data.len() >= 14 {
-            let eth_type = u16::from_be_bytes([packet.data[12], packet.data[13]]);
-            
-            match eth_type {
-                0x0800 => println!("  Protocol: IPv4"),
-                0x0806 => println!("  Protocol: ARP"),
-                0x86DD => println!("  Protocol: IPv6"),
-                _ => println!("  Protocol: Unknown (0x{:04x})", eth_type),
-            }
-            
-            if packet.data.len() >= 34 && eth_type == 0x0800 {
-                let protocol = packet.data[23];
-                match protocol {
-                    1 => println!("  IP Protocol: ICMP"),
-                    6 => println!("  IP Protocol: TCP"),
-                    17 => println!("  IP Protocol: UDP"),
-                    _ => println!("  IP Protocol: {}", protocol),
-                }
-            }
+    pub fn get_statistics(&self) -> PacketStatistics {
+        PacketStatistics {
+            total_packets: self.packet_count,
+            top_protocol: self.find_top_protocol(),
+            unique_ips: self.ip_traffic.len(),
+        }
+    }
+
+    fn find_top_protocol(&self) -> Option<Protocol> {
+        self.protocol_stats
+            .iter()
+            .max_by_key(|(_, &count)| count)
+            .map(|(protocol, _)| protocol.clone())
+    }
+}
+
+#[derive(Debug)]
+pub struct PacketStatistics {
+    pub total_packets: usize,
+    pub top_protocol: Option<Protocol>,
+    pub unique_ips: usize,
+}
+
+impl Protocol {
+    pub fn from_byte(value: u8) -> Self {
+        match value {
+            6 => Protocol::TCP,
+            17 => Protocol::UDP,
+            1 => Protocol::ICMP,
+            _ => Protocol::Unknown(value),
         }
     }
 }
 
-pub fn list_interfaces() -> Result<(), Box<dyn Error>> {
-    println!("Available network interfaces:");
-    for device in Device::list()? {
-        println!("  {}: {}", device.name, device.desc.unwrap_or_default());
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_packet_analysis() {
+        let mut analyzer = PacketAnalyzer::new();
+        
+        let packet = NetworkPacket {
+            source_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100)),
+            destination_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
+            protocol: Protocol::TCP,
+            payload: vec![0u8; 100],
+            timestamp: 1234567890,
+        };
+        
+        analyzer.analyze_packet(&packet);
+        let stats = analyzer.get_statistics();
+        
+        assert_eq!(stats.total_packets, 1);
+        assert_eq!(stats.unique_ips, 2);
     }
-    Ok(())
 }

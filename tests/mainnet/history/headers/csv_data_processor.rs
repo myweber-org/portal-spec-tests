@@ -220,4 +220,79 @@ mod tests {
         assert!(max_record.is_some());
         assert_eq!(max_record.unwrap().value, 250.50);
     }
+}use csv::{Reader, Writer};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    id: u32,
+    name: String,
+    category: String,
+    value: f64,
+    active: bool,
+}
+
+fn filter_records_by_category(records: &[Record], category: &str) -> Vec<&Record> {
+    records
+        .iter()
+        .filter(|record| record.category == category)
+        .collect()
+}
+
+fn calculate_average_value(records: &[&Record]) -> Option<f64> {
+    if records.is_empty() {
+        return None;
+    }
+    let sum: f64 = records.iter().map(|record| record.value).sum();
+    Some(sum / records.len() as f64)
+}
+
+fn process_csv_file(input_path: &str, output_path: &str, target_category: &str) -> Result<(), Box<dyn Error>> {
+    let file = File::open(input_path)?;
+    let mut reader = Reader::from_reader(file);
+    
+    let mut records: Vec<Record> = Vec::new();
+    for result in reader.deserialize() {
+        let record: Record = result?;
+        records.push(record);
+    }
+    
+    let filtered = filter_records_by_category(&records, target_category);
+    
+    if filtered.is_empty() {
+        println!("No records found for category: {}", target_category);
+        return Ok(());
+    }
+    
+    let avg_value = calculate_average_value(&filtered);
+    
+    let output_file = File::create(output_path)?;
+    let mut writer = Writer::from_writer(output_file);
+    
+    for record in filtered {
+        writer.serialize(record)?;
+    }
+    
+    writer.flush()?;
+    
+    if let Some(avg) = avg_value {
+        println!("Processed {} records with average value: {:.2}", filtered.len(), avg);
+    }
+    
+    Ok(())
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let input_file = "data/input.csv";
+    let output_file = "data/output.csv";
+    let target_category = "electronics";
+    
+    match process_csv_file(input_file, output_file, target_category) {
+        Ok(()) => println!("CSV processing completed successfully"),
+        Err(e) => eprintln!("Error processing CSV: {}", e),
+    }
+    
+    Ok(())
 }

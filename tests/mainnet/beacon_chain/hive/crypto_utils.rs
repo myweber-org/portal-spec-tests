@@ -93,3 +93,34 @@ pub fn decrypt_data(ciphertext: &[u8], key: &[u8]) -> Result<Vec<u8>, Box<dyn Er
     let plaintext = cipher.decrypt(nonce, encrypted)?;
     Ok(plaintext)
 }
+use rand::Rng;
+use rand::distributions::Alphanumeric;
+
+pub fn generate_password(length: usize) -> String {
+    let rng = rand::thread_rng();
+    rng.sample_iter(&Alphanumeric)
+        .take(length)
+        .map(char::from)
+        .collect()
+}
+
+pub fn generate_secure_password(length: usize) -> String {
+    let mut rng = rand::thread_rng();
+    let mut password = String::with_capacity(length);
+    
+    for _ in 0..length {
+        let char_type = rng.gen_range(0..4);
+        let c = match char_type {
+            0 => rng.gen_range(b'a'..=b'z') as char,
+            1 => rng.gen_range(b'A'..=b'Z') as char,
+            2 => rng.gen_range(b'0'..=b'9') as char,
+            _ => {
+                let special_chars = "!@#$%^&*()_+-=[]{}|;:,.<>?";
+                special_chars.chars().nth(rng.gen_range(0..special_chars.len())).unwrap()
+            }
+        };
+        password.push(c);
+    }
+    
+    password
+}

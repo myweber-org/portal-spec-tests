@@ -179,3 +179,74 @@ mod tests {
         assert_eq!(config.get_or_default("UNSET_VALUE", "default"), "default");
     }
 }
+use std::collections::HashMap;
+use std::env;
+use std::fs;
+
+#[derive(Debug)]
+pub struct Config {
+    pub settings: HashMap<String, String>,
+}
+
+impl Config {
+    pub fn from_file(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let content = fs::read_to_string(path)?;
+        let mut settings = HashMap::new();
+
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+
+            if let Some((key, value)) = trimmed.split_once('=') {
+                let processed_value = Self::process_value(value.trim());
+                settings.insert(key.trim().to_string(), processed_value);
+            }
+        }
+
+        Ok(Config { settings })
+    }
+
+    fn process_value(value: &str) -> String {
+        if value.starts_with("${") && value.ends_with('}') {
+            let env_var = &value[2..value.len() - 1];
+            env::var(env_var).unwrap_or_else(|_| value.to_string())
+        } else {
+            value.to_string()
+        }
+    }
+
+    pub fn get(&self, key: &str) -> Option<&String> {
+        self.settings.get(key)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_config_parsing() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "DATABASE_URL=postgres://localhost/db").unwrap();
+        writeln!(file, "# This is a comment").unwrap();
+        writeln!(file, "API_KEY=${SECRET_KEY}").unwrap();
+
+        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.get("DATABASE_URL").unwrap(), "postgres://localhost/db");
+        assert_eq!(config.get("API_KEY").unwrap(), "");
+    }
+
+    #[test]
+    fn test_env_var_interpolation() {
+        env::set_var("CUSTOM_PORT", "8080");
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "PORT=${CUSTOM_PORT}").unwrap();
+
+        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.get("PORT").unwrap(), "8080");
+    }
+}

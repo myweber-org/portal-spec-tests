@@ -867,3 +867,144 @@ pub fn hex_to_key(hex_str: &str) -> Result<[u8; 32], String> {
     key.copy_from_slice(&bytes);
     Ok(key)
 }
+use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce,
+};
+use argon2::{
+    password_hash::{rand_core::OsRng as ArgonRng, PasswordHasher, SaltString},
+    Argon2,
+};
+use std::{
+    fs::{self, File},
+    io::{Read, Write},
+    path::Path,
+};
+
+const NONCE_SIZE: usize = 12;
+const SALT_SIZE: usize = 16;
+
+pub struct FileEncryptor {
+    key: [u8; 32],
+}
+
+impl FileEncryptor {
+    pub fn new(password: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let salt = SaltString::generate(&mut ArgonRng);
+        let argon2 = Argon2::default();
+        let password_hash = argon2.hash_password(password.as_bytes(), &salt)?;
+        
+        let mut key = [0u8; 32];
+        key.copy_from_slice(&password_hash.hash.unwrap().as_bytes()[..32]);
+        
+        Ok(Self { key })
+    }
+    
+    pub fn encrypt_file(&self, input_path: &Path, output_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+        let mut input_file = File::open(input_path)?;
+        let mut plaintext = Vec::new();
+        input_file.read_to_end(&mut plaintext)?;
+        
+        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&self.key));
+        let nonce = Nonce::from_slice(&generate_random_bytes(NONCE_SIZE));
+        
+        let ciphertext = cipher.encrypt(nonce, plaintext.as_ref())
+            .map_err(|e| format!("Encryption failed: {}", e))?;
+        
+        let mut output_file = File::create(output_path)?;
+        output_file.write_all(nonce)?;
+        output_file.write_all(&ciphertext)?;
+        
+        Ok(())
+    }
+    
+    pub fn decrypt_file(&self, input_path: &Path, output_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+        let mut input_file = File::open(input_path)?;
+        let mut encrypted_data = Vec::new();
+        input_file.read_to_end(&mut encrypted_data)?;
+        
+        if encrypted_data.len() < NONCE_SIZE {
+            return Err("Invalid encrypted file format".into());
+        }
+        
+        let (nonce_bytes, ciphertext) = encrypted_data.split_at(NONCE_SIZE);
+        let nonce = Nonce::from_slice(nonce_bytes);
+        
+        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&self.key));
+        let plaintext = cipher.decrypt(nonce, ciphertext)
+            .map_err(|e| format!("Decryption failed: {}", e))?;
+        
+        let mut output_file = File::create(output_path)?;
+        output_file.write_all(&plaintext)?;
+        
+        Ok(())
+    }
+    
+    pub fn encrypt_directory(&self, dir_path: &Path, output_dir: &Path) -> Result<usize, Box<dyn std::error::Error>> {
+        if !output_dir.exists() {
+            fs::create_dir_all(output_dir)?;
+        }
+        
+        let mut encrypted_count = 0;
+        for entry in fs::read_dir(dir_path)? {
+            let entry = entry?;
+            let path = entry.path();
+            
+            if path.is_file() {
+                let output_path = output_dir.join(path.file_name().unwrap());
+                self.encrypt_file(&path, &output_path)?;
+                encrypted_count += 1;
+            }
+        }
+        
+        Ok(encrypted_count)
+    }
+}
+
+fn generate_random_bytes(size: usize) -> Vec<u8> {
+    let mut bytes = vec![0u8; size];
+    OsRng.fill_bytes(&mut bytes);
+    bytes
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+    
+    #[test]
+    fn test_encryption_decryption() {
+        let temp_dir = TempDir::new().unwrap();
+        let original_path = temp_dir.path().join("test.txt");
+        let encrypted_path = temp_dir.path().join("test.enc");
+        let decrypted_path = temp_dir.path().join("test_decrypted.txt");
+        
+        let test_data = b"Hello, this is a secret message!";
+        fs::write(&original_path, test_data).unwrap();
+        
+        let encryptor = FileEncryptor::new("strong_password").unwrap();
+        encryptor.encrypt_file(&original_path, &encrypted_path).unwrap();
+        encryptor.decrypt_file(&encrypted_path, &decrypted_path).unwrap();
+        
+        let decrypted_data = fs::read(&decrypted_path).unwrap();
+        assert_eq!(test_data.to_vec(), decrypted_data);
+    }
+    
+    #[test]
+    fn test_directory_encryption() {
+        let temp_dir = TempDir::new().unwrap();
+        let source_dir = temp_dir.path().join("source");
+        let encrypted_dir = temp_dir.path().join("encrypted");
+        
+        fs::create_dir(&source_dir).unwrap();
+        fs::write(source_dir.join("file1.txt"), b"File 1 content").unwrap();
+        fs::write(source_dir.join("file2.txt"), b"File 2 content").unwrap();
+        
+        let encryptor = FileEncryptor::new("another_password").unwrap();
+        let count = encryptor.encrypt_directory(&source_dir, &encrypted_dir).unwrap();
+        
+        assert_eq!(count, 2);
+        assert!(encrypted_dir.join("file1.txt").exists());
+        assert!(encrypted_dir.join("file2.txt").exists());
+    }
+}

@@ -1,74 +1,83 @@
-use serde::Deserialize;
+
+use std::collections::HashMap;
+use std::env;
 use std::fs;
-use std::path::Path;
 
-#[derive(Debug, Deserialize)]
-pub struct DatabaseConfig {
-    pub host: String,
-    pub port: u16,
-    pub username: String,
-    pub password: String,
-    pub database_name: String,
+pub struct Config {
+    values: HashMap<String, String>,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct ServerConfig {
-    pub address: String,
-    pub port: u16,
-    pub enable_ssl: bool,
-    pub max_connections: u32,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct AppConfig {
-    pub database: DatabaseConfig,
-    pub server: ServerConfig,
-    pub log_level: String,
-    pub cache_ttl: u64,
-}
-
-impl AppConfig {
-    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
-        let content = fs::read_to_string(path)?;
-        let config: AppConfig = toml::from_str(&content)?;
-        config.validate()?;
-        Ok(config)
-    }
-
-    fn validate(&self) -> Result<(), Box<dyn std::error::Error>> {
-        if self.server.port == 0 {
-            return Err("Server port cannot be zero".into());
+impl Config {
+    pub fn from_file(path: &str) -> Result<Self, String> {
+        let content = fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read config file: {}", e))?;
+        
+        let mut values = HashMap::new();
+        
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+            
+            if let Some((key, value)) = trimmed.split_once('=') {
+                let key = key.trim().to_string();
+                let processed_value = Self::process_value(value.trim());
+                values.insert(key, processed_value);
+            }
         }
         
-        if self.database.port == 0 {
-            return Err("Database port cannot be zero".into());
-        }
-        
-        if self.cache_ttl > 86400 {
-            return Err("Cache TTL cannot exceed 24 hours".into());
-        }
-        
-        let valid_log_levels = ["error", "warn", "info", "debug", "trace"];
-        if !valid_log_levels.contains(&self.log_level.as_str()) {
-            return Err(format!("Invalid log level: {}", self.log_level).into());
-        }
-        
-        Ok(())
+        Ok(Config { values })
     }
     
-    pub fn database_url(&self) -> String {
-        format!(
-            "postgres://{}:{}@{}:{}/{}",
-            self.database.username,
-            self.database.password,
-            self.database.host,
-            self.database.port,
-            self.database.database_name
-        )
+    fn process_value(value: &str) -> String {
+        if value.starts_with('$') {
+            let var_name = &value[1..];
+            env::var(var_name).unwrap_or_else(|_| value.to_string())
+        } else {
+            value.to_string()
+        }
     }
     
-    pub fn server_url(&self) -> String {
-        let protocol = if self.server.enable_ssl { "https" } else { "http" };
-        format!("{}://{}:{}", protocol, self.server.address, self.server.port)
+    pub fn get(&self, key: &str) -> Option<&String> {
+        self.values.get(key)
+    }
+    
+    pub fn get_or_default(&self, key: &str, default: &str) -> String {
+        self.values.get(key)
+            .map(|s| s.as_str())
+            .unwrap_or(default)
+            .to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+    
+    #[test]
+    fn test_basic_parsing() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "DATABASE_URL=postgres://localhost/db").unwrap();
+        writeln!(file, "# This is a comment").unwrap();
+        writeln!(file, "PORT=8080").unwrap();
+        
+        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.get("DATABASE_URL"), Some(&"postgres://localhost/db".to_string()));
+        assert_eq!(config.get("PORT"), Some(&"8080".to_string()));
+        assert_eq!(config.get("NONEXISTENT"), None);
+    }
+    
+    #[test]
+    fn test_env_interpolation() {
+        env::set_var("API_KEY", "secret123");
+        
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "API_KEY=$API_KEY").unwrap();
+        
+        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.get("API_KEY"), Some(&"secret123".to_string()));
     }
 }

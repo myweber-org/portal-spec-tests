@@ -21,65 +21,57 @@ impl DataProcessor {
         let file = File::open(file_path)?;
         let reader = BufReader::new(file);
         let mut records = Vec::new();
+        let mut lines = reader.lines();
 
-        for (line_number, line) in reader.lines().enumerate() {
-            let line = line?;
-            
-            if line_number == 0 && self.has_header {
-                continue;
-            }
+        if self.has_header {
+            lines.next();
+        }
 
-            if line.trim().is_empty() {
-                continue;
-            }
-
+        for line_result in lines {
+            let line = line_result?;
             let fields: Vec<String> = line
                 .split(self.delimiter)
                 .map(|s| s.trim().to_string())
                 .collect();
-
-            if !self.validate_record(&fields) {
-                return Err(format!("Invalid record at line {}", line_number + 1).into());
+            
+            if !fields.is_empty() && !fields.iter().all(|f| f.is_empty()) {
+                records.push(fields);
             }
-
-            records.push(fields);
         }
 
         Ok(records)
     }
 
-    fn validate_record(&self, fields: &[String]) -> bool {
-        !fields.is_empty() && fields.iter().all(|field| !field.is_empty())
+    pub fn validate_records(&self, records: &[Vec<String>]) -> Result<(), String> {
+        if records.is_empty() {
+            return Err("No valid records found".to_string());
+        }
+
+        let expected_len = records[0].len();
+        for (i, record) in records.iter().enumerate() {
+            if record.len() != expected_len {
+                return Err(format!("Record {} has {} fields, expected {}", i + 1, record.len(), expected_len));
+            }
+        }
+
+        Ok(())
     }
 
-    pub fn calculate_statistics(&self, data: &[Vec<String>], column_index: usize) -> Result<(f64, f64, f64), Box<dyn Error>> {
-        if data.is_empty() {
-            return Err("No data available for statistics calculation".into());
+    pub fn extract_column(&self, records: &[Vec<String>], column_index: usize) -> Result<Vec<String>, String> {
+        if records.is_empty() {
+            return Err("No records available".to_string());
         }
 
-        let mut values = Vec::new();
-        for record in data {
-            if column_index >= record.len() {
-                return Err(format!("Column index {} out of bounds", column_index).into());
-            }
-
-            match record[column_index].parse::<f64>() {
-                Ok(value) => values.push(value),
-                Err(_) => return Err(format!("Invalid numeric value at column {}", column_index).into()),
-            }
+        if column_index >= records[0].len() {
+            return Err(format!("Column index {} out of bounds", column_index));
         }
 
-        let sum: f64 = values.iter().sum();
-        let count = values.len() as f64;
-        let mean = sum / count;
+        let column_data: Vec<String> = records
+            .iter()
+            .filter_map(|record| record.get(column_index).cloned())
+            .collect();
 
-        let variance: f64 = values.iter()
-            .map(|value| (value - mean).powi(2))
-            .sum::<f64>() / count;
-
-        let std_dev = variance.sqrt();
-
-        Ok((mean, variance, std_dev))
+        Ok(column_data)
     }
 }
 
@@ -90,33 +82,41 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_data_processing() {
+    fn test_process_csv() {
         let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "name,age,salary").unwrap();
-        writeln!(temp_file, "Alice,30,50000").unwrap();
-        writeln!(temp_file, "Bob,25,45000").unwrap();
-        writeln!(temp_file, "Charlie,35,60000").unwrap();
+        writeln!(temp_file, "name,age,city").unwrap();
+        writeln!(temp_file, "Alice,30,New York").unwrap();
+        writeln!(temp_file, "Bob,25,London").unwrap();
 
         let processor = DataProcessor::new(',', true);
-        let result = processor.process_file(temp_file.path()).unwrap();
-
-        assert_eq!(result.len(), 3);
-        assert_eq!(result[0], vec!["Alice", "30", "50000"]);
+        let result = processor.process_file(temp_file.path());
+        
+        assert!(result.is_ok());
+        let records = result.unwrap();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0], vec!["Alice", "30", "New York"]);
     }
 
     #[test]
-    fn test_statistics_calculation() {
-        let data = vec![
-            vec!["10".to_string(), "20".to_string()],
-            vec!["20".to_string(), "30".to_string()],
-            vec!["30".to_string(), "40".to_string()],
-        ];
-
+    fn test_validate_records() {
         let processor = DataProcessor::new(',', false);
-        let stats = processor.calculate_statistics(&data, 0).unwrap();
+        let valid_records = vec![
+            vec!["a".to_string(), "b".to_string()],
+            vec!["c".to_string(), "d".to_string()],
+        ];
+        
+        assert!(processor.validate_records(&valid_records).is_ok());
+    }
 
-        assert_eq!(stats.0, 20.0);
-        assert_eq!(stats.1, 66.66666666666667);
-        assert_eq!(stats.2, 8.16496580927726);
+    #[test]
+    fn test_extract_column() {
+        let processor = DataProcessor::new(',', false);
+        let records = vec![
+            vec!["a".to_string(), "b".to_string()],
+            vec!["c".to_string(), "d".to_string()],
+        ];
+        
+        let column = processor.extract_column(&records, 1).unwrap();
+        assert_eq!(column, vec!["b".to_string(), "d".to_string()]);
     }
 }

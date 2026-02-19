@@ -189,4 +189,85 @@ mod tests {
         let decrypted_content = fs::read(decrypted_file.path()).unwrap();
         assert_eq!(test_data.to_vec(), decrypted_content);
     }
+}use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
+use hex::FromHex;
+use rand::RngCore;
+use std::error::Error;
+
+type Aes256CbcEnc = cbc::Encryptor<aes::Aes256>;
+type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
+
+#[derive(Debug)]
+pub struct EncryptionResult {
+    pub ciphertext: Vec<u8>,
+    pub iv: [u8; 16],
+}
+
+pub fn encrypt_data(key: &[u8; 32], plaintext: &[u8]) -> Result<EncryptionResult, Box<dyn Error>> {
+    if key.len() != 32 {
+        return Err("Key must be 32 bytes".into());
+    }
+
+    let mut iv = [0u8; 16];
+    rand::thread_rng().fill_bytes(&mut iv);
+
+    let ciphertext = Aes256CbcEnc::new(key.into(), &iv.into())
+        .encrypt_padded_vec_mut::<Pkcs7>(plaintext);
+
+    Ok(EncryptionResult { ciphertext, iv })
+}
+
+pub fn decrypt_data(key: &[u8; 32], iv: &[u8; 16], ciphertext: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+    if key.len() != 32 {
+        return Err("Key must be 32 bytes".into());
+    }
+    if iv.len() != 16 {
+        return Err("IV must be 16 bytes".into());
+    }
+
+    let plaintext = Aes256CbcDec::new(key.into(), iv.into())
+        .decrypt_padded_vec_mut::<Pkcs7>(ciphertext)
+        .map_err(|e| format!("Decryption failed: {}", e))?;
+
+    Ok(plaintext)
+}
+
+pub fn generate_key() -> [u8; 32] {
+    let mut key = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut key);
+    key
+}
+
+pub fn key_from_hex(hex_str: &str) -> Result<[u8; 32], Box<dyn Error>> {
+    let bytes = hex::decode(hex_str)?;
+    if bytes.len() != 32 {
+        return Err("Hex string must represent 32 bytes".into());
+    }
+    let mut array = [0u8; 32];
+    array.copy_from_slice(&bytes);
+    Ok(array)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_encryption_roundtrip() {
+        let key = generate_key();
+        let plaintext = b"Secret message for encryption test";
+        
+        let enc_result = encrypt_data(&key, plaintext).unwrap();
+        let decrypted = decrypt_data(&key, &enc_result.iv, &enc_result.ciphertext).unwrap();
+        
+        assert_eq!(plaintext.to_vec(), decrypted);
+    }
+
+    #[test]
+    fn test_key_from_hex() {
+        let hex_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let key = key_from_hex(hex_key).unwrap();
+        let expected = hex::decode(hex_key).unwrap();
+        assert_eq!(key.to_vec(), expected);
+    }
 }

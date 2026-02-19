@@ -283,3 +283,221 @@ mod tests {
         assert_eq!(record.value, 12.35);
     }
 }
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub value: f64,
+    pub category: String,
+}
+
+#[derive(Debug)]
+pub enum DataError {
+    InvalidId,
+    InvalidValue,
+    EmptyCategory,
+    TransformationError(String),
+}
+
+impl fmt::Display for DataError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DataError::InvalidId => write!(f, "ID must be greater than 0"),
+            DataError::InvalidValue => write!(f, "Value must be between 0.0 and 1000.0"),
+            DataError::EmptyCategory => write!(f, "Category cannot be empty"),
+            DataError::TransformationError(msg) => write!(f, "Transformation failed: {}", msg),
+        }
+    }
+}
+
+impl Error for DataError {}
+
+impl DataRecord {
+    pub fn new(id: u32, value: f64, category: String) -> Result<Self, DataError> {
+        if id == 0 {
+            return Err(DataError::InvalidId);
+        }
+        
+        if value < 0.0 || value > 1000.0 {
+            return Err(DataError::InvalidValue);
+        }
+        
+        if category.trim().is_empty() {
+            return Err(DataError::EmptyCategory);
+        }
+        
+        Ok(Self {
+            id,
+            value,
+            category: category.trim().to_string(),
+        })
+    }
+    
+    pub fn transform(&self, multiplier: f64) -> Result<Self, DataError> {
+        if multiplier <= 0.0 {
+            return Err(DataError::TransformationError(
+                "Multiplier must be positive".to_string()
+            ));
+        }
+        
+        let new_value = self.value * multiplier;
+        
+        if new_value > 1000.0 {
+            return Err(DataError::TransformationError(
+                format!("Transformed value {} exceeds maximum limit", new_value)
+            ));
+        }
+        
+        Ok(Self {
+            id: self.id,
+            value: new_value,
+            category: self.category.clone(),
+        })
+    }
+    
+    pub fn normalize(&self, max_value: f64) -> Result<f64, DataError> {
+        if max_value <= 0.0 {
+            return Err(DataError::TransformationError(
+                "Maximum value must be positive".to_string()
+            ));
+        }
+        
+        if self.value > max_value {
+            return Err(DataError::TransformationError(
+                format!("Value {} exceeds normalization maximum {}", self.value, max_value)
+            ));
+        }
+        
+        Ok(self.value / max_value)
+    }
+}
+
+pub struct DataProcessor {
+    records: Vec<DataRecord>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        Self {
+            records: Vec::new(),
+        }
+    }
+    
+    pub fn add_record(&mut self, record: DataRecord) {
+        self.records.push(record);
+    }
+    
+    pub fn process_all(&self, multiplier: f64) -> Result<Vec<DataRecord>, DataError> {
+        let mut results = Vec::new();
+        
+        for record in &self.records {
+            match record.transform(multiplier) {
+                Ok(transformed) => results.push(transformed),
+                Err(e) => return Err(e),
+            }
+        }
+        
+        Ok(results)
+    }
+    
+    pub fn calculate_statistics(&self) -> (f64, f64, f64) {
+        if self.records.is_empty() {
+            return (0.0, 0.0, 0.0);
+        }
+        
+        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        let count = self.records.len() as f64;
+        let mean = sum / count;
+        
+        let variance: f64 = self.records.iter()
+            .map(|r| (r.value - mean).powi(2))
+            .sum::<f64>() / count;
+        
+        let std_dev = variance.sqrt();
+        
+        (mean, variance, std_dev)
+    }
+    
+    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
+        self.records.iter()
+            .filter(|record| record.category == category)
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_valid_record_creation() {
+        let record = DataRecord::new(1, 100.0, "test".to_string());
+        assert!(record.is_ok());
+        
+        let record = record.unwrap();
+        assert_eq!(record.id, 1);
+        assert_eq!(record.value, 100.0);
+        assert_eq!(record.category, "test");
+    }
+    
+    #[test]
+    fn test_invalid_id() {
+        let record = DataRecord::new(0, 100.0, "test".to_string());
+        assert!(matches!(record, Err(DataError::InvalidId)));
+    }
+    
+    #[test]
+    fn test_invalid_value() {
+        let record = DataRecord::new(1, -10.0, "test".to_string());
+        assert!(matches!(record, Err(DataError::InvalidValue)));
+        
+        let record = DataRecord::new(1, 1500.0, "test".to_string());
+        assert!(matches!(record, Err(DataError::InvalidValue)));
+    }
+    
+    #[test]
+    fn test_empty_category() {
+        let record = DataRecord::new(1, 100.0, "".to_string());
+        assert!(matches!(record, Err(DataError::EmptyCategory)));
+        
+        let record = DataRecord::new(1, 100.0, "   ".to_string());
+        assert!(matches!(record, Err(DataError::EmptyCategory)));
+    }
+    
+    #[test]
+    fn test_record_transformation() {
+        let record = DataRecord::new(1, 100.0, "test".to_string()).unwrap();
+        let transformed = record.transform(2.0).unwrap();
+        assert_eq!(transformed.value, 200.0);
+    }
+    
+    #[test]
+    fn test_invalid_transformation() {
+        let record = DataRecord::new(1, 600.0, "test".to_string()).unwrap();
+        let result = record.transform(2.0);
+        assert!(matches!(result, Err(DataError::TransformationError(_))));
+    }
+    
+    #[test]
+    fn test_data_processor() {
+        let mut processor = DataProcessor::new();
+        
+        let record1 = DataRecord::new(1, 100.0, "A".to_string()).unwrap();
+        let record2 = DataRecord::new(2, 200.0, "B".to_string()).unwrap();
+        let record3 = DataRecord::new(3, 300.0, "A".to_string()).unwrap();
+        
+        processor.add_record(record1);
+        processor.add_record(record2);
+        processor.add_record(record3);
+        
+        let filtered = processor.filter_by_category("A");
+        assert_eq!(filtered.len(), 2);
+        
+        let (mean, variance, std_dev) = processor.calculate_statistics();
+        assert_eq!(mean, 200.0);
+        assert_eq!(variance, 6666.666666666667);
+        assert_eq!(std_dev, 81.64965809277261);
+    }
+}

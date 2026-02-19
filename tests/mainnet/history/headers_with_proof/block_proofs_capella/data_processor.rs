@@ -92,3 +92,65 @@ mod tests {
         assert_eq!(processor.find_max_value().unwrap().id, 3);
     }
 }
+use csv;
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
+}
+
+impl Record {
+    fn is_valid(&self) -> bool {
+        !self.name.is_empty() && self.value >= 0.0
+    }
+}
+
+fn process_csv(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
+    let input_file = File::open(input_path)?;
+    let mut reader = csv::Reader::from_reader(input_file);
+    
+    let mut valid_records = Vec::new();
+    let mut invalid_count = 0;
+
+    for result in reader.deserialize() {
+        let record: Record = result?;
+        
+        if record.is_valid() {
+            valid_records.push(record);
+        } else {
+            invalid_count += 1;
+        }
+    }
+
+    if !valid_records.is_empty() {
+        let output_file = File::create(output_path)?;
+        let mut writer = csv::Writer::from_writer(output_file);
+        
+        for record in valid_records {
+            writer.serialize(record)?;
+        }
+        
+        writer.flush()?;
+    }
+
+    println!("Processed {} records", valid_records.len() + invalid_count);
+    println!("Valid records: {}", valid_records.len());
+    println!("Invalid records: {}", invalid_count);
+
+    Ok(())
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let input_file = "input_data.csv";
+    let output_file = "processed_data.csv";
+    
+    process_csv(input_file, output_file)?;
+    
+    Ok(())
+}

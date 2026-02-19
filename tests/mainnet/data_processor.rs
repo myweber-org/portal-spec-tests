@@ -1,406 +1,162 @@
-use std::error::Error;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
-use std::path::Path;
 
-#[derive(Debug, Clone)]
-pub struct DataRecord {
-    pub id: u32,
-    pub value: f64,
-    pub category: String,
-    pub valid: bool,
-}
-
-impl DataRecord {
-    pub fn new(id: u32, value: f64, category: &str) -> Self {
-        let valid = value >= 0.0 && !category.is_empty();
-        DataRecord {
-            id,
-            value,
-            category: category.to_string(),
-            valid,
-        }
-    }
-
-    pub fn is_valid(&self) -> bool {
-        self.valid
-    }
-}
-
-pub struct DataProcessor {
-    records: Vec<DataRecord>,
-}
-
-impl DataProcessor {
-    pub fn new() -> Self {
-        DataProcessor {
-            records: Vec::new(),
-        }
-    }
-
-    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<usize, Box<dyn Error>> {
-        let file = File::open(path)?;
-        let reader = BufReader::new(file);
-        let mut count = 0;
-
-        for (line_num, line) in reader.lines().enumerate() {
-            let line = line?;
-            
-            if line_num == 0 {
-                continue;
-            }
-
-            let parts: Vec<&str> = line.split(',').collect();
-            if parts.len() != 3 {
-                continue;
-            }
-
-            let id = match parts[0].parse::<u32>() {
-                Ok(id) => id,
-                Err(_) => continue,
-            };
-
-            let value = match parts[1].parse::<f64>() {
-                Ok(value) => value,
-                Err(_) => continue,
-            };
-
-            let record = DataRecord::new(id, value, parts[2]);
-            self.records.push(record);
-            count += 1;
-        }
-
-        Ok(count)
-    }
-
-    pub fn filter_valid(&self) -> Vec<&DataRecord> {
-        self.records.iter().filter(|r| r.is_valid()).collect()
-    }
-
-    pub fn calculate_average(&self) -> Option<f64> {
-        let valid_records: Vec<&DataRecord> = self.filter_valid();
-        
-        if valid_records.is_empty() {
-            return None;
-        }
-
-        let sum: f64 = valid_records.iter().map(|r| r.value).sum();
-        Some(sum / valid_records.len() as f64)
-    }
-
-    pub fn group_by_category(&self) -> std::collections::HashMap<String, Vec<&DataRecord>> {
-        let mut groups = std::collections::HashMap::new();
-        
-        for record in &self.records {
-            if record.is_valid() {
-                groups
-                    .entry(record.category.clone())
-                    .or_insert_with(Vec::new)
-                    .push(record);
-            }
-        }
-        
-        groups
-    }
-
-    pub fn count_records(&self) -> usize {
-        self.records.len()
-    }
-
-    pub fn count_valid(&self) -> usize {
-        self.filter_valid().len()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
-
-    #[test]
-    fn test_data_record_creation() {
-        let record = DataRecord::new(1, 42.5, "test");
-        assert_eq!(record.id, 1);
-        assert_eq!(record.value, 42.5);
-        assert_eq!(record.category, "test");
-        assert!(record.is_valid());
-    }
-
-    #[test]
-    fn test_invalid_record() {
-        let record = DataRecord::new(2, -5.0, "");
-        assert!(!record.is_valid());
-    }
-
-    #[test]
-    fn test_csv_loading() {
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "id,value,category").unwrap();
-        writeln!(temp_file, "1,10.5,type_a").unwrap();
-        writeln!(temp_file, "2,20.3,type_b").unwrap();
-        writeln!(temp_file, "3,-5.0,type_c").unwrap();
-
-        let mut processor = DataProcessor::new();
-        let result = processor.load_from_csv(temp_file.path());
-        
-        assert!(result.is_ok());
-        assert_eq!(processor.count_records(), 3);
-        assert_eq!(processor.count_valid(), 2);
-    }
-
-    #[test]
-    fn test_average_calculation() {
-        let mut processor = DataProcessor::new();
-        processor.records.push(DataRecord::new(1, 10.0, "a"));
-        processor.records.push(DataRecord::new(2, 20.0, "b"));
-        processor.records.push(DataRecord::new(3, 30.0, "c"));
-
-        let average = processor.calculate_average();
-        assert_eq!(average, Some(20.0));
-    }
-
-    #[test]
-    fn test_empty_average() {
-        let processor = DataProcessor::new();
-        let average = processor.calculate_average();
-        assert_eq!(average, None);
-    }
-
-    #[test]
-    fn test_grouping() {
-        let mut processor = DataProcessor::new();
-        processor.records.push(DataRecord::new(1, 10.0, "cat_a"));
-        processor.records.push(DataRecord::new(2, 20.0, "cat_a"));
-        processor.records.push(DataRecord::new(3, 30.0, "cat_b"));
-
-        let groups = processor.group_by_category();
-        assert_eq!(groups.len(), 2);
-        assert_eq!(groups.get("cat_a").unwrap().len(), 2);
-        assert_eq!(groups.get("cat_b").unwrap().len(), 1);
-    }
-}
 use std::collections::HashMap;
 
 pub struct DataProcessor {
-    validators: HashMap<String, Box<dyn Fn(&str) -> bool>>,
-    transformers: HashMap<String, Box<dyn Fn(String) -> String>>,
+    data: HashMap<String, Vec<f64>>,
+    validation_rules: ValidationRules,
+}
+
+pub struct ValidationRules {
+    min_value: f64,
+    max_value: f64,
+    required_keys: Vec<String>,
 }
 
 impl DataProcessor {
-    pub fn new() -> Self {
+    pub fn new(rules: ValidationRules) -> Self {
         DataProcessor {
-            validators: HashMap::new(),
-            transformers: HashMap::new(),
+            data: HashMap::new(),
+            validation_rules: rules,
         }
     }
 
-    pub fn add_validator(&mut self, name: &str, validator: Box<dyn Fn(&str) -> bool>) {
-        self.validators.insert(name.to_string(), validator);
-    }
-
-    pub fn add_transformer(&mut self, name: &str, transformer: Box<dyn Fn(String) -> String>) {
-        self.transformers.insert(name.to_string(), transformer);
-    }
-
-    pub fn validate(&self, name: &str, value: &str) -> bool {
-        self.validators
-            .get(name)
-            .map_or(false, |validator| validator(value))
-    }
-
-    pub fn transform(&self, name: &str, value: String) -> Option<String> {
-        self.transformers
-            .get(name)
-            .map(|transformer| transformer(value))
-    }
-
-    pub fn process_data(&self, value: &str) -> Option<String> {
-        if self.validate("email", value) {
-            self.transform("uppercase", value.to_string())
-        } else {
-            None
+    pub fn add_dataset(&mut self, key: String, values: Vec<f64>) -> Result<(), String> {
+        if !self.validation_rules.required_keys.contains(&key) {
+            return Err(format!("Key '{}' is not in required keys list", key));
         }
-    }
-}
 
-pub fn create_default_processor() -> DataProcessor {
-    let mut processor = DataProcessor::new();
-
-    processor.add_validator("email", Box::new(|value| {
-        value.contains('@') && value.contains('.')
-    }));
-
-    processor.add_validator("numeric", Box::new(|value| {
-        value.chars().all(|c| c.is_ascii_digit())
-    }));
-
-    processor.add_transformer("uppercase", Box::new(|value| {
-        value.to_uppercase()
-    }));
-
-    processor.add_transformer("reverse", Box::new(|value| {
-        value.chars().rev().collect()
-    }));
-
-    processor
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_email_validation() {
-        let processor = create_default_processor();
-        assert!(processor.validate("email", "test@example.com"));
-        assert!(!processor.validate("email", "invalid-email"));
-    }
-
-    #[test]
-    fn test_numeric_validation() {
-        let processor = create_default_processor();
-        assert!(processor.validate("numeric", "12345"));
-        assert!(!processor.validate("numeric", "123abc"));
-    }
-
-    #[test]
-    fn test_uppercase_transformation() {
-        let processor = create_default_processor();
-        let result = processor.transform("uppercase", "hello".to_string());
-        assert_eq!(result, Some("HELLO".to_string()));
-    }
-
-    #[test]
-    fn test_process_data() {
-        let processor = create_default_processor();
-        let result = processor.process_data("test@example.com");
-        assert_eq!(result, Some("TEST@EXAMPLE.COM".to_string()));
-    }
-}
-use csv;
-use serde::{Deserialize, Serialize};
-use std::error::Error;
-use std::fs::File;
-
-#[derive(Debug, Deserialize, Serialize)]
-struct Record {
-    id: u32,
-    name: String,
-    value: f64,
-    active: bool,
-}
-
-impl Record {
-    fn is_valid(&self) -> bool {
-        !self.name.is_empty() && self.value >= 0.0
-    }
-    
-    fn process(&mut self) {
-        self.name = self.name.trim().to_uppercase();
-        if self.value > 1000.0 {
-            self.value = 1000.0;
+        for &value in &values {
+            if value < self.validation_rules.min_value || value > self.validation_rules.max_value {
+                return Err(format!("Value {} is outside allowed range [{}, {}]", 
+                    value, self.validation_rules.min_value, self.validation_rules.max_value));
+            }
         }
-    }
-}
 
-pub struct DataProcessor {
-    records: Vec<Record>,
-}
-
-impl DataProcessor {
-    pub fn new() -> Self {
-        DataProcessor {
-            records: Vec::new(),
-        }
-    }
-    
-    pub fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
-        let file = File::open(file_path)?;
-        let mut rdr = csv::Reader::from_reader(file);
-        
-        for result in rdr.deserialize() {
-            let record: Record = result?;
-            self.records.push(record);
-        }
-        
+        self.data.insert(key, values);
         Ok(())
     }
-    
-    pub fn process_records(&mut self) {
-        for record in &mut self.records {
-            if record.is_valid() {
-                record.process();
+
+    pub fn calculate_statistics(&self) -> HashMap<String, Stats> {
+        let mut stats_map = HashMap::new();
+        
+        for (key, values) in &self.data {
+            if values.is_empty() {
+                continue;
+            }
+
+            let sum: f64 = values.iter().sum();
+            let count = values.len() as f64;
+            let mean = sum / count;
+            
+            let variance: f64 = values.iter()
+                .map(|&x| (x - mean).powi(2))
+                .sum::<f64>() / count;
+            
+            let std_dev = variance.sqrt();
+            
+            let mut sorted_values = values.clone();
+            sorted_values.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            
+            let median = if count as usize % 2 == 0 {
+                let mid = count as usize / 2;
+                (sorted_values[mid - 1] + sorted_values[mid]) / 2.0
+            } else {
+                sorted_values[count as usize / 2]
+            };
+
+            stats_map.insert(key.clone(), Stats {
+                mean,
+                median,
+                std_dev,
+                min: *sorted_values.first().unwrap(),
+                max: *sorted_values.last().unwrap(),
+                count: values.len(),
+            });
+        }
+        
+        stats_map
+    }
+
+    pub fn normalize_data(&mut self) {
+        for values in self.data.values_mut() {
+            if values.is_empty() {
+                continue;
+            }
+
+            let min = values.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+            let max = values.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+            
+            if (max - min).abs() > f64::EPSILON {
+                for value in values.iter_mut() {
+                    *value = (*value - min) / (max - min);
+                }
             }
         }
     }
-    
-    pub fn save_to_csv(&self, file_path: &str) -> Result<(), Box<dyn Error>> {
-        let file = File::create(file_path)?;
-        let mut wtr = csv::Writer::from_writer(file);
-        
-        for record in &self.records {
-            wtr.serialize(record)?;
+
+    pub fn get_data_keys(&self) -> Vec<String> {
+        self.data.keys().cloned().collect()
+    }
+
+    pub fn get_data(&self, key: &str) -> Option<&Vec<f64>> {
+        self.data.get(key)
+    }
+}
+
+pub struct Stats {
+    pub mean: f64,
+    pub median: f64,
+    pub std_dev: f64,
+    pub min: f64,
+    pub max: f64,
+    pub count: usize,
+}
+
+impl ValidationRules {
+    pub fn new(min_value: f64, max_value: f64, required_keys: Vec<String>) -> Self {
+        ValidationRules {
+            min_value,
+            max_value,
+            required_keys,
         }
-        
-        wtr.flush()?;
-        Ok(())
-    }
-    
-    pub fn filter_active(&self) -> Vec<&Record> {
-        self.records
-            .iter()
-            .filter(|r| r.active && r.is_valid())
-            .collect()
-    }
-    
-    pub fn calculate_total(&self) -> f64 {
-        self.records
-            .iter()
-            .filter(|r| r.is_valid())
-            .map(|r| r.value)
-            .sum()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::NamedTempFile;
-    
+
     #[test]
-    fn test_record_validation() {
-        let valid_record = Record {
-            id: 1,
-            name: "Test".to_string(),
-            value: 50.0,
-            active: true,
-        };
+    fn test_data_processor() {
+        let rules = ValidationRules::new(
+            0.0,
+            100.0,
+            vec!["temperature".to_string(), "humidity".to_string()]
+        );
         
-        let invalid_record = Record {
-            id: 2,
-            name: "".to_string(),
-            value: -10.0,
-            active: true,
-        };
+        let mut processor = DataProcessor::new(rules);
         
-        assert!(valid_record.is_valid());
-        assert!(!invalid_record.is_valid());
-    }
-    
-    #[test]
-    fn test_data_processing() {
-        let mut processor = DataProcessor::new();
+        assert!(processor.add_dataset(
+            "temperature".to_string(),
+            vec![20.0, 25.0, 30.0, 35.0]
+        ).is_ok());
         
-        let test_data = "id,name,value,active\n1,test one,100.5,true\n2,test two,1500.0,false";
-        let temp_file = NamedTempFile::new().unwrap();
-        std::fs::write(temp_file.path(), test_data).unwrap();
+        assert!(processor.add_dataset(
+            "pressure".to_string(),
+            vec![100.0, 200.0]
+        ).is_err());
         
-        processor.load_from_csv(temp_file.path().to_str().unwrap()).unwrap();
-        processor.process_records();
+        assert!(processor.add_dataset(
+            "temperature".to_string(),
+            vec![-10.0, 150.0]
+        ).is_err());
         
-        assert_eq!(processor.records.len(), 2);
-        assert_eq!(processor.records[0].name, "TEST ONE");
-        assert_eq!(processor.records[1].value, 1000.0);
+        let stats = processor.calculate_statistics();
+        assert_eq!(stats.len(), 1);
+        assert!(stats.contains_key("temperature"));
+        
+        processor.normalize_data();
+        let normalized_data = processor.get_data("temperature").unwrap();
+        assert!(normalized_data.iter().all(|&x| x >= 0.0 && x <= 1.0));
     }
 }

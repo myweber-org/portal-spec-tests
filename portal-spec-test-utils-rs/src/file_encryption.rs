@@ -622,3 +622,111 @@ mod tests {
         assert!(result.is_err());
     }
 }
+use std::fs;
+use std::io::{self, Read, Write};
+use std::path::Path;
+
+const DEFAULT_KEY: u8 = 0xAA;
+
+fn xor_cipher(data: &mut [u8], key: u8) {
+    for byte in data.iter_mut() {
+        *byte ^= key;
+    }
+}
+
+fn process_file(input_path: &str, output_path: &str, key: u8) -> io::Result<()> {
+    let mut file = fs::File::open(input_path)?;
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer)?;
+    
+    xor_cipher(&mut buffer, key);
+    
+    let mut output_file = fs::File::create(output_path)?;
+    output_file.write_all(&buffer)?;
+    
+    Ok(())
+}
+
+fn main() -> io::Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+    
+    if args.len() != 4 {
+        eprintln!("Usage: {} <input> <output> <key>", args[0]);
+        eprintln!("Key should be a number between 0-255");
+        std::process::exit(1);
+    }
+    
+    let input_path = &args[1];
+    let output_path = &args[2];
+    let key_arg = &args[3];
+    
+    let key: u8 = match key_arg.parse() {
+        Ok(k) if k <= 255 => k,
+        _ => {
+            eprintln!("Invalid key. Using default key: {}", DEFAULT_KEY);
+            DEFAULT_KEY
+        }
+    };
+    
+    if !Path::new(input_path).exists() {
+        eprintln!("Input file does not exist: {}", input_path);
+        std::process::exit(1);
+    }
+    
+    match process_file(input_path, output_path, key) {
+        Ok(_) => {
+            println!("File processed successfully.");
+            println!("Input: {}", input_path);
+            println!("Output: {}", output_path);
+            println!("Key used: {}", key);
+        }
+        Err(e) => {
+            eprintln!("Error processing file: {}", e);
+            std::process::exit(1);
+        }
+    }
+    
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    
+    #[test]
+    fn test_xor_cipher() {
+        let mut data = vec![0x00, 0xFF, 0x55, 0xAA];
+        let key = 0xAA;
+        let original = data.clone();
+        
+        xor_cipher(&mut data, key);
+        assert_ne!(data, original);
+        
+        xor_cipher(&mut data, key);
+        assert_eq!(data, original);
+    }
+    
+    #[test]
+    fn test_file_encryption() -> io::Result<()> {
+        let test_data = b"Hello, World! This is a test.";
+        let test_file = "test_input.txt";
+        let encrypted_file = "test_encrypted.txt";
+        let decrypted_file = "test_decrypted.txt";
+        let key = 0x7F;
+        
+        fs::write(test_file, test_data)?;
+        
+        process_file(test_file, encrypted_file, key)?;
+        process_file(encrypted_file, decrypted_file, key)?;
+        
+        let decrypted_content = fs::read(decrypted_file)?;
+        assert_eq!(decrypted_content, test_data);
+        
+        fs::remove_file(test_file)?;
+        fs::remove_file(encrypted_file)?;
+        fs::remove_file(decrypted_file)?;
+        
+        Ok(())
+    }
+}

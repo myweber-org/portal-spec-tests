@@ -352,3 +352,81 @@ mod tests {
         assert_eq!(original_data.to_vec(), decrypted);
     }
 }
+use std::fs;
+use std::io::{self, Read, Write};
+use std::path::Path;
+
+const BUFFER_SIZE: usize = 8192;
+
+pub fn encrypt_file(source_path: &str, dest_path: &str, key: &[u8]) -> io::Result<()> {
+    process_file(source_path, dest_path, key)
+}
+
+pub fn decrypt_file(source_path: &str, dest_path: &str, key: &[u8]) -> io::Result<()> {
+    process_file(source_path, dest_path, key)
+}
+
+fn process_file(source_path: &str, dest_path: &str, key: &[u8]) -> io::Result<()> {
+    let source = Path::new(source_path);
+    let dest = Path::new(dest_path);
+
+    if !source.exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("Source file '{}' not found", source_path),
+        ));
+    }
+
+    let mut source_file = fs::File::open(source)?;
+    let mut dest_file = fs::File::create(dest)?;
+
+    let mut buffer = [0u8; BUFFER_SIZE];
+    let key_len = key.len();
+    let mut key_index = 0;
+
+    loop {
+        let bytes_read = source_file.read(&mut buffer)?;
+        if bytes_read == 0 {
+            break;
+        }
+
+        for i in 0..bytes_read {
+            buffer[i] ^= key[key_index];
+            key_index = (key_index + 1) % key_len;
+        }
+
+        dest_file.write_all(&buffer[..bytes_read])?;
+    }
+
+    dest_file.flush()?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_encrypt_decrypt() {
+        let key = b"secret_key";
+        let original_data = b"This is a test message for encryption and decryption.";
+
+        let mut source_file = NamedTempFile::new().unwrap();
+        source_file.write_all(original_data).unwrap();
+        let source_path = source_file.path().to_str().unwrap();
+
+        let encrypted_file = NamedTempFile::new().unwrap();
+        let encrypted_path = encrypted_file.path().to_str().unwrap();
+
+        let decrypted_file = NamedTempFile::new().unwrap();
+        let decrypted_path = decrypted_file.path().to_str().unwrap();
+
+        encrypt_file(source_path, encrypted_path, key).unwrap();
+        decrypt_file(encrypted_path, decrypted_path, key).unwrap();
+
+        let decrypted_data = fs::read(decrypted_path).unwrap();
+        assert_eq!(original_data.to_vec(), decrypted_data);
+    }
+}

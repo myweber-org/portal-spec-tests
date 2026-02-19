@@ -278,3 +278,129 @@ mod tests {
         assert_eq!(result, Some("TEST@EXAMPLE.COM".to_string()));
     }
 }
+use csv;
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
+}
+
+impl Record {
+    fn is_valid(&self) -> bool {
+        !self.name.is_empty() && self.value >= 0.0
+    }
+    
+    fn process(&mut self) {
+        self.name = self.name.trim().to_uppercase();
+        if self.value > 1000.0 {
+            self.value = 1000.0;
+        }
+    }
+}
+
+pub struct DataProcessor {
+    records: Vec<Record>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+    
+    pub fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let mut rdr = csv::Reader::from_reader(file);
+        
+        for result in rdr.deserialize() {
+            let record: Record = result?;
+            self.records.push(record);
+        }
+        
+        Ok(())
+    }
+    
+    pub fn process_records(&mut self) {
+        for record in &mut self.records {
+            if record.is_valid() {
+                record.process();
+            }
+        }
+    }
+    
+    pub fn save_to_csv(&self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::create(file_path)?;
+        let mut wtr = csv::Writer::from_writer(file);
+        
+        for record in &self.records {
+            wtr.serialize(record)?;
+        }
+        
+        wtr.flush()?;
+        Ok(())
+    }
+    
+    pub fn filter_active(&self) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|r| r.active && r.is_valid())
+            .collect()
+    }
+    
+    pub fn calculate_total(&self) -> f64 {
+        self.records
+            .iter()
+            .filter(|r| r.is_valid())
+            .map(|r| r.value)
+            .sum()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+    
+    #[test]
+    fn test_record_validation() {
+        let valid_record = Record {
+            id: 1,
+            name: "Test".to_string(),
+            value: 50.0,
+            active: true,
+        };
+        
+        let invalid_record = Record {
+            id: 2,
+            name: "".to_string(),
+            value: -10.0,
+            active: true,
+        };
+        
+        assert!(valid_record.is_valid());
+        assert!(!invalid_record.is_valid());
+    }
+    
+    #[test]
+    fn test_data_processing() {
+        let mut processor = DataProcessor::new();
+        
+        let test_data = "id,name,value,active\n1,test one,100.5,true\n2,test two,1500.0,false";
+        let temp_file = NamedTempFile::new().unwrap();
+        std::fs::write(temp_file.path(), test_data).unwrap();
+        
+        processor.load_from_csv(temp_file.path().to_str().unwrap()).unwrap();
+        processor.process_records();
+        
+        assert_eq!(processor.records.len(), 2);
+        assert_eq!(processor.records[0].name, "TEST ONE");
+        assert_eq!(processor.records[1].value, 1000.0);
+    }
+}

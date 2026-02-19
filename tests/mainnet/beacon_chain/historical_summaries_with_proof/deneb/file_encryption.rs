@@ -1085,3 +1085,75 @@ mod tests {
         assert_eq!(result, test_data);
     }
 }
+use std::fs;
+use std::io::{self, Read, Write};
+use std::path::Path;
+
+const DEFAULT_KEY: u8 = 0x55;
+
+pub fn xor_encrypt_file(input_path: &Path, output_path: &Path, key: Option<u8>) -> io::Result<()> {
+    let encryption_key = key.unwrap_or(DEFAULT_KEY);
+    
+    let mut input_file = fs::File::open(input_path)?;
+    let mut buffer = Vec::new();
+    input_file.read_to_end(&mut buffer)?;
+    
+    let encrypted_data: Vec<u8> = buffer
+        .iter()
+        .map(|byte| byte ^ encryption_key)
+        .collect();
+    
+    let mut output_file = fs::File::create(output_path)?;
+    output_file.write_all(&encrypted_data)?;
+    
+    Ok(())
+}
+
+pub fn xor_decrypt_file(input_path: &Path, output_path: &Path, key: Option<u8>) -> io::Result<()> {
+    xor_encrypt_file(input_path, output_path, key)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_encryption_decryption_cycle() {
+        let original_content = b"Hello, this is a secret message!";
+        
+        let input_file = NamedTempFile::new().unwrap();
+        let encrypted_file = NamedTempFile::new().unwrap();
+        let decrypted_file = NamedTempFile::new().unwrap();
+        
+        fs::write(input_file.path(), original_content).unwrap();
+        
+        xor_encrypt_file(input_file.path(), encrypted_file.path(), Some(0x42))
+            .expect("Encryption failed");
+        
+        xor_decrypt_file(encrypted_file.path(), decrypted_file.path(), Some(0x42))
+            .expect("Decryption failed");
+        
+        let decrypted_content = fs::read(decrypted_file.path()).unwrap();
+        assert_eq!(original_content.to_vec(), decrypted_content);
+    }
+    
+    #[test]
+    fn test_different_keys_produce_different_results() {
+        let content = b"Test data";
+        
+        let file1 = NamedTempFile::new().unwrap();
+        let file2 = NamedTempFile::new().unwrap();
+        
+        fs::write(file1.path(), content).unwrap();
+        
+        xor_encrypt_file(file1.path(), file2.path(), Some(0x10)).unwrap();
+        let encrypted_with_key1 = fs::read(file2.path()).unwrap();
+        
+        xor_encrypt_file(file1.path(), file2.path(), Some(0x20)).unwrap();
+        let encrypted_with_key2 = fs::read(file2.path()).unwrap();
+        
+        assert_ne!(encrypted_with_key1, encrypted_with_key2);
+    }
+}

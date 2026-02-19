@@ -80,4 +80,91 @@ mod tests {
         let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
         assert_eq!(config.get("API_KEY"), Some(&"secret123".to_string()));
     }
+}use std::collections::HashMap;
+use std::fs;
+use std::io;
+
+#[derive(Debug, PartialEq)]
+pub struct Config {
+    pub settings: HashMap<String, String>,
+}
+
+impl Config {
+    pub fn new() -> Self {
+        Config {
+            settings: HashMap::new(),
+        }
+    }
+
+    pub fn from_file(path: &str) -> Result<Self, io::Error> {
+        let content = fs::read_to_string(path)?;
+        let mut config = Config::new();
+
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+
+            if let Some((key, value)) = trimmed.split_once('=') {
+                config.settings.insert(
+                    key.trim().to_string(),
+                    value.trim().trim_matches('"').to_string(),
+                );
+            }
+        }
+
+        Ok(config)
+    }
+
+    pub fn get(&self, key: &str) -> Option<&String> {
+        self.settings.get(key)
+    }
+
+    pub fn get_or_default(&self, key: &str, default: &str) -> String {
+        self.settings
+            .get(key)
+            .map(|s| s.as_str())
+            .unwrap_or(default)
+            .to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_empty_config() {
+        let config = Config::new();
+        assert!(config.settings.is_empty());
+    }
+
+    #[test]
+    fn test_parse_config() -> io::Result<()> {
+        let mut temp_file = NamedTempFile::new()?;
+        writeln!(temp_file, "# Sample config")?;
+        writeln!(temp_file, "host=localhost")?;
+        writeln!(temp_file, "port=8080")?;
+        writeln!(temp_file, "debug=true")?;
+
+        let config = Config::from_file(temp_file.path().to_str().unwrap())?;
+        assert_eq!(config.get("host"), Some(&"localhost".to_string()));
+        assert_eq!(config.get("port"), Some(&"8080".to_string()));
+        assert_eq!(config.get("debug"), Some(&"true".to_string()));
+        assert_eq!(config.get("missing"), None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_or_default() {
+        let mut config = Config::new();
+        config.settings.insert("timeout".to_string(), "30".to_string());
+
+        assert_eq!(config.get_or_default("timeout", "10"), "30");
+        assert_eq!(config.get_or_default("retries", "3"), "3");
+    }
 }

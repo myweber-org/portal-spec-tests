@@ -168,4 +168,130 @@ mod tests {
         assert!(!should_include_log("debug", "warn"));
         assert!(should_include_log("warn", "warn"));
     }
+}use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct LogEntry {
+    pub timestamp: String,
+    pub level: String,
+    pub service: String,
+    pub message: String,
+    #[serde(flatten)]
+    pub extra: HashMap<String, serde_json::Value>,
+}
+
+#[derive(Debug)]
+pub struct LogParser {
+    pub entries: Vec<LogEntry>,
+}
+
+impl LogParser {
+    pub fn new() -> Self {
+        LogParser {
+            entries: Vec::new(),
+        }
+    }
+
+    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut parser = LogParser::new();
+
+        for line in reader.lines() {
+            let line = line?;
+            if let Ok(entry) = serde_json::from_str(&line) {
+                parser.entries.push(entry);
+            }
+        }
+
+        Ok(parser)
+    }
+
+    pub fn filter_by_level(&self, level: &str) -> Vec<LogEntry> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.level.to_lowercase() == level.to_lowercase())
+            .cloned()
+            .collect()
+    }
+
+    pub fn filter_by_service(&self, service: &str) -> Vec<LogEntry> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.service == service)
+            .cloned()
+            .collect()
+    }
+
+    pub fn search_in_message(&self, keyword: &str) -> Vec<LogEntry> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.message.contains(keyword))
+            .cloned()
+            .collect()
+    }
+
+    pub fn get_stats(&self) -> HashMap<String, usize> {
+        let mut stats = HashMap::new();
+        
+        for entry in &self.entries {
+            *stats.entry(entry.level.clone()).or_insert(0) += 1;
+            *stats.entry(entry.service.clone()).or_insert(0) += 1;
+        }
+        
+        stats
+    }
+
+    pub fn format_as_table(&self) -> String {
+        let mut output = String::new();
+        output.push_str("Timestamp | Level | Service | Message\n");
+        output.push_str("----------|-------|---------|--------\n");
+        
+        for entry in &self.entries {
+            let truncated_message = if entry.message.len() > 50 {
+                format!("{}...", &entry.message[..47])
+            } else {
+                entry.message.clone()
+            };
+            
+            output.push_str(&format!(
+                "{} | {} | {} | {}\n",
+                entry.timestamp, entry.level, entry.service, truncated_message
+            ));
+        }
+        
+        output
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_log_parser() {
+        let log_data = r#"{"timestamp":"2024-01-15T10:30:00Z","level":"ERROR","service":"auth","message":"Authentication failed","user_id":123}
+{"timestamp":"2024-01-15T10:31:00Z","level":"INFO","service":"api","message":"Request processed","duration_ms":45}
+{"timestamp":"2024-01-15T10:32:00Z","level":"WARN","service":"database","message":"Slow query detected","query_time":2.5}"#;
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+        write!(temp_file, "{}", log_data).unwrap();
+        
+        let parser = LogParser::from_file(temp_file.path()).unwrap();
+        assert_eq!(parser.entries.len(), 3);
+        
+        let errors = parser.filter_by_level("ERROR");
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].service, "auth");
+        
+        let stats = parser.get_stats();
+        assert_eq!(stats.get("ERROR"), Some(&1));
+        assert_eq!(stats.get("auth"), Some(&1));
+    }
 }

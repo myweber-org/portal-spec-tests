@@ -255,4 +255,141 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].fields.get("service"), Some(&"api".to_string()));
     }
+}use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use chrono::{DateTime, Utc};
+
+#[derive(Debug, Deserialize, Serialize)]
+struct LogEntry {
+    timestamp: DateTime<Utc>,
+    level: String,
+    message: String,
+    module: Option<String>,
+    metadata: serde_json::Value,
+}
+
+#[derive(Debug)]
+struct LogProcessor {
+    min_level: String,
+    filter_module: Option<String>,
+}
+
+impl LogProcessor {
+    fn new(min_level: &str) -> Self {
+        LogProcessor {
+            min_level: min_level.to_lowercase(),
+            filter_module: None,
+        }
+    }
+
+    fn with_module_filter(mut self, module: &str) -> Self {
+        self.filter_module = Some(module.to_string());
+        self
+    }
+
+    fn process_file(&self, path: &str) -> Result<Vec<LogEntry>, Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut entries = Vec::new();
+
+        for line in reader.lines() {
+            let line = line?;
+            if let Ok(entry) = self.parse_line(&line) {
+                if self.should_include(&entry) {
+                    entries.push(entry);
+                }
+            }
+        }
+
+        Ok(entries)
+    }
+
+    fn parse_line(&self, line: &str) -> Result<LogEntry, Box<dyn Error>> {
+        let entry: LogEntry = serde_json::from_str(line)?;
+        Ok(entry)
+    }
+
+    fn should_include(&self, entry: &LogEntry) -> bool {
+        if !self.meets_level_requirement(&entry.level) {
+            return false;
+        }
+
+        if let Some(ref filter_module) = self.filter_module {
+            if let Some(ref entry_module) = entry.module {
+                if entry_module != filter_module {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    fn meets_level_requirement(&self, level: &str) -> bool {
+        let level_order = vec!["trace", "debug", "info", "warn", "error"];
+        let entry_level = level.to_lowercase();
+        
+        if let Some(req_idx) = level_order.iter().position(|&l| l == self.min_level) {
+            if let Some(entry_idx) = level_order.iter().position(|&l| l == entry_level) {
+                return entry_idx >= req_idx;
+            }
+        }
+        false
+    }
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let processor = LogProcessor::new("info")
+        .with_module_filter("api");
+
+    let entries = processor.process_file("logs/app.log")?;
+    
+    println!("Found {} log entries", entries.len());
+    
+    for entry in entries.iter().take(5) {
+        println!("{:?}", entry);
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    #[test]
+    fn test_level_filtering() {
+        let processor = LogProcessor::new("warn");
+        
+        let test_entry = LogEntry {
+            timestamp: Utc.timestamp(1625097600, 0),
+            level: "info".to_string(),
+            message: "test".to_string(),
+            module: None,
+            metadata: serde_json::json!({}),
+        };
+
+        assert!(!processor.should_include(&test_entry));
+    }
+
+    #[test]
+    fn test_module_filtering() {
+        let processor = LogProcessor::new("debug")
+            .with_module_filter("database");
+
+        let test_entry = LogEntry {
+            timestamp: Utc.timestamp(1625097600, 0),
+            level: "info".to_string(),
+            message: "test".to_string(),
+            module: Some("api".to_string()),
+            metadata: serde_json::json!({}),
+        };
+
+        assert!(!processor.should_include(&test_entry));
+    }
 }

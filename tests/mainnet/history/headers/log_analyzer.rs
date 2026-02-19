@@ -2,117 +2,80 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use regex::Regex;
-use chrono::{DateTime, FixedOffset};
-
-#[derive(Debug)]
-pub struct LogEntry {
-    timestamp: DateTime<FixedOffset>,
-    level: String,
-    component: String,
-    message: String,
-}
-
-#[derive(Debug)]
-pub struct LogSummary {
-    total_entries: usize,
-    error_count: usize,
-    warning_count: usize,
-    component_counts: HashMap<String, usize>,
-    level_distribution: HashMap<String, usize>,
-}
 
 pub struct LogAnalyzer {
-    pattern: Regex,
+    error_pattern: Regex,
+    warning_pattern: Regex,
+    info_pattern: Regex,
 }
 
 impl LogAnalyzer {
     pub fn new() -> Self {
-        let pattern = Regex::new(r"\[(?P<timestamp>[^\]]+)\] (?P<level>\w+) \[(?P<component>[^\]]+)\]: (?P<message>.+)").unwrap();
-        LogAnalyzer { pattern }
-    }
-
-    pub fn parse_line(&self, line: &str) -> Option<LogEntry> {
-        self.pattern.captures(line).and_then(|caps| {
-            let timestamp_str = caps.name("timestamp")?.as_str();
-            let level = caps.name("level")?.as_str().to_string();
-            let component = caps.name("component")?.as_str().to_string();
-            let message = caps.name("message")?.as_str().to_string();
-
-            DateTime::parse_from_rfc3339(timestamp_str)
-                .ok()
-                .map(|timestamp| LogEntry {
-                    timestamp,
-                    level,
-                    component,
-                    message,
-                })
-        })
-    }
-
-    pub fn analyze_file(&self, path: &str) -> std::io::Result<LogSummary> {
-        let file = File::open(path)?;
-        let reader = BufReader::new(file);
-        
-        let mut summary = LogSummary {
-            total_entries: 0,
-            error_count: 0,
-            warning_count: 0,
-            component_counts: HashMap::new(),
-            level_distribution: HashMap::new(),
-        };
-
-        for line_result in reader.lines() {
-            let line = line_result?;
-            if let Some(entry) = self.parse_line(&line) {
-                summary.total_entries += 1;
-                
-                *summary.level_distribution.entry(entry.level.clone()).or_insert(0) += 1;
-                *summary.component_counts.entry(entry.component.clone()).or_insert(0) += 1;
-                
-                match entry.level.as_str() {
-                    "ERROR" => summary.error_count += 1,
-                    "WARN" => summary.warning_count += 1,
-                    _ => {}
-                }
-            }
+        LogAnalyzer {
+            error_pattern: Regex::new(r"ERROR").unwrap(),
+            warning_pattern: Regex::new(r"WARNING").unwrap(),
+            info_pattern: Regex::new(r"INFO").unwrap(),
         }
-
-        Ok(summary)
     }
 
-    pub fn find_errors(&self, path: &str) -> std::io::Result<Vec<LogEntry>> {
-        let file = File::open(path)?;
+    pub fn analyze_log_file(&self, file_path: &str) -> Result<HashMap<String, usize>, String> {
+        let file = File::open(file_path)
+            .map_err(|e| format!("Failed to open log file: {}", e))?;
+        
         let reader = BufReader::new(file);
+        let mut stats = HashMap::new();
         
-        let mut errors = Vec::new();
-        
-        for line_result in reader.lines() {
-            let line = line_result?;
-            if let Some(entry) = self.parse_line(&line) {
-                if entry.level == "ERROR" {
-                    errors.push(entry);
-                }
+        for line in reader.lines() {
+            let line = line.map_err(|e| format!("Failed to read line: {}", e))?;
+            
+            if self.error_pattern.is_match(&line) {
+                *stats.entry("errors".to_string()).or_insert(0) += 1;
+            } else if self.warning_pattern.is_match(&line) {
+                *stats.entry("warnings".to_string()).or_insert(0) += 1;
+            } else if self.info_pattern.is_match(&line) {
+                *stats.entry("info".to_string()).or_insert(0) += 1;
             }
         }
         
-        Ok(errors)
+        Ok(stats)
+    }
+
+    pub fn generate_report(&self, stats: &HashMap<String, usize>) -> String {
+        let mut report = String::new();
+        report.push_str("Log Analysis Report\n");
+        report.push_str("===================\n");
+        
+        for (level, count) in stats {
+            report.push_str(&format!("{}: {}\n", level, count));
+        }
+        
+        let total: usize = stats.values().sum();
+        report.push_str(&format!("\nTotal log entries analyzed: {}", total));
+        
+        report
     }
 }
 
-impl LogSummary {
-    pub fn print_report(&self) {
-        println!("Log Analysis Report");
-        println!("===================");
-        println!("Total entries: {}", self.total_entries);
-        println!("Errors: {}", self.error_count);
-        println!("Warnings: {}", self.warning_count);
-        println!("\nLevel Distribution:");
-        for (level, count) in &self.level_distribution {
-            println!("  {}: {}", level, count);
-        }
-        println!("\nComponent Activity:");
-        for (component, count) in &self.component_counts {
-            println!("  {}: {}", component, count);
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_log_analysis() {
+        let analyzer = LogAnalyzer::new();
+        
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "INFO: Application started").unwrap();
+        writeln!(temp_file, "WARNING: Memory usage high").unwrap();
+        writeln!(temp_file, "ERROR: Database connection failed").unwrap();
+        writeln!(temp_file, "INFO: User login successful").unwrap();
+        
+        let stats = analyzer.analyze_log_file(temp_file.path().to_str().unwrap()).unwrap();
+        
+        assert_eq!(stats.get("errors"), Some(&1));
+        assert_eq!(stats.get("warnings"), Some(&1));
+        assert_eq!(stats.get("info"), Some(&2));
     }
 }

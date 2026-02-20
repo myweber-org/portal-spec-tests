@@ -373,3 +373,36 @@ pub fn merge_json_files(file_paths: &[&str], output_path: &str) -> Result<(), Bo
     println!("Successfully merged JSON files into {}", output_path);
     Ok(())
 }
+use serde_json::{Value, json};
+use std::fs;
+use std::path::Path;
+use std::io;
+
+pub fn merge_json_files(file_paths: &[&str]) -> Result<Value, io::Error> {
+    let mut merged_array = Vec::new();
+
+    for path_str in file_paths {
+        let path = Path::new(path_str);
+        if !path.exists() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("File not found: {}", path_str)
+            ));
+        }
+
+        let content = fs::read_to_string(path)?;
+        let json_value: Value = serde_json::from_str(&content)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+        merged_array.push(json_value);
+    }
+
+    Ok(json!(merged_array))
+}
+
+pub fn write_merged_json(output_path: &str, value: &Value) -> Result<(), io::Error> {
+    let json_string = serde_json::to_string_pretty(value)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    
+    fs::write(output_path, json_string)
+}

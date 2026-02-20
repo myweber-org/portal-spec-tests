@@ -2562,3 +2562,174 @@ impl ValidationRule {
         }
     }
 }
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataRecord {
+    pub id: u64,
+    pub timestamp: i64,
+    pub values: HashMap<String, f64>,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug)]
+pub enum ProcessingError {
+    InvalidData(String),
+    TransformationError(String),
+    ValidationError(String),
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProcessingError::InvalidData(msg) => write!(f, "Invalid data: {}", msg),
+            ProcessingError::TransformationError(msg) => write!(f, "Transformation error: {}", msg),
+            ProcessingError::ValidationError(msg) => write!(f, "Validation error: {}", msg),
+        }
+    }
+}
+
+impl Error for ProcessingError {}
+
+pub struct DataProcessor {
+    validation_rules: Vec<Box<dyn Fn(&DataRecord) -> Result<(), ProcessingError>>>,
+    transformation_pipeline: Vec<Box<dyn Fn(DataRecord) -> Result<DataRecord, ProcessingError>>>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            validation_rules: Vec::new(),
+            transformation_pipeline: Vec::new(),
+        }
+    }
+
+    pub fn add_validation_rule<F>(&mut self, rule: F)
+    where
+        F: Fn(&DataRecord) -> Result<(), ProcessingError> + 'static,
+    {
+        self.validation_rules.push(Box::new(rule));
+    }
+
+    pub fn add_transformation<F>(&mut self, transform: F)
+    where
+        F: Fn(DataRecord) -> Result<DataRecord, ProcessingError> + 'static,
+    {
+        self.transformation_pipeline.push(Box::new(transform));
+    }
+
+    pub fn process(&self, mut record: DataRecord) -> Result<DataRecord, ProcessingError> {
+        for rule in &self.validation_rules {
+            rule(&record)?;
+        }
+
+        for transform in &self.transformation_pipeline {
+            record = transform(record)?;
+        }
+
+        Ok(record)
+    }
+
+    pub fn batch_process(&self, records: Vec<DataRecord>) -> Result<Vec<DataRecord>, ProcessingError> {
+        let mut results = Vec::with_capacity(records.len());
+        
+        for record in records {
+            match self.process(record) {
+                Ok(processed) => results.push(processed),
+                Err(e) => return Err(e),
+            }
+        }
+        
+        Ok(results)
+    }
+}
+
+pub fn create_default_processor() -> DataProcessor {
+    let mut processor = DataProcessor::new();
+    
+    processor.add_validation_rule(|record| {
+        if record.values.is_empty() {
+            Err(ProcessingError::ValidationError("Record has no values".to_string()))
+        } else {
+            Ok(())
+        }
+    });
+    
+    processor.add_validation_rule(|record| {
+        for (key, value) in &record.values {
+            if value.is_nan() || value.is_infinite() {
+                return Err(ProcessingError::ValidationError(
+                    format!("Invalid value for key '{}': {}", key, value)
+                ));
+            }
+        }
+        Ok(())
+    });
+    
+    processor.add_transformation(|mut record| {
+        let normalized_values: HashMap<String, f64> = record.values
+            .iter()
+            .map(|(k, v)| (k.to_lowercase(), *v))
+            .collect();
+        record.values = normalized_values;
+        Ok(record)
+    });
+    
+    processor.add_transformation(|mut record| {
+        record.tags.sort();
+        record.tags.dedup();
+        Ok(record)
+    });
+    
+    processor
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_data_processing() {
+        let processor = create_default_processor();
+        
+        let mut values = HashMap::new();
+        values.insert("TEMPERATURE".to_string(), 25.5);
+        values.insert("PRESSURE".to_string(), 1013.25);
+        
+        let record = DataRecord {
+            id: 1,
+            timestamp: 1625097600,
+            values,
+            tags: vec!["sensor".to_string(), "room".to_string(), "sensor".to_string()],
+        };
+        
+        let result = processor.process(record);
+        assert!(result.is_ok());
+        
+        let processed = result.unwrap();
+        assert!(processed.values.contains_key("temperature"));
+        assert!(processed.values.contains_key("pressure"));
+        assert_eq!(processed.tags.len(), 2);
+    }
+    
+    #[test]
+    fn test_validation_error() {
+        let processor = create_default_processor();
+        
+        let mut values = HashMap::new();
+        values.insert("INVALID".to_string(), f64::NAN);
+        
+        let record = DataRecord {
+            id: 2,
+            timestamp: 1625097600,
+            values,
+            tags: vec![],
+        };
+        
+        let result = processor.process(record);
+        assert!(result.is_err());
+    }
+}

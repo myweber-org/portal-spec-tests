@@ -696,3 +696,170 @@ mod tests {
         assert_eq!(entries[0].service, "api");
     }
 }
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+use chrono::{DateTime, FixedOffset};
+use serde_json::Value;
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum LogParseError {
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("JSON parse error: {0}")]
+    Json(#[from] serde_json::Error),
+    #[error("Missing timestamp field in log entry")]
+    MissingTimestamp,
+    #[error("Invalid timestamp format")]
+    InvalidTimestamp,
+}
+
+pub struct LogEntry {
+    pub timestamp: DateTime<FixedOffset>,
+    pub level: String,
+    pub message: String,
+    pub raw_data: Value,
+}
+
+pub struct LogParser {
+    min_timestamp: Option<DateTime<FixedOffset>>,
+    max_timestamp: Option<DateTime<FixedOffset>>,
+    level_filter: Option<String>,
+}
+
+impl LogParser {
+    pub fn new() -> Self {
+        LogParser {
+            min_timestamp: None,
+            max_timestamp: None,
+            level_filter: None,
+        }
+    }
+
+    pub fn with_time_range(
+        mut self,
+        min: Option<DateTime<FixedOffset>>,
+        max: Option<DateTime<FixedOffset>>,
+    ) -> Self {
+        self.min_timestamp = min;
+        self.max_timestamp = max;
+        self
+    }
+
+    pub fn with_level_filter(mut self, level: &str) -> Self {
+        self.level_filter = Some(level.to_lowercase());
+        self
+    }
+
+    pub fn parse_file<P: AsRef<Path>>(&self, path: P) -> Result<Vec<LogEntry>, LogParseError> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut entries = Vec::new();
+
+        for line in reader.lines() {
+            let line = line?;
+            if line.trim().is_empty() {
+                continue;
+            }
+
+            match self.parse_line(&line) {
+                Ok(Some(entry)) => entries.push(entry),
+                Ok(None) => continue,
+                Err(e) => eprintln!("Skipping invalid log line: {}", e),
+            }
+        }
+
+        Ok(entries)
+    }
+
+    fn parse_line(&self, line: &str) -> Result<Option<LogEntry>, LogParseError> {
+        let json_value: Value = serde_json::from_str(line)?;
+
+        let timestamp_str = json_value["timestamp"]
+            .as_str()
+            .ok_or(LogParseError::MissingTimestamp)?;
+
+        let timestamp = DateTime::parse_from_rfc3339(timestamp_str)
+            .map_err(|_| LogParseError::InvalidTimestamp)?;
+
+        if let Some(min) = self.min_timestamp {
+            if timestamp < min {
+                return Ok(None);
+            }
+        }
+
+        if let Some(max) = self.max_timestamp {
+            if timestamp > max {
+                return Ok(None);
+            }
+        }
+
+        let level = json_value["level"]
+            .as_str()
+            .unwrap_or("unknown")
+            .to_string();
+
+        if let Some(filter_level) = &self.level_filter {
+            if level.to_lowercase() != *filter_level {
+                return Ok(None);
+            }
+        }
+
+        let message = json_value["message"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+
+        Ok(Some(LogEntry {
+            timestamp,
+            level,
+            message,
+            raw_data: json_value,
+        }))
+    }
+
+    pub fn count_by_level(entries: &[LogEntry]) -> std::collections::HashMap<String, usize> {
+        let mut counts = std::collections::HashMap::new();
+        for entry in entries {
+            *counts.entry(entry.level.clone()).or_insert(0) += 1;
+        }
+        counts
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    #[test]
+    fn test_parse_valid_log() {
+        let parser = LogParser::new();
+        let log_line = r#"{"timestamp":"2023-10-05T14:30:00+00:00","level":"INFO","message":"Service started","user":"admin"}"#;
+        
+        let result = parser.parse_line(log_line);
+        assert!(result.is_ok());
+        
+        if let Ok(Some(entry)) = result {
+            assert_eq!(entry.level, "INFO");
+            assert_eq!(entry.message, "Service started");
+        }
+    }
+
+    #[test]
+    fn test_time_filter() {
+        let min_time = FixedOffset::east_opt(0)
+            .unwrap()
+            .with_ymd_and_hms(2023, 10, 5, 14, 0, 0)
+            .unwrap();
+        
+        let parser = LogParser::new().with_time_range(Some(min_time), None);
+        
+        let early_log = r#"{"timestamp":"2023-10-05T13:59:59+00:00","level":"INFO","message":"Old log"}"#;
+        let late_log = r#"{"timestamp":"2023-10-05T14:01:00+00:00","level":"INFO","message":"New log"}"#;
+        
+        assert!(parser.parse_line(early_log).unwrap().is_none());
+        assert!(parser.parse_line(late_log).unwrap().is_some());
+    }
+}

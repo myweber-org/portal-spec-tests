@@ -296,3 +296,119 @@ fn main() -> Result<(), Box<dyn Error>> {
     
     Ok(())
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufReader, BufWriter};
+use std::path::Path;
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    id: u32,
+    name: String,
+    category: String,
+    value: f64,
+    active: bool,
+}
+
+#[derive(Debug)]
+struct DataProcessor {
+    records: Vec<Record>,
+}
+
+impl DataProcessor {
+    fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut csv_reader = csv::Reader::from_reader(reader);
+
+        for result in csv_reader.deserialize() {
+            let record: Record = result?;
+            self.records.push(record);
+        }
+
+        Ok(())
+    }
+
+    fn filter_by_category(&self, category: &str) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|record| record.category == category)
+            .collect()
+    }
+
+    fn calculate_average_value(&self) -> Option<f64> {
+        if self.records.is_empty() {
+            return None;
+        }
+
+        let sum: f64 = self.records.iter().map(|record| record.value).sum();
+        Some(sum / self.records.len() as f64)
+    }
+
+    fn get_active_records(&self) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|record| record.active)
+            .collect()
+    }
+
+    fn save_filtered_to_csv<P: AsRef<Path>>(
+        &self,
+        path: P,
+        records: Vec<&Record>,
+    ) -> Result<(), Box<dyn Error>> {
+        let file = File::create(path)?;
+        let writer = BufWriter::new(file);
+        let mut csv_writer = csv::Writer::from_writer(writer);
+
+        for record in records {
+            csv_writer.serialize(record)?;
+        }
+
+        csv_writer.flush()?;
+        Ok(())
+    }
+
+    fn find_max_value_record(&self) -> Option<&Record> {
+        self.records.iter().max_by(|a, b| {
+            a.value
+                .partial_cmp(&b.value)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+    }
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let mut processor = DataProcessor::new();
+
+    match processor.load_from_csv("data/input.csv") {
+        Ok(_) => println!("Successfully loaded records"),
+        Err(e) => eprintln!("Error loading CSV: {}", e),
+    }
+
+    let electronics = processor.filter_by_category("Electronics");
+    println!("Found {} electronics records", electronics.len());
+
+    if let Some(avg) = processor.calculate_average_value() {
+        println!("Average value: {:.2}", avg);
+    }
+
+    let active_records = processor.get_active_records();
+    println!("Active records: {}", active_records.len());
+
+    if let Some(max_record) = processor.find_max_value_record() {
+        println!("Max value record: {:?}", max_record);
+    }
+
+    processor.save_filtered_to_csv("data/filtered.csv", electronics)?;
+
+    Ok(())
+}

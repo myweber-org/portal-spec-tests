@@ -1141,4 +1141,97 @@ mod tests {
         let average = processor.get_average_value().unwrap();
         assert!((average - 15.416666).abs() < 0.001);
     }
+}use std::collections::HashMap;
+
+pub struct DataProcessor {
+    cache: HashMap<String, Vec<f64>>,
+    validation_rules: Vec<ValidationRule>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ValidationRule {
+    pub min_value: Option<f64>,
+    pub max_value: Option<f64>,
+    pub required: bool,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            cache: HashMap::new(),
+            validation_rules: vec![ValidationRule {
+                min_value: Some(0.0),
+                max_value: Some(100.0),
+                required: true,
+            }],
+        }
+    }
+
+    pub fn process_dataset(&mut self, dataset_id: &str, data: &[f64]) -> Result<Vec<f64>, String> {
+        if data.is_empty() {
+            return Err("Dataset cannot be empty".to_string());
+        }
+
+        for value in data {
+            if !self.validate_value(*value) {
+                return Err(format!("Value {} fails validation", value));
+            }
+        }
+
+        let transformed: Vec<f64> = data.iter().map(|&x| x * 2.0).collect();
+        self.cache.insert(dataset_id.to_string(), transformed.clone());
+        
+        Ok(transformed)
+    }
+
+    pub fn get_cached_data(&self, dataset_id: &str) -> Option<&Vec<f64>> {
+        self.cache.get(dataset_id)
+    }
+
+    fn validate_value(&self, value: f64) -> bool {
+        self.validation_rules.iter().all(|rule| {
+            if let Some(min) = rule.min_value {
+                if value < min {
+                    return false;
+                }
+            }
+            if let Some(max) = rule.max_value {
+                if value > max {
+                    return false;
+                }
+            }
+            true
+        })
+    }
+
+    pub fn add_validation_rule(&mut self, rule: ValidationRule) {
+        self.validation_rules.push(rule);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_process_valid_data() {
+        let mut processor = DataProcessor::new();
+        let data = vec![10.0, 20.0, 30.0];
+        let result = processor.process_dataset("test1", &data);
+        
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), vec![20.0, 40.0, 60.0]);
+    }
+
+    #[test]
+    fn test_cache_functionality() {
+        let mut processor = DataProcessor::new();
+        let data = vec![5.0, 15.0];
+        
+        processor.process_dataset("cached", &data).unwrap();
+        let cached = processor.get_cached_data("cached");
+        
+        assert!(cached.is_some());
+        assert_eq!(cached.unwrap(), &vec![10.0, 30.0]);
+    }
 }

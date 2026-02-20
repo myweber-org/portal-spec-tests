@@ -118,4 +118,86 @@ mod tests {
         assert_eq!(summary.error_categories.get("network"), Some(&1));
         assert_eq!(summary.error_categories.get("authentication"), Some(&1));
     }
+}use std::collections::HashMap;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use regex::Regex;
+
+#[derive(Debug)]
+pub struct LogEntry {
+    timestamp: String,
+    level: String,
+    message: String,
+}
+
+pub struct LogAnalyzer {
+    entries: Vec<LogEntry>,
+    level_counts: HashMap<String, usize>,
+}
+
+impl LogAnalyzer {
+    pub fn new() -> Self {
+        LogAnalyzer {
+            entries: Vec::new(),
+            level_counts: HashMap::new(),
+        }
+    }
+
+    pub fn parse_file(&mut self, filepath: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let file = File::open(filepath)?;
+        let reader = BufReader::new(file);
+        let log_pattern = Regex::new(r"\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\] (\w+): (.+)")?;
+
+        for line in reader.lines() {
+            let line = line?;
+            if let Some(captures) = log_pattern.captures(&line) {
+                let entry = LogEntry {
+                    timestamp: captures[1].to_string(),
+                    level: captures[2].to_string(),
+                    message: captures[3].to_string(),
+                };
+
+                *self.level_counts.entry(entry.level.clone()).or_insert(0) += 1;
+                self.entries.push(entry);
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn get_level_summary(&self) -> &HashMap<String, usize> {
+        &self.level_counts
+    }
+
+    pub fn count_entries(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn filter_by_level(&self, level: &str) -> Vec<&LogEntry> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.level == level)
+            .collect()
+    }
+}
+
+pub fn analyze_logs(filepath: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let mut analyzer = LogAnalyzer::new();
+    analyzer.parse_file(filepath)?;
+
+    println!("Total log entries: {}", analyzer.count_entries());
+    println!("Level distribution:");
+    for (level, count) in analyzer.get_level_summary() {
+        println!("  {}: {}", level, count);
+    }
+
+    let error_logs = analyzer.filter_by_level("ERROR");
+    if !error_logs.is_empty() {
+        println!("\nError entries found:");
+        for entry in error_logs.iter().take(5) {
+            println!("  [{}] {}", entry.timestamp, entry.message);
+        }
+    }
+
+    Ok(())
 }

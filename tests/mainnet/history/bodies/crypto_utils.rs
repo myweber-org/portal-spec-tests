@@ -68,3 +68,19 @@ mod tests {
         assert!(result.is_err());
     }
 }
+use rand::{thread_rng, Rng};
+use rand::distributions::Alphanumeric;
+
+pub fn generate_token(length: usize) -> String {
+    let rng = thread_rng();
+    rng.sample_iter(&Alphanumeric)
+        .take(length)
+        .map(char::from)
+        .collect()
+}
+
+pub fn generate_secure_token() -> String {
+    let mut buffer = [0u8; 32];
+    thread_rng().fill(&mut buffer);
+    hex::encode(buffer)
+}

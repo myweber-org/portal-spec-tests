@@ -457,4 +457,88 @@ mod tests {
         fs::remove_file(test_input).unwrap();
         fs::remove_file(test_output).unwrap();
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug)]
+pub struct CsvRecord {
+    pub fields: Vec<String>,
+}
+
+pub struct CsvParser {
+    delimiter: char,
+    has_header: bool,
+}
+
+impl CsvParser {
+    pub fn new(delimiter: char, has_header: bool) -> Self {
+        CsvParser {
+            delimiter,
+            has_header,
+        }
+    }
+
+    pub fn parse_file<P: AsRef<Path>>(&self, path: P) -> Result<Vec<CsvRecord>, Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut records = Vec::new();
+        let mut lines = reader.lines().enumerate();
+
+        if self.has_header {
+            lines.next();
+        }
+
+        for (line_num, line) in lines {
+            let line = line?;
+            let fields: Vec<String> = line
+                .split(self.delimiter)
+                .map(|s| s.trim().to_string())
+                .collect();
+
+            if fields.is_empty() {
+                continue;
+            }
+
+            records.push(CsvRecord { fields });
+        }
+
+        Ok(records)
+    }
+
+    pub fn validate_records(&self, records: &[CsvRecord]) -> Result<(), String> {
+        if records.is_empty() {
+            return Err("No records found".to_string());
+        }
+
+        let expected_len = records[0].fields.len();
+        for (idx, record) in records.iter().enumerate() {
+            if record.fields.len() != expected_len {
+                return Err(format!(
+                    "Record {} has {} fields, expected {}",
+                    idx,
+                    record.fields.len(),
+                    expected_len
+                ));
+            }
+        }
+
+        Ok(())
+    }
+}
+
+pub fn process_csv_data(records: &[CsvRecord]) -> Vec<Vec<String>> {
+    let mut result = Vec::new();
+    
+    for record in records {
+        let processed_fields: Vec<String> = record
+            .fields
+            .iter()
+            .map(|field| field.to_uppercase())
+            .collect();
+        result.push(processed_fields);
+    }
+    
+    result
 }

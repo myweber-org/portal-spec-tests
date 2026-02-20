@@ -646,3 +646,130 @@ mod tests {
         processor.normalize_data();
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+pub struct DataProcessor {
+    delimiter: char,
+    has_header: bool,
+}
+
+impl DataProcessor {
+    pub fn new(delimiter: char, has_header: bool) -> Self {
+        DataProcessor {
+            delimiter,
+            has_header,
+        }
+    }
+
+    pub fn process_file<P: AsRef<Path>>(&self, file_path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        let mut records = Vec::new();
+
+        for (line_number, line) in reader.lines().enumerate() {
+            let line = line?;
+            
+            if line.is_empty() {
+                continue;
+            }
+
+            if self.has_header && line_number == 0 {
+                continue;
+            }
+
+            let fields: Vec<String> = line
+                .split(self.delimiter)
+                .map(|s| s.trim().to_string())
+                .collect();
+
+            if fields.iter().any(|f| f.is_empty()) {
+                return Err(format!("Empty field detected at line {}", line_number + 1).into());
+            }
+
+            records.push(fields);
+        }
+
+        if records.is_empty() {
+            return Err("No valid data records found".into());
+        }
+
+        Ok(records)
+    }
+
+    pub fn calculate_statistics(&self, data: &[Vec<String>]) -> Result<(f64, f64, f64), Box<dyn Error>> {
+        let mut values = Vec::new();
+
+        for record in data {
+            for field in record {
+                if let Ok(num) = field.parse::<f64>() {
+                    values.push(num);
+                }
+            }
+        }
+
+        if values.is_empty() {
+            return Err("No numeric values found for statistics".into());
+        }
+
+        let sum: f64 = values.iter().sum();
+        let count = values.len() as f64;
+        let mean = sum / count;
+
+        let variance: f64 = values.iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>() / count;
+
+        let std_dev = variance.sqrt();
+
+        Ok((mean, variance, std_dev))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_process_csv() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,value,score").unwrap();
+        writeln!(temp_file, "1,10.5,85").unwrap();
+        writeln!(temp_file, "2,20.3,92").unwrap();
+        writeln!(temp_file, "3,15.7,88").unwrap();
+
+        let processor = DataProcessor::new(',', true);
+        let result = processor.process_file(temp_file.path());
+
+        assert!(result.is_ok());
+        let data = result.unwrap();
+        assert_eq!(data.len(), 3);
+        assert_eq!(data[0], vec!["1", "10.5", "85"]);
+    }
+
+    #[test]
+    fn test_statistics_calculation() {
+        let data = vec![
+            vec!["10.5".to_string(), "85".to_string()],
+            vec!["20.3".to_string(), "92".to_string()],
+            vec!["15.7".to_string(), "88".to_string()],
+        ];
+
+        let processor = DataProcessor::new(',', false);
+        let stats = processor.calculate_statistics(&data);
+
+        assert!(stats.is_ok());
+        let (mean, variance, std_dev) = stats.unwrap();
+        
+        let expected_values = vec![10.5, 85.0, 20.3, 92.0, 15.7, 88.0];
+        let expected_mean = expected_values.iter().sum::<f64>() / expected_values.len() as f64;
+        
+        assert!((mean - expected_mean).abs() < 0.001);
+        assert!(variance > 0.0);
+        assert!(std_dev > 0.0);
+    }
+}

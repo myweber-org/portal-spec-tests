@@ -2169,4 +2169,68 @@ mod tests {
         assert_eq!(groups.get("A").unwrap().len(), 1);
         assert_eq!(groups.get("B").unwrap().len(), 1);
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+pub struct DataProcessor {
+    delimiter: char,
+    has_header: bool,
+}
+
+impl DataProcessor {
+    pub fn new(delimiter: char, has_header: bool) -> Self {
+        DataProcessor {
+            delimiter,
+            has_header,
+        }
+    }
+
+    pub fn process_file<P: AsRef<Path>>(&self, file_path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        let mut records = Vec::new();
+        let mut lines = reader.lines();
+
+        if self.has_header {
+            lines.next();
+        }
+
+        for line_result in lines {
+            let line = line_result?;
+            let fields: Vec<String> = line
+                .split(self.delimiter)
+                .map(|s| s.trim().to_string())
+                .collect();
+            
+            if !fields.is_empty() && !fields.iter().all(|f| f.is_empty()) {
+                records.push(fields);
+            }
+        }
+
+        Ok(records)
+    }
+
+    pub fn validate_records(&self, records: &[Vec<String>], expected_columns: usize) -> Result<(), String> {
+        for (index, record) in records.iter().enumerate() {
+            if record.len() != expected_columns {
+                return Err(format!(
+                    "Record {} has {} columns, expected {}",
+                    index + 1,
+                    record.len(),
+                    expected_columns
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+pub fn calculate_average(numbers: &[f64]) -> Option<f64> {
+    if numbers.is_empty() {
+        return None;
+    }
+    let sum: f64 = numbers.iter().sum();
+    Some(sum / numbers.len() as f64)
 }

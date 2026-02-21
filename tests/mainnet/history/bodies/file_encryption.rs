@@ -291,3 +291,81 @@ mod tests {
         assert_eq!(original_content.to_vec(), decrypted_content);
     }
 }
+use std::fs;
+use std::io::{self, Read, Write};
+
+pub fn xor_encrypt(data: &[u8], key: &[u8]) -> Vec<u8> {
+    data.iter()
+        .enumerate()
+        .map(|(i, &byte)| byte ^ key[i % key.len()])
+        .collect()
+}
+
+pub fn process_file(input_path: &str, output_path: &str, key: &str) -> io::Result<()> {
+    let mut input_file = fs::File::open(input_path)?;
+    let mut buffer = Vec::new();
+    input_file.read_to_end(&mut buffer)?;
+
+    let processed_data = xor_encrypt(&buffer, key.as_bytes());
+
+    let mut output_file = fs::File::create(output_path)?;
+    output_file.write_all(&processed_data)?;
+
+    Ok(())
+}
+
+pub fn validate_key(key: &str) -> bool {
+    !key.is_empty() && key.len() <= 256
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_xor_symmetry() {
+        let data = b"test data";
+        let key = b"secret";
+        
+        let encrypted = xor_encrypt(data, key);
+        let decrypted = xor_encrypt(&encrypted, key);
+        
+        assert_eq!(data.to_vec(), decrypted);
+    }
+
+    #[test]
+    fn test_file_processing() {
+        let input_content = b"Hello, World!";
+        let key = "test_key";
+        
+        let mut input_file = NamedTempFile::new().unwrap();
+        input_file.write_all(input_content).unwrap();
+        
+        let output_file = NamedTempFile::new().unwrap();
+        
+        process_file(
+            input_file.path().to_str().unwrap(),
+            output_file.path().to_str().unwrap(),
+            key
+        ).unwrap();
+        
+        let mut processed_content = Vec::new();
+        fs::File::open(output_file.path())
+            .unwrap()
+            .read_to_end(&mut processed_content)
+            .unwrap();
+        
+        let restored = xor_encrypt(&processed_content, key.as_bytes());
+        assert_eq!(input_content.to_vec(), restored);
+    }
+
+    #[test]
+    fn test_key_validation() {
+        assert!(validate_key("valid"));
+        assert!(!validate_key(""));
+        
+        let long_key = "a".repeat(257);
+        assert!(!validate_key(&long_key));
+    }
+}

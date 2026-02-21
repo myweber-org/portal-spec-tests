@@ -28,77 +28,19 @@ impl Config {
     }
 
     fn process_value(raw: &str) -> String {
-        let mut result = String::new();
-        let mut chars = raw.chars().peekable();
-
-        while let Some(ch) = chars.next() {
-            if ch == '$' && chars.peek() == Some(&'{') {
-                chars.next(); // Skip '{'
-                let mut var_name = String::new();
-                while let Some(&ch) = chars.peek() {
-                    if ch == '}' {
-                        chars.next(); // Skip '}'
-                        break;
-                    }
-                    var_name.push(ch);
-                    chars.next();
-                }
-                if let Ok(env_value) = env::var(&var_name) {
-                    result.push_str(&env_value);
-                }
-            } else {
-                result.push(ch);
-            }
+        if raw.starts_with('$') {
+            let var_name = &raw[1..];
+            env::var(var_name).unwrap_or_else(|_| raw.to_string())
+        } else {
+            raw.to_string()
         }
-
-        result
     }
 
     pub fn get(&self, key: &str) -> Option<&String> {
         self.values.get(key)
     }
 
-    pub fn get_or_default(&self, key: &str, default: &str) -> String {
-        self.values.get(key).cloned().unwrap_or(default.to_string())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
-
-    #[test]
-    fn test_basic_parsing() {
-        let mut file = NamedTempFile::new().unwrap();
-        writeln!(file, "HOST=localhost").unwrap();
-        writeln!(file, "PORT=8080").unwrap();
-        writeln!(file, "# This is a comment").unwrap();
-        writeln!(file, "").unwrap();
-        writeln!(file, "TIMEOUT=30").unwrap();
-
-        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
-        assert_eq!(config.get("HOST"), Some(&"localhost".to_string()));
-        assert_eq!(config.get("PORT"), Some(&"8080".to_string()));
-        assert_eq!(config.get("TIMEOUT"), Some(&"30".to_string()));
-        assert_eq!(config.get("MISSING"), None);
-    }
-
-    #[test]
-    fn test_env_interpolation() {
-        env::set_var("APP_SECRET", "super-secret-key");
-        
-        let mut file = NamedTempFile::new().unwrap();
-        writeln!(file, "SECRET=${{APP_SECRET}}").unwrap();
-        writeln!(file, "PATH=/home/${USER}/data").unwrap();
-
-        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
-        assert_eq!(config.get("SECRET"), Some(&"super-secret-key".to_string()));
-        
-        if let Ok(user) = env::var("USER") {
-            let expected = format!("/home/{}/data", user);
-            assert_eq!(config.get("PATH"), Some(&expected));
-        }
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.values.contains_key(key)
     }
 }

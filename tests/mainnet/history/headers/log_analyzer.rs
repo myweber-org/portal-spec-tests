@@ -78,4 +78,92 @@ mod tests {
         assert_eq!(stats.get("warnings"), Some(&1));
         assert_eq!(stats.get("info"), Some(&2));
     }
+}use std::collections::HashMap;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use regex::Regex;
+
+#[derive(Debug)]
+pub struct LogEntry {
+    timestamp: String,
+    level: String,
+    message: String,
+    metadata: HashMap<String, String>,
+}
+
+pub struct LogAnalyzer {
+    entries: Vec<LogEntry>,
+}
+
+impl LogAnalyzer {
+    pub fn new() -> Self {
+        LogAnalyzer {
+            entries: Vec::new(),
+        }
+    }
+
+    pub fn load_from_file(&mut self, path: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let log_pattern = Regex::new(r"\[(?P<timestamp>[^\]]+)\] \[(?P<level>\w+)\] (?P<message>.+)")?;
+
+        for line in reader.lines() {
+            let line = line?;
+            if let Some(captures) = log_pattern.captures(&line) {
+                let entry = LogEntry {
+                    timestamp: captures["timestamp"].to_string(),
+                    level: captures["level"].to_string(),
+                    message: captures["message"].to_string(),
+                    metadata: HashMap::new(),
+                };
+                self.entries.push(entry);
+            }
+        }
+        Ok(())
+    }
+
+    pub fn filter_by_level(&self, level: &str) -> Vec<&LogEntry> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.level.to_lowercase() == level.to_lowercase())
+            .collect()
+    }
+
+    pub fn count_by_level(&self) -> HashMap<String, usize> {
+        let mut counts = HashMap::new();
+        for entry in &self.entries {
+            *counts.entry(entry.level.clone()).or_insert(0) += 1;
+        }
+        counts
+    }
+
+    pub fn search_messages(&self, pattern: &str) -> Vec<&LogEntry> {
+        let search_regex = Regex::new(pattern).unwrap_or_else(|_| Regex::new("").unwrap());
+        self.entries
+            .iter()
+            .filter(|entry| search_regex.is_match(&entry.message))
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_log_parsing() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "[2023-10-01 12:00:00] [INFO] Application started").unwrap();
+        writeln!(temp_file, "[2023-10-01 12:00:05] [ERROR] Failed to connect to database").unwrap();
+        writeln!(temp_file, "[2023-10-01 12:00:10] [WARN] High memory usage detected").unwrap();
+
+        let mut analyzer = LogAnalyzer::new();
+        analyzer.load_from_file(temp_file.path().to_str().unwrap()).unwrap();
+
+        assert_eq!(analyzer.entries.len(), 3);
+        assert_eq!(analyzer.filter_by_level("ERROR").len(), 1);
+        assert_eq!(analyzer.count_by_level()["INFO"], 1);
+    }
 }

@@ -286,3 +286,54 @@ mod tests {
         assert!(!cleaner.validate_email("user@"));
     }
 }
+use regex::Regex;
+use std::collections::HashSet;
+
+pub fn clean_and_normalize_text(input: &str) -> String {
+    let stop_words: HashSet<&str> = [
+        "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with", "by"
+    ].iter().cloned().collect();
+
+    let re = Regex::new(r"[^\w\s]").unwrap();
+    let cleaned = re.replace_all(input, "").to_lowercase();
+    
+    cleaned.split_whitespace()
+        .filter(|word| !stop_words.contains(word))
+        .collect::<Vec<&str>>()
+        .join(" ")
+}
+
+pub fn remove_duplicate_lines(text: &str) -> String {
+    let mut seen = HashSet::new();
+    text.lines()
+        .filter(|line| {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || seen.contains(trimmed) {
+                false
+            } else {
+                seen.insert(trimmed.to_string());
+                true
+            }
+        })
+        .collect::<Vec<&str>>()
+        .join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_clean_text() {
+        let input = "Hello, World! This is a test.";
+        let result = clean_and_normalize_text(input);
+        assert_eq!(result, "hello world this test");
+    }
+
+    #[test]
+    fn test_remove_duplicates() {
+        let input = "line1\nline2\nline1\nline3\nline2";
+        let result = remove_duplicate_lines(input);
+        assert_eq!(result, "line1\nline2\nline3");
+    }
+}

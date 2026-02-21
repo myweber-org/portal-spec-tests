@@ -783,3 +783,179 @@ mod tests {
         println!("{}", processor.get_summary());
     }
 }
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataRecord {
+    pub id: u64,
+    pub timestamp: i64,
+    pub values: HashMap<String, f64>,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug)]
+pub enum ProcessingError {
+    InvalidData(String),
+    MissingField(String),
+    ConversionError(String),
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProcessingError::InvalidData(msg) => write!(f, "Invalid data: {}", msg),
+            ProcessingError::MissingField(field) => write!(f, "Missing required field: {}", field),
+            ProcessingError::ConversionError(msg) => write!(f, "Conversion error: {}", msg),
+        }
+    }
+}
+
+impl Error for ProcessingError {}
+
+pub struct DataProcessor {
+    validation_rules: HashMap<String, Box<dyn Fn(&f64) -> bool>>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            validation_rules: HashMap::new(),
+        }
+    }
+
+    pub fn add_validation_rule<F>(&mut self, field: &str, validator: F)
+    where
+        F: Fn(&f64) -> bool + 'static,
+    {
+        self.validation_rules
+            .insert(field.to_string(), Box::new(validator));
+    }
+
+    pub fn validate_record(&self, record: &DataRecord) -> Result<(), ProcessingError> {
+        for (field, value) in &record.values {
+            if let Some(validator) = self.validation_rules.get(field) {
+                if !validator(value) {
+                    return Err(ProcessingError::InvalidData(format!(
+                        "Field '{}' failed validation",
+                        field
+                    )));
+                }
+            }
+        }
+
+        if record.values.is_empty() {
+            return Err(ProcessingError::InvalidData(
+                "Record contains no values".to_string(),
+            ));
+        }
+
+        if record.timestamp < 0 {
+            return Err(ProcessingError::InvalidData(
+                "Timestamp cannot be negative".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    pub fn transform_values<F>(&self, record: &mut DataRecord, transformer: F)
+    where
+        F: Fn(f64) -> f64,
+    {
+        for value in record.values.values_mut() {
+            *value = transformer(*value);
+        }
+    }
+
+    pub fn calculate_statistics(&self, records: &[DataRecord]) -> HashMap<String, f64> {
+        let mut stats = HashMap::new();
+        let mut field_sums: HashMap<String, f64> = HashMap::new();
+        let mut field_counts: HashMap<String, usize> = HashMap::new();
+
+        for record in records {
+            for (field, value) in &record.values {
+                *field_sums.entry(field.clone()).or_insert(0.0) += value;
+                *field_counts.entry(field.clone()).or_insert(0) += 1;
+            }
+        }
+
+        for (field, sum) in field_sums {
+            if let Some(count) = field_counts.get(&field) {
+                if *count > 0 {
+                    stats.insert(format!("{}_average", field), sum / (*count as f64));
+                }
+            }
+        }
+
+        stats
+    }
+
+    pub fn filter_records<F>(&self, records: Vec<DataRecord>, predicate: F) -> Vec<DataRecord>
+    where
+        F: Fn(&DataRecord) -> bool,
+    {
+        records.into_iter().filter(predicate).collect()
+    }
+
+    pub fn normalize_values(&self, record: &mut DataRecord, max_value: f64) {
+        if max_value.abs() > f64::EPSILON {
+            for value in record.values.values_mut() {
+                *value /= max_value;
+            }
+        }
+    }
+}
+
+impl Default for DataProcessor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validation() {
+        let mut processor = DataProcessor::new();
+        processor.add_validation_rule("temperature", |&v| v >= -50.0 && v <= 150.0);
+
+        let mut valid_record = DataRecord {
+            id: 1,
+            timestamp: 1625097600,
+            values: [("temperature".to_string(), 25.5)].iter().cloned().collect(),
+            tags: vec!["sensor".to_string()],
+        };
+
+        assert!(processor.validate_record(&valid_record).is_ok());
+
+        valid_record.values.insert("temperature".to_string(), 200.0);
+        assert!(processor.validate_record(&valid_record).is_err());
+    }
+
+    #[test]
+    fn test_statistics() {
+        let processor = DataProcessor::new();
+        let records = vec![
+            DataRecord {
+                id: 1,
+                timestamp: 1625097600,
+                values: [("temperature".to_string(), 20.0)].iter().cloned().collect(),
+                tags: vec![],
+            },
+            DataRecord {
+                id: 2,
+                timestamp: 1625097660,
+                values: [("temperature".to_string(), 30.0)].iter().cloned().collect(),
+                tags: vec![],
+            },
+        ];
+
+        let stats = processor.calculate_statistics(&records);
+        assert_eq!(stats.get("temperature_average"), Some(&25.0));
+    }
+}

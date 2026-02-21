@@ -185,3 +185,143 @@ mod tests {
         assert!(result.is_err());
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug, Clone)]
+pub struct CsvRecord {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub active: bool,
+}
+
+pub struct CsvProcessor {
+    records: Vec<CsvRecord>,
+}
+
+impl CsvProcessor {
+    pub fn new() -> Self {
+        CsvProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_file<P: AsRef<Path>>(&mut self, path: P) -> Result<usize, Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        
+        for (line_num, line) in reader.lines().enumerate() {
+            let line = line?;
+            if line_num == 0 {
+                continue;
+            }
+            
+            let fields: Vec<&str> = line.split(',').collect();
+            if fields.len() != 4 {
+                return Err(format!("Invalid field count at line {}", line_num + 1).into());
+            }
+            
+            let id = fields[0].parse::<u32>()?;
+            let name = fields[1].to_string();
+            let value = fields[2].parse::<f64>()?;
+            let active = fields[3].parse::<bool>()?;
+            
+            self.records.push(CsvRecord {
+                id,
+                name,
+                value,
+                active,
+            });
+        }
+        
+        Ok(self.records.len())
+    }
+
+    pub fn filter_active(&self) -> Vec<&CsvRecord> {
+        self.records
+            .iter()
+            .filter(|record| record.active)
+            .collect()
+    }
+
+    pub fn calculate_total(&self) -> f64 {
+        self.records
+            .iter()
+            .map(|record| record.value)
+            .sum()
+    }
+
+    pub fn find_by_id(&self, target_id: u32) -> Option<&CsvRecord> {
+        self.records
+            .iter()
+            .find(|record| record.id == target_id)
+    }
+
+    pub fn get_records(&self) -> &[CsvRecord] {
+        &self.records
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_csv_loading() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "id,name,value,active").unwrap();
+        writeln!(file, "1,Test1,10.5,true").unwrap();
+        writeln!(file, "2,Test2,20.0,false").unwrap();
+        
+        let mut processor = CsvProcessor::new();
+        let result = processor.load_from_file(file.path());
+        
+        assert!(result.is_ok());
+        assert_eq!(processor.get_records().len(), 2);
+    }
+
+    #[test]
+    fn test_filter_active() {
+        let mut processor = CsvProcessor::new();
+        processor.records.push(CsvRecord {
+            id: 1,
+            name: "Active".to_string(),
+            value: 10.0,
+            active: true,
+        });
+        processor.records.push(CsvRecord {
+            id: 2,
+            name: "Inactive".to_string(),
+            value: 20.0,
+            active: false,
+        });
+        
+        let active = processor.filter_active();
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].id, 1);
+    }
+
+    #[test]
+    fn test_calculate_total() {
+        let mut processor = CsvProcessor::new();
+        processor.records.push(CsvRecord {
+            id: 1,
+            name: "Item1".to_string(),
+            value: 15.5,
+            active: true,
+        });
+        processor.records.push(CsvRecord {
+            id: 2,
+            name: "Item2".to_string(),
+            value: 24.5,
+            active: true,
+        });
+        
+        assert_eq!(processor.calculate_total(), 40.0);
+    }
+}

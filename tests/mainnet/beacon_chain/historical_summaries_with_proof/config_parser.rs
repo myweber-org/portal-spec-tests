@@ -129,4 +129,110 @@ mod tests {
         assert_eq!(config.get_with_default("timeout", "100"), "30");
         assert_eq!(config.get_with_default("nonexistent", "default_value"), "default_value");
     }
+}use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::Path;
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ServerConfig {
+    pub host: String,
+    pub port: u16,
+    pub max_connections: u32,
+    pub enable_tls: bool,
+}
+
+impl Default for ServerConfig {
+    fn default() -> Self {
+        ServerConfig {
+            host: "127.0.0.1".to_string(),
+            port: 8080,
+            max_connections: 100,
+            enable_tls: false,
+        }
+    }
+}
+
+pub fn load_config<P: AsRef<Path>>(path: P) -> Result<ServerConfig, Box<dyn std::error::Error>> {
+    let config_str = fs::read_to_string(path)?;
+    let config: ServerConfig = toml::from_str(&config_str)?;
+    
+    validate_config(&config)?;
+    Ok(config)
+}
+
+pub fn load_config_with_defaults<P: AsRef<Path>>(path: P) -> Result<ServerConfig, Box<dyn std::error::Error>> {
+    match load_config(path) {
+        Ok(config) => Ok(config),
+        Err(_) => {
+            println!("Using default configuration");
+            Ok(ServerConfig::default())
+        }
+    }
+}
+
+fn validate_config(config: &ServerConfig) -> Result<(), String> {
+    if config.port == 0 {
+        return Err("Port cannot be 0".to_string());
+    }
+    
+    if config.max_connections > 10000 {
+        return Err("Maximum connections cannot exceed 10000".to_string());
+    }
+    
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_default_config() {
+        let config = ServerConfig::default();
+        assert_eq!(config.host, "127.0.0.1");
+        assert_eq!(config.port, 8080);
+        assert_eq!(config.max_connections, 100);
+        assert!(!config.enable_tls);
+    }
+
+    #[test]
+    fn test_config_validation() {
+        let valid_config = ServerConfig {
+            host: "localhost".to_string(),
+            port: 3000,
+            max_connections: 500,
+            enable_tls: true,
+        };
+        
+        assert!(validate_config(&valid_config).is_ok());
+
+        let invalid_port_config = ServerConfig {
+            host: "localhost".to_string(),
+            port: 0,
+            max_connections: 500,
+            enable_tls: true,
+        };
+        
+        assert!(validate_config(&invalid_port_config).is_err());
+    }
+
+    #[test]
+    fn test_load_config_from_file() {
+        let config_content = r#"
+            host = "0.0.0.0"
+            port = 9000
+            max_connections = 2000
+            enable_tls = true
+        "#;
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+        std::fs::write(temp_file.path(), config_content).unwrap();
+
+        let config = load_config(temp_file.path()).unwrap();
+        assert_eq!(config.host, "0.0.0.0");
+        assert_eq!(config.port, 9000);
+        assert_eq!(config.max_connections, 2000);
+        assert!(config.enable_tls);
+    }
 }

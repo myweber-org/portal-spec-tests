@@ -565,4 +565,92 @@ mod tests {
             Err(ValidationError::DuplicateTag)
         ));
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+
+pub struct DataProcessor {
+    file_path: String,
+}
+
+impl DataProcessor {
+    pub fn new(file_path: &str) -> Self {
+        DataProcessor {
+            file_path: file_path.to_string(),
+        }
+    }
+
+    pub fn process(&self) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let file = File::open(&self.file_path)?;
+        let reader = BufReader::new(file);
+        let mut records = Vec::new();
+
+        for line in reader.lines() {
+            let line = line?;
+            let fields: Vec<String> = line.split(',').map(|s| s.trim().to_string()).collect();
+            
+            if fields.len() >= 2 {
+                records.push(fields);
+            } else {
+                eprintln!("Skipping invalid record: {}", line);
+            }
+        }
+
+        if records.is_empty() {
+            return Err("No valid records found".into());
+        }
+
+        Ok(records)
+    }
+
+    pub fn calculate_average(&self, column_index: usize) -> Result<f64, Box<dyn Error>> {
+        let records = self.process()?;
+        let mut sum = 0.0;
+        let mut count = 0;
+
+        for record in records {
+            if column_index < record.len() {
+                if let Ok(value) = record[column_index].parse::<f64>() {
+                    sum += value;
+                    count += 1;
+                }
+            }
+        }
+
+        if count == 0 {
+            return Err("No valid numeric values found".into());
+        }
+
+        Ok(sum / count as f64)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_data_processor() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,salary\nAlice,30,50000\nBob,25,45000\nCharlie,35,60000").unwrap();
+        
+        let processor = DataProcessor::new(temp_file.path().to_str().unwrap());
+        let result = processor.process().unwrap();
+        
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0], vec!["name", "age", "salary"]);
+    }
+
+    #[test]
+    fn test_calculate_average() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age\nAlice,30\nBob,25\nCharlie,35").unwrap();
+        
+        let processor = DataProcessor::new(temp_file.path().to_str().unwrap());
+        let average = processor.calculate_average(1).unwrap();
+        
+        assert!((average - 30.0).abs() < 0.001);
+    }
 }

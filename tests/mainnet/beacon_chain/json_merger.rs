@@ -628,3 +628,61 @@ fn main() {
     let output = Value::Object(merged);
     println!("{}", output.to_string());
 }
+use serde_json::{Map, Value};
+use std::fs;
+use std::io;
+use std::path::Path;
+
+pub fn merge_json_files<P: AsRef<Path>>(input_paths: &[P], output_path: P) -> io::Result<()> {
+    let mut merged_object = Map::new();
+
+    for path in input_paths {
+        let content = fs::read_to_string(path)?;
+        let json_value: Value = serde_json::from_str(&content)?;
+
+        if let Value::Object(obj) = json_value {
+            for (key, value) in obj {
+                merged_object.insert(key, value);
+            }
+        } else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Input JSON is not an object",
+            ));
+        }
+    }
+
+    let merged_json = Value::Object(merged_object);
+    let json_string = serde_json::to_string_pretty(&merged_json)?;
+    fs::write(output_path, json_string)?;
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_merge_json_files() {
+        let mut file1 = NamedTempFile::new().unwrap();
+        let mut file2 = NamedTempFile::new().unwrap();
+        let output_file = NamedTempFile::new().unwrap();
+
+        writeln!(file1, r#"{"name": "Alice", "age": 30}"#).unwrap();
+        writeln!(file2, r#"{"city": "London", "active": true}"#).unwrap();
+
+        let inputs = [file1.path(), file2.path()];
+        merge_json_files(&inputs, output_file.path()).unwrap();
+
+        let result = fs::read_to_string(output_file.path()).unwrap();
+        let parsed: Value = serde_json::from_str(&result).unwrap();
+
+        assert_eq!(parsed["name"], "Alice");
+        assert_eq!(parsed["age"], 30);
+        assert_eq!(parsed["city"], "London");
+        assert_eq!(parsed["active"], true);
+    }
+}

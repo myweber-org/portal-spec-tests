@@ -482,4 +482,304 @@ mod tests {
         map.insert("key".to_string(), JsonValue::String("value".to_string()));
         assert_eq!(parser.parse(), Ok(JsonValue::Object(map)));
     }
+}use std::collections::HashMap;
+
+#[derive(Debug, PartialEq)]
+enum JsonValue {
+    Null,
+    Bool(bool),
+    Number(f64),
+    String(String),
+    Array(Vec<JsonValue>),
+    Object(HashMap<String, JsonValue>),
+}
+
+#[derive(Debug, PartialEq)]
+enum Token {
+    LeftBrace,
+    RightBrace,
+    LeftBracket,
+    RightBracket,
+    Colon,
+    Comma,
+    String(String),
+    Number(f64),
+    Boolean(bool),
+    Null,
+}
+
+struct JsonParser {
+    input: String,
+    position: usize,
+}
+
+impl JsonParser {
+    fn new(input: &str) -> Self {
+        JsonParser {
+            input: input.to_string(),
+            position: 0,
+        }
+    }
+
+    fn skip_whitespace(&mut self) {
+        while self.position < self.input.len() {
+            let c = self.input.chars().nth(self.position).unwrap();
+            if c.is_whitespace() {
+                self.position += 1;
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn parse_string(&mut self) -> Option<Token> {
+        if self.input.chars().nth(self.position)? != '"' {
+            return None;
+        }
+        self.position += 1;
+        let start = self.position;
+        while self.position < self.input.len() {
+            let c = self.input.chars().nth(self.position).unwrap();
+            if c == '"' {
+                let s = &self.input[start..self.position];
+                self.position += 1;
+                return Some(Token::String(s.to_string()));
+            }
+            self.position += 1;
+        }
+        None
+    }
+
+    fn parse_number(&mut self) -> Option<Token> {
+        let start = self.position;
+        while self.position < self.input.len() {
+            let c = self.input.chars().nth(self.position).unwrap();
+            if c.is_digit(10) || c == '.' || c == '-' || c == 'e' || c == 'E' {
+                self.position += 1;
+            } else {
+                break;
+            }
+        }
+        if start == self.position {
+            return None;
+        }
+        let num_str = &self.input[start..self.position];
+        match num_str.parse::<f64>() {
+            Ok(num) => Some(Token::Number(num)),
+            Err(_) => None,
+        }
+    }
+
+    fn parse_keyword(&mut self, keyword: &str, token: Token) -> Option<Token> {
+        if self.position + keyword.len() <= self.input.len()
+            && &self.input[self.position..self.position + keyword.len()] == keyword
+        {
+            self.position += keyword.len();
+            Some(token)
+        } else {
+            None
+        }
+    }
+
+    fn next_token(&mut self) -> Option<Token> {
+        self.skip_whitespace();
+        if self.position >= self.input.len() {
+            return None;
+        }
+
+        let c = self.input.chars().nth(self.position).unwrap();
+        match c {
+            '{' => {
+                self.position += 1;
+                Some(Token::LeftBrace)
+            }
+            '}' => {
+                self.position += 1;
+                Some(Token::RightBrace)
+            }
+            '[' => {
+                self.position += 1;
+                Some(Token::LeftBracket)
+            }
+            ']' => {
+                self.position += 1;
+                Some(Token::RightBracket)
+            }
+            ':' => {
+                self.position += 1;
+                Some(Token::Colon)
+            }
+            ',' => {
+                self.position += 1;
+                Some(Token::Comma)
+            }
+            '"' => self.parse_string(),
+            '0'..='9' | '-' => self.parse_number(),
+            't' => self.parse_keyword("true", Token::Boolean(true)),
+            'f' => self.parse_keyword("false", Token::Boolean(false)),
+            'n' => self.parse_keyword("null", Token::Null),
+            _ => None,
+        }
+    }
+
+    fn parse_value(&mut self) -> Option<JsonValue> {
+        self.skip_whitespace();
+        if self.position >= self.input.len() {
+            return None;
+        }
+
+        let c = self.input.chars().nth(self.position).unwrap();
+        match c {
+            '{' => self.parse_object(),
+            '[' => self.parse_array(),
+            '"' => {
+                if let Some(Token::String(s)) = self.parse_string() {
+                    Some(JsonValue::String(s))
+                } else {
+                    None
+                }
+            }
+            '0'..='9' | '-' => {
+                if let Some(Token::Number(n)) = self.parse_number() {
+                    Some(JsonValue::Number(n))
+                } else {
+                    None
+                }
+            }
+            't' | 'f' => {
+                if let Some(Token::Boolean(b)) = self.parse_keyword(
+                    if c == 't' { "true" } else { "false" },
+                    Token::Boolean(c == 't'),
+                ) {
+                    Some(JsonValue::Bool(b))
+                } else {
+                    None
+                }
+            }
+            'n' => {
+                if let Some(Token::Null) = self.parse_keyword("null", Token::Null) {
+                    Some(JsonValue::Null)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn parse_object(&mut self) -> Option<JsonValue> {
+        if self.input.chars().nth(self.position)? != '{' {
+            return None;
+        }
+        self.position += 1;
+
+        let mut map = HashMap::new();
+        self.skip_whitespace();
+
+        if self.input.chars().nth(self.position)? == '}' {
+            self.position += 1;
+            return Some(JsonValue::Object(map));
+        }
+
+        loop {
+            self.skip_whitespace();
+            let key = if let Some(Token::String(s)) = self.parse_string() {
+                s
+            } else {
+                return None;
+            };
+
+            self.skip_whitespace();
+            if self.input.chars().nth(self.position)? != ':' {
+                return None;
+            }
+            self.position += 1;
+
+            let value = self.parse_value()?;
+            map.insert(key, value);
+
+            self.skip_whitespace();
+            if self.position >= self.input.len() {
+                return None;
+            }
+
+            let c = self.input.chars().nth(self.position).unwrap();
+            if c == '}' {
+                self.position += 1;
+                break;
+            } else if c == ',' {
+                self.position += 1;
+                continue;
+            } else {
+                return None;
+            }
+        }
+
+        Some(JsonValue::Object(map))
+    }
+
+    fn parse_array(&mut self) -> Option<JsonValue> {
+        if self.input.chars().nth(self.position)? != '[' {
+            return None;
+        }
+        self.position += 1;
+
+        let mut arr = Vec::new();
+        self.skip_whitespace();
+
+        if self.input.chars().nth(self.position)? == ']' {
+            self.position += 1;
+            return Some(JsonValue::Array(arr));
+        }
+
+        loop {
+            let value = self.parse_value()?;
+            arr.push(value);
+
+            self.skip_whitespace();
+            if self.position >= self.input.len() {
+                return None;
+            }
+
+            let c = self.input.chars().nth(self.position).unwrap();
+            if c == ']' {
+                self.position += 1;
+                break;
+            } else if c == ',' {
+                self.position += 1;
+                continue;
+            } else {
+                return None;
+            }
+        }
+
+        Some(JsonValue::Array(arr))
+    }
+
+    fn parse(&mut self) -> Option<JsonValue> {
+        self.parse_value()
+    }
+}
+
+fn main() {
+    let json_str = r#"{
+        "name": "John",
+        "age": 30,
+        "is_student": false,
+        "grades": [85.5, 92.0, 78.5],
+        "address": {
+            "street": "123 Main St",
+            "city": "Anytown"
+        },
+        "metadata": null
+    }"#;
+
+    let mut parser = JsonParser::new(json_str);
+    match parser.parse() {
+        Some(json_value) => {
+            println!("Parsed JSON successfully");
+            println!("{:#?}", json_value);
+        }
+        None => println!("Failed to parse JSON"),
+    }
 }

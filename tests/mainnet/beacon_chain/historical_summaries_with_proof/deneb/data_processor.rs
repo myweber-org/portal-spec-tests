@@ -2668,3 +2668,157 @@ mod tests {
         assert!((std_dev - 8.164965).abs() < 0.0001);
     }
 }
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub metadata: HashMap<String, String>,
+}
+
+#[derive(Debug)]
+pub enum ProcessingError {
+    InvalidValue,
+    MissingField,
+    ValidationFailed(String),
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProcessingError::InvalidValue => write!(f, "Invalid value provided"),
+            ProcessingError::MissingField => write!(f, "Required field is missing"),
+            ProcessingError::ValidationFailed(msg) => write!(f, "Validation failed: {}", msg),
+        }
+    }
+}
+
+impl Error for ProcessingError {}
+
+pub struct DataProcessor {
+    validation_rules: Vec<Box<dyn Fn(&DataRecord) -> Result<(), ProcessingError>>>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            validation_rules: Vec::new(),
+        }
+    }
+
+    pub fn add_validation_rule<F>(&mut self, rule: F)
+    where
+        F: Fn(&DataRecord) -> Result<(), ProcessingError> + 'static,
+    {
+        self.validation_rules.push(Box::new(rule));
+    }
+
+    pub fn validate_record(&self, record: &DataRecord) -> Result<(), ProcessingError> {
+        for rule in &self.validation_rules {
+            rule(record)?;
+        }
+        Ok(())
+    }
+
+    pub fn process_records(
+        &self,
+        records: Vec<DataRecord>,
+    ) -> Result<Vec<DataRecord>, ProcessingError> {
+        let mut processed = Vec::with_capacity(records.len());
+
+        for record in records {
+            self.validate_record(&record)?;
+            let transformed = self.transform_record(record)?;
+            processed.push(transformed);
+        }
+
+        Ok(processed)
+    }
+
+    fn transform_record(&self, mut record: DataRecord) -> Result<DataRecord, ProcessingError> {
+        record.value = (record.value * 100.0).round() / 100.0;
+        
+        if !record.metadata.contains_key("processed_timestamp") {
+            record.metadata.insert(
+                "processed_timestamp".to_string(),
+                chrono::Utc::now().to_rfc3339(),
+            );
+        }
+
+        Ok(record)
+    }
+}
+
+pub fn create_default_processor() -> DataProcessor {
+    let mut processor = DataProcessor::new();
+
+    processor.add_validation_rule(|record| {
+        if record.name.trim().is_empty() {
+            Err(ProcessingError::ValidationFailed(
+                "Name cannot be empty".to_string(),
+            ))
+        } else {
+            Ok(())
+        }
+    });
+
+    processor.add_validation_rule(|record| {
+        if record.value < 0.0 {
+            Err(ProcessingError::InvalidValue)
+        } else {
+            Ok(())
+        }
+    });
+
+    processor
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_record_validation() {
+        let processor = create_default_processor();
+        let mut record = DataRecord {
+            id: 1,
+            name: "Test".to_string(),
+            value: 42.5,
+            metadata: HashMap::new(),
+        };
+
+        assert!(processor.validate_record(&record).is_ok());
+
+        record.value = -1.0;
+        assert!(processor.validate_record(&record).is_err());
+
+        record.value = 42.5;
+        record.name = "".to_string();
+        assert!(processor.validate_record(&record).is_err());
+    }
+
+    #[test]
+    fn test_record_processing() {
+        let processor = create_default_processor();
+        let record = DataRecord {
+            id: 1,
+            name: "Sample".to_string(),
+            value: 123.456,
+            metadata: HashMap::new(),
+        };
+
+        let result = processor.process_records(vec![record.clone()]);
+        assert!(result.is_ok());
+
+        let processed = result.unwrap();
+        assert_eq!(processed[0].value, 123.46);
+        assert!(processed[0]
+            .metadata
+            .contains_key("processed_timestamp"));
+    }
+}

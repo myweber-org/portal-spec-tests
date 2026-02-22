@@ -161,3 +161,32 @@ mod tests {
         assert!(result.is_err());
     }
 }
+use reqwest;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct GitHubUser {
+    pub login: String,
+    pub id: u64,
+    pub avatar_url: String,
+    pub html_url: String,
+    pub name: Option<String>,
+    pub public_repos: u32,
+}
+
+pub async fn get_github_user(username: &str) -> Result<GitHubUser, reqwest::Error> {
+    let url = format!("https://api.github.com/users/{}", username);
+    let client = reqwest::Client::new();
+    let response = client
+        .get(&url)
+        .header("User-Agent", "rust-api-client")
+        .send()
+        .await?;
+
+    if response.status().is_success() {
+        let user: GitHubUser = response.json().await?;
+        Ok(user)
+    } else {
+        Err(response.error_for_status().unwrap_err())
+    }
+}

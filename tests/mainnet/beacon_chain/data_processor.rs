@@ -116,3 +116,104 @@ mod tests {
         assert!(processor.calculate_average().is_none());
     }
 }
+use csv;
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
+}
+
+pub struct DataProcessor {
+    records: Vec<Record>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_csv(&mut self, path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(path)?;
+        let mut rdr = csv::Reader::from_reader(file);
+        
+        for result in rdr.deserialize() {
+            let record: Record = result?;
+            self.records.push(record);
+        }
+        
+        Ok(())
+    }
+
+    pub fn validate_records(&self) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|r| r.value > 0.0 && !r.name.is_empty())
+            .collect()
+    }
+
+    pub fn calculate_total(&self) -> f64 {
+        self.records.iter().map(|r| r.value).sum()
+    }
+
+    pub fn find_by_id(&self, id: u32) -> Option<&Record> {
+        self.records.iter().find(|r| r.id == id)
+    }
+
+    pub fn export_valid_records(&self, path: &str) -> Result<(), Box<dyn Error>> {
+        let valid_records = self.validate_records();
+        let mut wtr = csv::Writer::from_path(path)?;
+        
+        for record in valid_records {
+            wtr.serialize(record)?;
+        }
+        
+        wtr.flush()?;
+        Ok(())
+    }
+
+    pub fn get_statistics(&self) -> (f64, f64, f64) {
+        let values: Vec<f64> = self.records.iter().map(|r| r.value).collect();
+        let count = values.len() as f64;
+        
+        if count == 0.0 {
+            return (0.0, 0.0, 0.0);
+        }
+        
+        let sum: f64 = values.iter().sum();
+        let mean = sum / count;
+        let variance: f64 = values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / count;
+        let std_dev = variance.sqrt();
+        
+        (mean, variance, std_dev)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_data_processing() {
+        let mut processor = DataProcessor::new();
+        
+        let csv_data = "id,name,value,active\n1,Test1,10.5,true\n2,Test2,20.0,false\n";
+        let temp_file = NamedTempFile::new().unwrap();
+        std::fs::write(temp_file.path(), csv_data).unwrap();
+        
+        assert!(processor.load_from_csv(temp_file.path().to_str().unwrap()).is_ok());
+        assert_eq!(processor.records.len(), 2);
+        assert_eq!(processor.calculate_total(), 30.5);
+        
+        let stats = processor.get_statistics();
+        assert_eq!(stats.0, 15.25); // mean
+    }
+}

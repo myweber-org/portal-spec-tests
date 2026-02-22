@@ -296,4 +296,123 @@ mod tests {
         assert_eq!(processed.normalized_values.len(), 3);
         assert!(processed.processed_at > 0);
     }
+}use std::collections::HashMap;
+use std::error::Error;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
+}
+
+impl DataRecord {
+    pub fn new(id: u32, values: Vec<f64>) -> Self {
+        Self {
+            id,
+            values,
+            metadata: HashMap::new(),
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), Box<dyn Error>> {
+        if self.id == 0 {
+            return Err("Invalid record ID".into());
+        }
+        
+        if self.values.is_empty() {
+            return Err("Empty values vector".into());
+        }
+
+        for value in &self.values {
+            if value.is_nan() || value.is_infinite() {
+                return Err("Invalid numeric value detected".into());
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn calculate_statistics(&self) -> (f64, f64, f64) {
+        let sum: f64 = self.values.iter().sum();
+        let count = self.values.len() as f64;
+        let mean = sum / count;
+        
+        let variance: f64 = self.values
+            .iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>() / count;
+        
+        let std_dev = variance.sqrt();
+        
+        (mean, variance, std_dev)
+    }
+}
+
+pub fn process_records(records: &[DataRecord]) -> Result<Vec<DataRecord>, Box<dyn Error>> {
+    let mut processed = Vec::new();
+    
+    for record in records {
+        record.validate()?;
+        
+        let mut processed_record = record.clone();
+        
+        let stats = record.calculate_statistics();
+        processed_record.metadata.insert(
+            "mean".to_string(),
+            format!("{:.4}", stats.0)
+        );
+        processed_record.metadata.insert(
+            "std_dev".to_string(),
+            format!("{:.4}", stats.2)
+        );
+        
+        if stats.2 > 0.0 {
+            let normalized_values: Vec<f64> = record.values
+                .iter()
+                .map(|&x| (x - stats.0) / stats.2)
+                .collect();
+            processed_record.values = normalized_values;
+        }
+        
+        processed.push(processed_record);
+    }
+    
+    Ok(processed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_record_validation() {
+        let valid_record = DataRecord::new(1, vec![1.0, 2.0, 3.0]);
+        assert!(valid_record.validate().is_ok());
+        
+        let invalid_record = DataRecord::new(0, vec![1.0, 2.0]);
+        assert!(invalid_record.validate().is_err());
+    }
+
+    #[test]
+    fn test_statistics_calculation() {
+        let record = DataRecord::new(1, vec![1.0, 2.0, 3.0, 4.0, 5.0]);
+        let (mean, variance, std_dev) = record.calculate_statistics();
+        
+        assert_eq!(mean, 3.0);
+        assert_eq!(variance, 2.0);
+        assert_eq!(std_dev, 2.0_f64.sqrt());
+    }
+
+    #[test]
+    fn test_record_processing() {
+        let records = vec![
+            DataRecord::new(1, vec![1.0, 2.0, 3.0]),
+            DataRecord::new(2, vec![4.0, 5.0, 6.0]),
+        ];
+        
+        let processed = process_records(&records);
+        assert!(processed.is_ok());
+        assert_eq!(processed.unwrap().len(), 2);
+    }
 }

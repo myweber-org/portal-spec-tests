@@ -118,3 +118,31 @@ mod tests {
         assert!(generator.generate().is_err());
     }
 }
+use rand::{thread_rng, Rng};
+use rand::distributions::Alphanumeric;
+
+pub fn generate_password(length: usize) -> String {
+    let mut rng = thread_rng();
+    let password: String = (0..length)
+        .map(|_| rng.sample(Alphanumeric) as char)
+        .collect();
+    password
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_password_length() {
+        let password = generate_password(12);
+        assert_eq!(password.len(), 12);
+    }
+
+    #[test]
+    fn test_password_randomness() {
+        let pass1 = generate_password(8);
+        let pass2 = generate_password(8);
+        assert_ne!(pass1, pass2);
+    }
+}

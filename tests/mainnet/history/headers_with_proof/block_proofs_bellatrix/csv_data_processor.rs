@@ -304,3 +304,114 @@ fn main() -> Result<(), Box<dyn Error>> {
     
     process_data_pipeline(input_file, target_category, output_file)
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufReader, BufWriter};
+use std::path::Path;
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    category: String,
+}
+
+pub fn process_csv_file(input_path: &Path, output_path: &Path) -> Result<usize, Box<dyn Error>> {
+    let file = File::open(input_path)?;
+    let reader = BufReader::new(file);
+    let mut csv_reader = csv::Reader::from_reader(reader);
+
+    let mut records: Vec<Record> = Vec::new();
+    let mut processed_count = 0;
+
+    for result in csv_reader.deserialize() {
+        let record: Record = result?;
+        
+        if validate_record(&record) {
+            let transformed = transform_record(record);
+            records.push(transformed);
+            processed_count += 1;
+        }
+    }
+
+    let output_file = File::create(output_path)?;
+    let writer = BufWriter::new(output_file);
+    let mut csv_writer = csv::Writer::from_writer(writer);
+
+    for record in records {
+        csv_writer.serialize(record)?;
+    }
+
+    csv_writer.flush()?;
+    Ok(processed_count)
+}
+
+fn validate_record(record: &Record) -> bool {
+    !record.name.is_empty() && 
+    record.value > 0.0 && 
+    !record.category.is_empty()
+}
+
+fn transform_record(mut record: Record) -> Record {
+    record.name = record.name.to_uppercase();
+    record.value = (record.value * 100.0).round() / 100.0;
+    record
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_validate_record() {
+        let valid_record = Record {
+            id: 1,
+            name: "Test".to_string(),
+            value: 10.5,
+            category: "A".to_string(),
+        };
+        
+        let invalid_record = Record {
+            id: 2,
+            name: "".to_string(),
+            value: -5.0,
+            category: "".to_string(),
+        };
+
+        assert!(validate_record(&valid_record));
+        assert!(!validate_record(&invalid_record));
+    }
+
+    #[test]
+    fn test_transform_record() {
+        let record = Record {
+            id: 1,
+            name: "test".to_string(),
+            value: 10.12345,
+            category: "category".to_string(),
+        };
+
+        let transformed = transform_record(record);
+        assert_eq!(transformed.name, "TEST");
+        assert_eq!(transformed.value, 10.12);
+    }
+
+    #[test]
+    fn test_process_csv_file() -> Result<(), Box<dyn Error>> {
+        let mut input_file = NamedTempFile::new()?;
+        let output_file = NamedTempFile::new()?;
+
+        let csv_data = "id,name,value,category\n1,test1,10.5,A\n2,test2,20.75,B\n";
+        writeln!(input_file, "{}", csv_data)?;
+
+        let processed = process_csv_file(input_file.path(), output_file.path())?;
+        assert_eq!(processed, 2);
+
+        Ok(())
+    }
+}

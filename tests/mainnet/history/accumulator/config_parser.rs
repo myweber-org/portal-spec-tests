@@ -258,4 +258,184 @@ mod tests {
         assert_eq!(config.get("NORMAL"), Some(&"plain_value".to_string()));
         assert_eq!(config.get("MISSING"), Some(&"${UNDEFINED_VAR}".to_string()));
     }
+}use std::collections::HashMap;
+use std::fs;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AppConfig {
+    pub server: ServerConfig,
+    pub database: DatabaseConfig,
+    pub logging: LoggingConfig,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ServerConfig {
+    pub host: String,
+    pub port: u16,
+    pub timeout_seconds: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DatabaseConfig {
+    pub url: String,
+    pub max_connections: u32,
+    pub min_connections: u32,
+    pub connection_timeout: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct LoggingConfig {
+    pub level: String,
+    pub file_path: String,
+    pub max_file_size: u64,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        AppConfig {
+            server: ServerConfig {
+                host: "127.0.0.1".to_string(),
+                port: 8080,
+                timeout_seconds: 30,
+            },
+            database: DatabaseConfig {
+                url: "postgresql://localhost:5432/mydb".to_string(),
+                max_connections: 20,
+                min_connections: 5,
+                connection_timeout: 10,
+            },
+            logging: LoggingConfig {
+                level: "info".to_string(),
+                file_path: "app.log".to_string(),
+                max_file_size: 10485760,
+            },
+        }
+    }
+}
+
+pub struct ConfigParser;
+
+impl ConfigParser {
+    pub fn from_file(path: &str) -> Result<AppConfig, String> {
+        let content = fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read config file: {}", e))?;
+        
+        let mut config: AppConfig = toml::from_str(&content)
+            .map_err(|e| format!("Failed to parse config file: {}", e))?;
+        
+        Self::validate_config(&mut config)?;
+        Ok(config)
+    }
+    
+    pub fn from_env() -> Result<AppConfig, String> {
+        let mut config = AppConfig::default();
+        
+        if let Ok(host) = std::env::var("SERVER_HOST") {
+            config.server.host = host;
+        }
+        
+        if let Ok(port) = std::env::var("SERVER_PORT") {
+            config.server.port = port.parse()
+                .map_err(|_| "Invalid SERVER_PORT value".to_string())?;
+        }
+        
+        if let Ok(db_url) = std::env::var("DATABASE_URL") {
+            config.database.url = db_url;
+        }
+        
+        Self::validate_config(&mut config)?;
+        Ok(config)
+    }
+    
+    pub fn merge_with_default(mut config: AppConfig) -> AppConfig {
+        let default = AppConfig::default();
+        
+        if config.server.host.is_empty() {
+            config.server.host = default.server.host;
+        }
+        
+        if config.server.port == 0 {
+            config.server.port = default.server.port;
+        }
+        
+        if config.server.timeout_seconds == 0 {
+            config.server.timeout_seconds = default.server.timeout_seconds;
+        }
+        
+        if config.database.url.is_empty() {
+            config.database.url = default.database.url;
+        }
+        
+        if config.database.max_connections == 0 {
+            config.database.max_connections = default.database.max_connections;
+        }
+        
+        if config.database.min_connections == 0 {
+            config.database.min_connections = default.database.min_connections;
+        }
+        
+        if config.database.connection_timeout == 0 {
+            config.database.connection_timeout = default.database.connection_timeout;
+        }
+        
+        if config.logging.level.is_empty() {
+            config.logging.level = default.logging.level;
+        }
+        
+        if config.logging.file_path.is_empty() {
+            config.logging.file_path = default.logging.file_path;
+        }
+        
+        if config.logging.max_file_size == 0 {
+            config.logging.max_file_size = default.logging.max_file_size;
+        }
+        
+        config
+    }
+    
+    fn validate_config(config: &AppConfig) -> Result<(), String> {
+        if config.server.port > 65535 {
+            return Err("Server port must be between 1 and 65535".to_string());
+        }
+        
+        if config.database.max_connections < config.database.min_connections {
+            return Err("Max connections must be greater than or equal to min connections".to_string());
+        }
+        
+        if config.database.max_connections == 0 {
+            return Err("Max connections must be greater than 0".to_string());
+        }
+        
+        let valid_log_levels = ["error", "warn", "info", "debug", "trace"];
+        if !valid_log_levels.contains(&config.logging.level.as_str()) {
+            return Err(format!("Invalid log level. Must be one of: {:?}", valid_log_levels));
+        }
+        
+        Ok(())
+    }
+    
+    pub fn to_toml(&self, config: &AppConfig) -> Result<String, String> {
+        toml::to_string_pretty(config)
+            .map_err(|e| format!("Failed to serialize config to TOML: {}", e))
+    }
+    
+    pub fn to_env_vars(config: &AppConfig) -> HashMap<String, String> {
+        let mut env_vars = HashMap::new();
+        
+        env_vars.insert("SERVER_HOST".to_string(), config.server.host.clone());
+        env_vars.insert("SERVER_PORT".to_string(), config.server.port.to_string());
+        env_vars.insert("SERVER_TIMEOUT".to_string(), config.server.timeout_seconds.to_string());
+        
+        env_vars.insert("DATABASE_URL".to_string(), config.database.url.clone());
+        env_vars.insert("DATABASE_MAX_CONNECTIONS".to_string(), config.database.max_connections.to_string());
+        env_vars.insert("DATABASE_MIN_CONNECTIONS".to_string(), config.database.min_connections.to_string());
+        env_vars.insert("DATABASE_CONNECTION_TIMEOUT".to_string(), config.database.connection_timeout.to_string());
+        
+        env_vars.insert("LOG_LEVEL".to_string(), config.logging.level.clone());
+        env_vars.insert("LOG_FILE_PATH".to_string(), config.logging.file_path.clone());
+        env_vars.insert("LOG_MAX_FILE_SIZE".to_string(), config.logging.max_file_size.to_string());
+        
+        env_vars
+    }
 }

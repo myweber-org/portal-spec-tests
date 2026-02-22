@@ -163,4 +163,137 @@ mod tests {
         assert_eq!(processor.count_records(), 0);
         assert_eq!(processor.calculate_average(), None);
     }
+}use std::collections::HashMap;
+use std::error::Error;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub timestamp: i64,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
+}
+
+#[derive(Debug)]
+pub struct ProcessedData {
+    pub record_id: u32,
+    pub normalized_values: Vec<f64>,
+    pub checksum: u32,
+    pub processed_at: i64,
+}
+
+pub fn validate_record(record: &DataRecord) -> Result<(), Box<dyn Error>> {
+    if record.id == 0 {
+        return Err("Invalid record ID".into());
+    }
+    
+    if record.timestamp <= 0 {
+        return Err("Invalid timestamp".into());
+    }
+    
+    if record.values.is_empty() {
+        return Err("Empty values array".into());
+    }
+    
+    for value in &record.values {
+        if !value.is_finite() {
+            return Err("Non-finite value detected".into());
+        }
+    }
+    
+    Ok(())
+}
+
+pub fn normalize_values(values: &[f64]) -> Vec<f64> {
+    if values.is_empty() {
+        return Vec::new();
+    }
+    
+    let min = values.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+    let max = values.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+    
+    if (max - min).abs() < f64::EPSILON {
+        return values.iter().map(|_| 0.0).collect();
+    }
+    
+    values.iter()
+        .map(|&v| (v - min) / (max - min))
+        .collect()
+}
+
+pub fn calculate_checksum(values: &[f64]) -> u32 {
+    values.iter()
+        .map(|&v| v.to_bits() as u32)
+        .fold(0u32, |acc, bits| acc.wrapping_add(bits))
+}
+
+pub fn process_data_record(record: DataRecord) -> Result<ProcessedData, Box<dyn Error>> {
+    validate_record(&record)?;
+    
+    let normalized = normalize_values(&record.values);
+    let checksum = calculate_checksum(&normalized);
+    
+    Ok(ProcessedData {
+        record_id: record.id,
+        normalized_values: normalized,
+        checksum,
+        processed_at: chrono::Utc::now().timestamp(),
+    })
+}
+
+pub fn batch_process_records(records: Vec<DataRecord>) -> Vec<Result<ProcessedData, Box<dyn Error>>> {
+    records.into_iter()
+        .map(process_data_record)
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn test_validate_record_valid() {
+        let record = DataRecord {
+            id: 1,
+            timestamp: 1234567890,
+            values: vec![1.0, 2.0, 3.0],
+            metadata: HashMap::new(),
+        };
+        
+        assert!(validate_record(&record).is_ok());
+    }
+
+    #[test]
+    fn test_normalize_values() {
+        let values = vec![1.0, 2.0, 3.0];
+        let normalized = normalize_values(&values);
+        
+        assert_eq!(normalized.len(), 3);
+        assert!((normalized[0] - 0.0).abs() < 0.001);
+        assert!((normalized[1] - 0.5).abs() < 0.001);
+        assert!((normalized[2] - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_process_data_record() {
+        let mut metadata = HashMap::new();
+        metadata.insert("source".to_string(), "test".to_string());
+        
+        let record = DataRecord {
+            id: 42,
+            timestamp: 1609459200,
+            values: vec![10.0, 20.0, 30.0],
+            metadata,
+        };
+        
+        let result = process_data_record(record);
+        assert!(result.is_ok());
+        
+        let processed = result.unwrap();
+        assert_eq!(processed.record_id, 42);
+        assert_eq!(processed.normalized_values.len(), 3);
+        assert!(processed.processed_at > 0);
+    }
 }

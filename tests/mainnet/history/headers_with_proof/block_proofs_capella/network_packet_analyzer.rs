@@ -156,4 +156,128 @@ mod tests {
         assert!(!invalid_packet.is_valid());
         assert_eq!(valid_packet.payload_size(), 3);
     }
+}use std::collections::HashMap;
+use std::net::{IpAddr, Ipv4Addr};
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Protocol {
+    TCP,
+    UDP,
+    ICMP,
+    Unknown(u8),
+}
+
+#[derive(Debug)]
+pub struct PacketHeader {
+    pub source_ip: IpAddr,
+    pub destination_ip: IpAddr,
+    pub protocol: Protocol,
+    pub payload_size: usize,
+}
+
+pub struct PacketAnalyzer {
+    protocol_counts: HashMap<Protocol, u32>,
+    total_packets: u64,
+    total_bytes: u64,
+}
+
+impl PacketAnalyzer {
+    pub fn new() -> Self {
+        PacketAnalyzer {
+            protocol_counts: HashMap::new(),
+            total_packets: 0,
+            total_bytes: 0,
+        }
+    }
+
+    pub fn analyze_packet(&mut self, header: &PacketHeader) {
+        self.total_packets += 1;
+        self.total_bytes += header.payload_size as u64;
+
+        let count = self.protocol_counts.entry(header.protocol.clone()).or_insert(0);
+        *count += 1;
+    }
+
+    pub fn get_protocol_distribution(&self) -> HashMap<Protocol, f64> {
+        let mut distribution = HashMap::new();
+        
+        for (protocol, count) in &self.protocol_counts {
+            let percentage = (*count as f64 / self.total_packets as f64) * 100.0;
+            distribution.insert(protocol.clone(), percentage);
+        }
+        
+        distribution
+    }
+
+    pub fn get_average_packet_size(&self) -> f64 {
+        if self.total_packets == 0 {
+            0.0
+        } else {
+            self.total_bytes as f64 / self.total_packets as f64
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.protocol_counts.clear();
+        self.total_packets = 0;
+        self.total_bytes = 0;
+    }
+}
+
+impl Protocol {
+    pub fn from_u8(value: u8) -> Self {
+        match value {
+            6 => Protocol::TCP,
+            17 => Protocol::UDP,
+            1 => Protocol::ICMP,
+            _ => Protocol::Unknown(value),
+        }
+    }
+}
+
+pub fn parse_ipv4_address(bytes: [u8; 4]) -> IpAddr {
+    IpAddr::V4(Ipv4Addr::new(bytes[0], bytes[1], bytes[2], bytes[3]))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_protocol_from_u8() {
+        assert_eq!(Protocol::from_u8(6), Protocol::TCP);
+        assert_eq!(Protocol::from_u8(17), Protocol::UDP);
+        assert_eq!(Protocol::from_u8(1), Protocol::ICMP);
+        assert_eq!(Protocol::from_u8(99), Protocol::Unknown(99));
+    }
+
+    #[test]
+    fn test_packet_analyzer() {
+        let mut analyzer = PacketAnalyzer::new();
+        
+        let header1 = PacketHeader {
+            source_ip: parse_ipv4_address([192, 168, 1, 1]),
+            destination_ip: parse_ipv4_address([192, 168, 1, 2]),
+            protocol: Protocol::TCP,
+            payload_size: 1500,
+        };
+
+        let header2 = PacketHeader {
+            source_ip: parse_ipv4_address([192, 168, 1, 2]),
+            destination_ip: parse_ipv4_address([192, 168, 1, 1]),
+            protocol: Protocol::UDP,
+            payload_size: 512,
+        };
+
+        analyzer.analyze_packet(&header1);
+        analyzer.analyze_packet(&header2);
+        analyzer.analyze_packet(&header1);
+
+        let distribution = analyzer.get_protocol_distribution();
+        assert_eq!(distribution.get(&Protocol::TCP).unwrap(), &66.66666666666667);
+        assert_eq!(distribution.get(&Protocol::UDP).unwrap(), &33.333333333333336);
+        assert_eq!(analyzer.total_packets, 3);
+        assert_eq!(analyzer.total_bytes, 3512);
+        assert_eq!(analyzer.get_average_packet_size(), 1170.6666666666667);
+    }
 }

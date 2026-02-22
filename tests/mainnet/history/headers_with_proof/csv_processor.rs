@@ -199,4 +199,89 @@ pub fn calculate_column_stats(records: &[Vec<String>]) -> Vec<(usize, usize)> {
     }
 
     stats
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader, Write};
+
+pub fn filter_csv(input_path: &str, output_path: &str, filter_column: usize, filter_value: &str) -> Result<(), Box<dyn Error>> {
+    let input_file = File::open(input_path)?;
+    let reader = BufReader::new(input_file);
+    let mut output_file = File::create(output_path)?;
+    
+    for (index, line) in reader.lines().enumerate() {
+        let line = line?;
+        let parts: Vec<&str> = line.split(',').collect();
+        
+        if index == 0 || (parts.get(filter_column).map_or(false, |&val| val == filter_value)) {
+            writeln!(output_file, "{}", line)?;
+        }
+    }
+    
+    Ok(())
+}
+
+pub fn transform_column(input_path: &str, output_path: &str, transform_column: usize, transform_fn: fn(&str) -> String) -> Result<(), Box<dyn Error>> {
+    let input_file = File::open(input_path)?;
+    let reader = BufReader::new(input_file);
+    let mut output_file = File::create(output_path)?;
+    
+    for (index, line) in reader.lines().enumerate() {
+        let line = line?;
+        let mut parts: Vec<&str> = line.split(',').collect();
+        
+        if index > 0 && transform_column < parts.len() {
+            parts[transform_column] = &transform_fn(parts[transform_column]);
+        }
+        
+        writeln!(output_file, "{}", parts.join(","))?;
+    }
+    
+    Ok(())
+}
+
+fn uppercase_transform(value: &str) -> String {
+    value.to_uppercase()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn test_filter_csv() {
+        let input = "test_data.csv";
+        let output = "filtered_output.csv";
+        
+        let content = "id,name,status\n1,Alice,active\n2,Bob,inactive\n3,Charlie,active";
+        fs::write(input, content).unwrap();
+        
+        filter_csv(input, output, 2, "active").unwrap();
+        
+        let result = fs::read_to_string(output).unwrap();
+        assert!(result.contains("Alice"));
+        assert!(!result.contains("Bob"));
+        assert!(result.contains("Charlie"));
+        
+        fs::remove_file(input).unwrap();
+        fs::remove_file(output).unwrap();
+    }
+
+    #[test]
+    fn test_transform_column() {
+        let input = "transform_input.csv";
+        let output = "transformed_output.csv";
+        
+        let content = "id,name,status\n1,alice,active\n2,bob,inactive";
+        fs::write(input, content).unwrap();
+        
+        transform_column(input, output, 1, uppercase_transform).unwrap();
+        
+        let result = fs::read_to_string(output).unwrap();
+        assert!(result.contains("ALICE"));
+        assert!(result.contains("BOB"));
+        
+        fs::remove_file(input).unwrap();
+        fs::remove_file(output).unwrap();
+    }
 }

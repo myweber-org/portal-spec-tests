@@ -683,4 +683,93 @@ mod tests {
         let decrypted_content = fs::read(temp_decrypted.path()).unwrap();
         assert_eq!(original_text.to_vec(), decrypted_content);
     }
+}use std::fs;
+use std::io::{self, Read, Write};
+use std::path::Path;
+
+pub struct XORCipher {
+    key: Vec<u8>,
+}
+
+impl XORCipher {
+    pub fn new(key: &str) -> Self {
+        XORCipher {
+            key: key.as_bytes().to_vec(),
+        }
+    }
+
+    pub fn encrypt_file(&self, input_path: &Path, output_path: &Path) -> io::Result<()> {
+        self.process_file(input_path, output_path)
+    }
+
+    pub fn decrypt_file(&self, input_path: &Path, output_path: &Path) -> io::Result<()> {
+        self.process_file(input_path, output_path)
+    }
+
+    fn process_file(&self, input_path: &Path, output_path: &Path) -> io::Result<()> {
+        let mut input_file = fs::File::open(input_path)?;
+        let mut output_file = fs::File::create(output_path)?;
+
+        let mut buffer = [0; 4096];
+        let mut key_index = 0;
+
+        loop {
+            let bytes_read = input_file.read(&mut buffer)?;
+            if bytes_read == 0 {
+                break;
+            }
+
+            let mut processed = Vec::with_capacity(bytes_read);
+            for i in 0..bytes_read {
+                let byte = buffer[i] ^ self.key[key_index];
+                processed.push(byte);
+                key_index = (key_index + 1) % self.key.len();
+            }
+
+            output_file.write_all(&processed)?;
+        }
+
+        Ok(())
+    }
+}
+
+pub fn calculate_checksum(data: &[u8]) -> u32 {
+    let mut checksum: u32 = 0;
+    for &byte in data {
+        checksum = checksum.wrapping_add(byte as u32);
+    }
+    checksum
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_xor_cipher() {
+        let cipher = XORCipher::new("secret_key");
+        
+        let mut input_file = NamedTempFile::new().unwrap();
+        write!(input_file, "Hello, World!").unwrap();
+        
+        let encrypted_file = NamedTempFile::new().unwrap();
+        let decrypted_file = NamedTempFile::new().unwrap();
+
+        cipher.encrypt_file(input_file.path(), encrypted_file.path()).unwrap();
+        cipher.decrypt_file(encrypted_file.path(), decrypted_file.path()).unwrap();
+
+        let original_content = fs::read_to_string(input_file.path()).unwrap();
+        let decrypted_content = fs::read_to_string(decrypted_file.path()).unwrap();
+        
+        assert_eq!(original_content, decrypted_content);
+    }
+
+    #[test]
+    fn test_checksum() {
+        let data = b"test data";
+        let checksum = calculate_checksum(data);
+        assert_eq!(checksum, 937);
+    }
 }

@@ -776,3 +776,193 @@ impl std::fmt::Display for DataSummary {
         Ok(())
     }
 }
+use std::collections::HashMap;
+
+pub struct DataProcessor {
+    data: HashMap<String, Vec<f64>>,
+    validation_rules: HashMap<String, ValidationRule>,
+}
+
+pub struct ValidationRule {
+    min_value: Option<f64>,
+    max_value: Option<f64>,
+    required: bool,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            data: HashMap::new(),
+            validation_rules: HashMap::new(),
+        }
+    }
+
+    pub fn add_dataset(&mut self, name: String, values: Vec<f64>) -> Result<(), String> {
+        if self.data.contains_key(&name) {
+            return Err(format!("Dataset '{}' already exists", name));
+        }
+        
+        if let Some(rule) = self.validation_rules.get(&name) {
+            if rule.required && values.is_empty() {
+                return Err(format!("Dataset '{}' cannot be empty", name));
+            }
+            
+            for &value in &values {
+                if let Some(min) = rule.min_value {
+                    if value < min {
+                        return Err(format!("Value {} below minimum {}", value, min));
+                    }
+                }
+                
+                if let Some(max) = rule.max_value {
+                    if value > max {
+                        return Err(format!("Value {} above maximum {}", value, max));
+                    }
+                }
+            }
+        }
+        
+        self.data.insert(name, values);
+        Ok(())
+    }
+
+    pub fn set_validation_rule(&mut self, dataset_name: String, rule: ValidationRule) {
+        self.validation_rules.insert(dataset_name, rule);
+    }
+
+    pub fn calculate_statistics(&self, dataset_name: &str) -> Option<Statistics> {
+        self.data.get(dataset_name).map(|values| {
+            let count = values.len();
+            let sum: f64 = values.iter().sum();
+            let mean = if count > 0 { sum / count as f64 } else { 0.0 };
+            
+            let variance = if count > 1 {
+                let squared_diff: f64 = values.iter()
+                    .map(|&x| (x - mean).powi(2))
+                    .sum();
+                squared_diff / (count - 1) as f64
+            } else {
+                0.0
+            };
+            
+            Statistics {
+                count,
+                sum,
+                mean,
+                variance,
+                std_dev: variance.sqrt(),
+            }
+        })
+    }
+
+    pub fn transform_data<F>(&mut self, dataset_name: &str, transform_fn: F) -> Result<(), String>
+    where
+        F: Fn(f64) -> f64,
+    {
+        if let Some(values) = self.data.get_mut(dataset_name) {
+            for value in values.iter_mut() {
+                *value = transform_fn(*value);
+            }
+            Ok(())
+        } else {
+            Err(format!("Dataset '{}' not found", dataset_name))
+        }
+    }
+
+    pub fn merge_datasets(&mut self, target_name: &str, source_name: &str) -> Result<(), String> {
+        if target_name == source_name {
+            return Err("Cannot merge dataset with itself".to_string());
+        }
+
+        let source_data = match self.data.remove(source_name) {
+            Some(data) => data,
+            None => return Err(format!("Source dataset '{}' not found", source_name)),
+        };
+
+        if let Some(target_data) = self.data.get_mut(target_name) {
+            target_data.extend(source_data);
+            Ok(())
+        } else {
+            self.data.insert(target_name.to_string(), source_data);
+            Ok(())
+        }
+    }
+}
+
+pub struct Statistics {
+    pub count: usize,
+    pub sum: f64,
+    pub mean: f64,
+    pub variance: f64,
+    pub std_dev: f64,
+}
+
+impl ValidationRule {
+    pub fn new() -> Self {
+        ValidationRule {
+            min_value: None,
+            max_value: None,
+            required: false,
+        }
+    }
+
+    pub fn with_min(mut self, min: f64) -> Self {
+        self.min_value = Some(min);
+        self
+    }
+
+    pub fn with_max(mut self, max: f64) -> Self {
+        self.max_value = Some(max);
+        self
+    }
+
+    pub fn required(mut self) -> Self {
+        self.required = true;
+        self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_add_dataset() {
+        let mut processor = DataProcessor::new();
+        let result = processor.add_dataset("test".to_string(), vec![1.0, 2.0, 3.0]);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_duplicate_dataset() {
+        let mut processor = DataProcessor::new();
+        processor.add_dataset("test".to_string(), vec![1.0]).unwrap();
+        let result = processor.add_dataset("test".to_string(), vec![2.0]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validation() {
+        let mut processor = DataProcessor::new();
+        let rule = ValidationRule::new()
+            .with_min(0.0)
+            .with_max(10.0)
+            .required();
+        
+        processor.set_validation_rule("test".to_string(), rule);
+        
+        let result = processor.add_dataset("test".to_string(), vec![5.0, 15.0]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_statistics() {
+        let mut processor = DataProcessor::new();
+        processor.add_dataset("values".to_string(), vec![1.0, 2.0, 3.0, 4.0, 5.0]).unwrap();
+        
+        let stats = processor.calculate_statistics("values").unwrap();
+        assert_eq!(stats.count, 5);
+        assert_eq!(stats.sum, 15.0);
+        assert_eq!(stats.mean, 3.0);
+    }
+}

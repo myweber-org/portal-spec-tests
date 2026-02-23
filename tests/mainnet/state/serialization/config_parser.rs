@@ -138,4 +138,100 @@ mod tests {
             Some(&"postgres://localhost:5432/mydb".to_string())
         );
     }
+}use std::collections::HashMap;
+use std::env;
+use regex::Regex;
+
+pub struct ConfigParser {
+    values: HashMap<String, String>,
+}
+
+impl ConfigParser {
+    pub fn new() -> Self {
+        ConfigParser {
+            values: HashMap::new(),
+        }
+    }
+
+    pub fn parse_file(&mut self, path: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let content = std::fs::read_to_string(path)?;
+        self.parse_content(&content)
+    }
+
+    pub fn parse_content(&mut self, content: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let var_regex = Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")?;
+
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+
+            if let Some((key, mut value)) = trimmed.split_once('=') {
+                let key = key.trim().to_string();
+                value = value.trim();
+
+                let processed_value = var_regex.replace_all(value, |caps: &regex::Captures| {
+                    let var_name = &caps[1];
+                    env::var(var_name).unwrap_or_else(|_| caps[0].to_string())
+                });
+
+                self.values.insert(key, processed_value.to_string());
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn get(&self, key: &str) -> Option<&String> {
+        self.values.get(key)
+    }
+
+    pub fn get_all(&self) -> &HashMap<String, String> {
+        &self.values
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_basic_parsing() {
+        let mut parser = ConfigParser::new();
+        let content = "DATABASE_HOST=localhost\nDATABASE_PORT=5432\n";
+        parser.parse_content(content).unwrap();
+
+        assert_eq!(parser.get("DATABASE_HOST"), Some(&"localhost".to_string()));
+        assert_eq!(parser.get("DATABASE_PORT"), Some(&"5432".to_string()));
+    }
+
+    #[test]
+    fn test_env_substitution() {
+        env::set_var("APP_SECRET", "my_secret_key");
+        
+        let mut parser = ConfigParser::new();
+        let content = "SECRET_KEY=${APP_SECRET}\nHOST=localhost";
+        parser.parse_content(content).unwrap();
+
+        assert_eq!(parser.get("SECRET_KEY"), Some(&"my_secret_key".to_string()));
+        assert_eq!(parser.get("HOST"), Some(&"localhost".to_string()));
+    }
+
+    #[test]
+    fn test_file_parsing() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "SERVER_PORT=8080").unwrap();
+        writeln!(file, "# This is a comment").unwrap();
+        writeln!(file, "ENVIRONMENT=production").unwrap();
+
+        let mut parser = ConfigParser::new();
+        parser.parse_file(file.path().to_str().unwrap()).unwrap();
+
+        assert_eq!(parser.get("SERVER_PORT"), Some(&"8080".to_string()));
+        assert_eq!(parser.get("ENVIRONMENT"), Some(&"production".to_string()));
+        assert_eq!(parser.get("#"), None);
+    }
 }

@@ -261,4 +261,40 @@ mod tests {
         assert_eq!(obj.get("c").unwrap(), &serde_json::json!(true));
         assert_eq!(obj.get("d").unwrap(), &serde_json::json!([1,2,3]));
     }
+}use serde_json::{Value, json};
+use std::fs;
+use std::env;
+use std::process;
+
+fn main() {
+    let args: Vec<String> = env::args().collect();
+    if args.len() < 3 {
+        eprintln!("Usage: {} <output_file> <input_file1> [input_file2 ...]", args[0]);
+        process::exit(1);
+    }
+
+    let output_path = &args[1];
+    let mut merged_array = Vec::new();
+
+    for input_path in &args[2..] {
+        match fs::read_to_string(input_path) {
+            Ok(content) => {
+                match serde_json::from_str::<Value>(&content) {
+                    Ok(parsed) => merged_array.push(parsed),
+                    Err(e) => eprintln!("Warning: Failed to parse {}: {}", input_path, e),
+                }
+            }
+            Err(e) => eprintln!("Warning: Could not read {}: {}", input_path, e),
+        }
+    }
+
+    let output_value = json!(merged_array);
+    
+    match fs::write(output_path, output_value.to_string()) {
+        Ok(_) => println!("Successfully merged {} files into {}", args.len() - 2, output_path),
+        Err(e) => {
+            eprintln!("Error writing output file: {}", e);
+            process::exit(1);
+        }
+    }
 }

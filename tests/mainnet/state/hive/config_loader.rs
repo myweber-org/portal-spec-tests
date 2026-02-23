@@ -142,4 +142,73 @@ pub fn initialize() -> Result<AppConfig, Box<dyn std::error::Error>> {
     let config = AppConfig::load()?;
     println!("Configuration loaded successfully: {:?}", config);
     Ok(config)
+}use std::collections::HashMap;
+use std::env;
+use std::fs;
+
+#[derive(Debug)]
+pub struct Config {
+    pub database_url: String,
+    pub port: u16,
+    pub debug_mode: bool,
+    pub api_keys: HashMap<String, String>,
+}
+
+impl Config {
+    pub fn from_file(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let content = fs::read_to_string(path)?;
+        let mut config = Config::default();
+        
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            
+            if let Some((key, value)) = line.split_once('=') {
+                let key = key.trim();
+                let value = value.trim();
+                config.parse_key_value(key, value);
+            }
+        }
+        
+        Ok(config)
+    }
+    
+    fn parse_key_value(&mut self, key: &str, value: &str) {
+        match key {
+            "DATABASE_URL" => self.database_url = Self::resolve_env_var(value),
+            "PORT" => {
+                if let Ok(port) = value.parse() {
+                    self.port = port;
+                }
+            }
+            "DEBUG_MODE" => self.debug_mode = value.eq_ignore_ascii_case("true"),
+            key if key.starts_with("API_KEY_") => {
+                let service = key.trim_start_matches("API_KEY_").to_lowercase();
+                self.api_keys.insert(service, Self::resolve_env_var(value));
+            }
+            _ => {}
+        }
+    }
+    
+    fn resolve_env_var(value: &str) -> String {
+        if value.starts_with("${") && value.ends_with('}') {
+            let var_name = &value[2..value.len() - 1];
+            env::var(var_name).unwrap_or_else(|_| value.to_string())
+        } else {
+            value.to_string()
+        }
+    }
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            database_url: "postgres://localhost:5432/app".to_string(),
+            port: 8080,
+            debug_mode: false,
+            api_keys: HashMap::new(),
+        }
+    }
 }

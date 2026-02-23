@@ -138,3 +138,86 @@ mod tests {
         );
     }
 }
+use std::collections::HashMap;
+
+pub struct UrlParser;
+
+impl UrlParser {
+    pub fn parse_domain(url: &str) -> Option<String> {
+        let url = url.trim();
+        if url.is_empty() {
+            return None;
+        }
+
+        let url_lower = url.to_lowercase();
+        let prefixes = ["http://", "https://", "ftp://", "//"];
+
+        let mut start = 0;
+        for prefix in prefixes.iter() {
+            if url_lower.starts_with(prefix) {
+                start = prefix.len();
+                break;
+            }
+        }
+
+        let url_from_start = &url[start..];
+        let domain_end = url_from_start.find('/').unwrap_or(url_from_start.len());
+        let domain = &url_from_start[..domain_end];
+
+        if domain.is_empty() {
+            None
+        } else {
+            Some(domain.to_string())
+        }
+    }
+
+    pub fn parse_query_params(url: &str) -> HashMap<String, String> {
+        let mut params = HashMap::new();
+        
+        if let Some(query_start) = url.find('?') {
+            let query_string = &url[query_start + 1..];
+            
+            for pair in query_string.split('&') {
+                if let Some(equal_pos) = pair.find('=') {
+                    let key = &pair[..equal_pos];
+                    let value = &pair[equal_pos + 1..];
+                    
+                    if !key.is_empty() {
+                        params.insert(key.to_string(), value.to_string());
+                    }
+                }
+            }
+        }
+        
+        params
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_domain() {
+        assert_eq!(
+            UrlParser::parse_domain("https://example.com/path"),
+            Some("example.com".to_string())
+        );
+        assert_eq!(
+            UrlParser::parse_domain("http://sub.domain.co.uk/"),
+            Some("sub.domain.co.uk".to_string())
+        );
+        assert_eq!(UrlParser::parse_domain("invalid"), Some("invalid".to_string()));
+        assert_eq!(UrlParser::parse_domain(""), None);
+    }
+
+    #[test]
+    fn test_parse_query_params() {
+        let params = UrlParser::parse_query_params("https://example.com?name=john&age=30&city=");
+        
+        assert_eq!(params.get("name"), Some(&"john".to_string()));
+        assert_eq!(params.get("age"), Some(&"30".to_string()));
+        assert_eq!(params.get("city"), Some(&"".to_string()));
+        assert_eq!(params.get("country"), None);
+    }
+}

@@ -334,3 +334,152 @@ mod tests {
         assert_eq!(total, 30.0);
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{self, BufRead, BufReader, Write};
+use std::path::Path;
+
+pub struct CsvProcessor {
+    delimiter: char,
+    has_headers: bool,
+}
+
+impl CsvProcessor {
+    pub fn new(delimiter: char, has_headers: bool) -> Self {
+        CsvProcessor {
+            delimiter,
+            has_headers,
+        }
+    }
+
+    pub fn filter_rows<P: AsRef<Path>>(
+        &self,
+        input_path: P,
+        output_path: P,
+        predicate: impl Fn(&[String]) -> bool,
+    ) -> Result<usize, Box<dyn Error>> {
+        let input_file = File::open(input_path)?;
+        let reader = BufReader::new(input_file);
+        let mut output_file = File::create(output_path)?;
+
+        let mut lines = reader.lines();
+        let mut processed_count = 0;
+
+        if self.has_headers {
+            if let Some(header) = lines.next() {
+                writeln!(output_file, "{}", header?)?;
+            }
+        }
+
+        for line in lines {
+            let line = line?;
+            let fields: Vec<String> = line
+                .split(self.delimiter)
+                .map(|s| s.trim().to_string())
+                .collect();
+
+            if predicate(&fields) {
+                writeln!(output_file, "{}", line)?;
+                processed_count += 1;
+            }
+        }
+
+        Ok(processed_count)
+    }
+
+    pub fn transform_column<P: AsRef<Path>>(
+        &self,
+        input_path: P,
+        output_path: P,
+        column_index: usize,
+        transformer: impl Fn(&str) -> String,
+    ) -> Result<(), Box<dyn Error>> {
+        let input_file = File::open(input_path)?;
+        let reader = BufReader::new(input_file);
+        let mut output_file = File::create(output_path)?;
+
+        for line in reader.lines() {
+            let line = line?;
+            let mut fields: Vec<&str> = line.split(self.delimiter).collect();
+
+            if column_index < fields.len() {
+                fields[column_index] = &transformer(fields[column_index]);
+            }
+
+            let transformed_line = fields.join(&self.delimiter.to_string());
+            writeln!(output_file, "{}", transformed_line)?;
+        }
+
+        Ok(())
+    }
+
+    pub fn calculate_column_stats<P: AsRef<Path>>(
+        &self,
+        input_path: P,
+        column_index: usize,
+    ) -> Result<(f64, f64, f64), Box<dyn Error>> {
+        let input_file = File::open(input_path)?;
+        let reader = BufReader::new(input_file);
+        let mut lines = reader.lines();
+
+        if self.has_headers {
+            lines.next();
+        }
+
+        let mut values = Vec::new();
+        let mut sum = 0.0;
+
+        for line in lines {
+            let line = line?;
+            let fields: Vec<&str> = line.split(self.delimiter).collect();
+
+            if column_index < fields.len() {
+                if let Ok(value) = fields[column_index].parse::<f64>() {
+                    values.push(value);
+                    sum += value;
+                }
+            }
+        }
+
+        if values.is_empty() {
+            return Ok((0.0, 0.0, 0.0));
+        }
+
+        let count = values.len() as f64;
+        let mean = sum / count;
+
+        let variance: f64 = values
+            .iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>()
+            / count;
+
+        let std_dev = variance.sqrt();
+
+        Ok((mean, variance, std_dev))
+    }
+}
+
+pub fn read_csv_preview<P: AsRef<Path>>(
+    path: P,
+    delimiter: char,
+    num_rows: usize,
+) -> io::Result<Vec<Vec<String>>> {
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+    let mut result = Vec::new();
+
+    for (i, line) in reader.lines().enumerate() {
+        if i >= num_rows {
+            break;
+        }
+        let line = line?;
+        let fields: Vec<String> = line
+            .split(delimiter)
+            .map(|s| s.trim().to_string())
+            .collect();
+        result.push(fields);
+    }
+
+    Ok(result)
+}

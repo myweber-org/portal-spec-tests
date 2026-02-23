@@ -1,72 +1,81 @@
 
-use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct ValidationError {
+    message: String,
+}
+
+impl fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Validation error: {}", self.message)
+    }
+}
+
+impl Error for ValidationError {}
 
 pub struct DataProcessor {
-    validators: HashMap<String, Box<dyn Fn(&str) -> bool>>,
-    transformers: HashMap<String, Box<dyn Fn(String) -> String>>,
+    threshold: f64,
 }
 
 impl DataProcessor {
-    pub fn new() -> Self {
-        let mut processor = DataProcessor {
-            validators: HashMap::new(),
-            transformers: HashMap::new(),
-        };
-
-        processor.register_validator("email", |s| s.contains('@') && s.contains('.'));
-        processor.register_validator("numeric", |s| s.chars().all(|c| c.is_ascii_digit()));
-        
-        processor.register_transformer("uppercase", |s| s.to_uppercase());
-        processor.register_transformer("trim", |s| s.trim().to_string());
-        processor.register_transformer("reverse", |s| s.chars().rev().collect());
-
-        processor
-    }
-
-    pub fn register_validator<F>(&mut self, name: &str, validator: F)
-    where
-        F: Fn(&str) -> bool + 'static,
-    {
-        self.validators.insert(name.to_string(), Box::new(validator));
-    }
-
-    pub fn register_transformer<F>(&mut self, name: &str, transformer: F)
-    where
-        F: Fn(String) -> String + 'static,
-    {
-        self.transformers.insert(name.to_string(), Box::new(transformer));
-    }
-
-    pub fn validate(&self, data: &str, validator_name: &str) -> bool {
-        self.validators
-            .get(validator_name)
-            .map(|validator| validator(data))
-            .unwrap_or(false)
-    }
-
-    pub fn transform(&self, data: String, transformer_name: &str) -> Option<String> {
-        self.transformers
-            .get(transformer_name)
-            .map(|transformer| transformer(data))
-    }
-
-    pub fn process_pipeline(&self, data: String, operations: &[&str]) -> Result<String, String> {
-        let mut result = data;
-        
-        for op in operations {
-            if self.validators.contains_key(*op) {
-                if !self.validate(&result, op) {
-                    return Err(format!("Validation failed for operation: {}", op));
-                }
-            } else if self.transformers.contains_key(*op) {
-                result = self.transform(result, op)
-                    .ok_or_else(|| format!("Transformation failed for operation: {}", op))?;
-            } else {
-                return Err(format!("Unknown operation: {}", op));
-            }
+    pub fn new(threshold: f64) -> Result<Self, ValidationError> {
+        if threshold < 0.0 || threshold > 1.0 {
+            return Err(ValidationError {
+                message: format!("Threshold {} must be between 0.0 and 1.0", threshold),
+            });
         }
-        
-        Ok(result)
+        Ok(Self { threshold })
+    }
+
+    pub fn process_values(&self, values: &[f64]) -> Result<Vec<f64>, ValidationError> {
+        if values.is_empty() {
+            return Err(ValidationError {
+                message: "Input values cannot be empty".to_string(),
+            });
+        }
+
+        let filtered: Vec<f64> = values
+            .iter()
+            .filter(|&&v| v >= self.threshold)
+            .cloned()
+            .collect();
+
+        if filtered.is_empty() {
+            return Err(ValidationError {
+                message: format!("No values above threshold {}", self.threshold),
+            });
+        }
+
+        let max_value = filtered
+            .iter()
+            .fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+        let normalized: Vec<f64> = filtered
+            .iter()
+            .map(|&v| v / max_value)
+            .collect();
+
+        Ok(normalized)
+    }
+
+    pub fn calculate_statistics(&self, data: &[f64]) -> (f64, f64, f64) {
+        let count = data.len() as f64;
+        let sum: f64 = data.iter().sum();
+        let mean = sum / count;
+
+        let variance: f64 = data
+            .iter()
+            .map(|value| {
+                let diff = mean - value;
+                diff * diff
+            })
+            .sum::<f64>()
+            / count;
+
+        let std_dev = variance.sqrt();
+
+        (mean, variance, std_dev)
     }
 }
 
@@ -75,43 +84,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_email_validation() {
-        let processor = DataProcessor::new();
-        assert!(processor.validate("test@example.com", "email"));
-        assert!(!processor.validate("invalid-email", "email"));
+    fn test_valid_processor_creation() {
+        let processor = DataProcessor::new(0.5);
+        assert!(processor.is_ok());
     }
 
     #[test]
-    fn test_numeric_validation() {
-        let processor = DataProcessor::new();
-        assert!(processor.validate("12345", "numeric"));
-        assert!(!processor.validate("123abc", "numeric"));
+    fn test_invalid_processor_creation() {
+        let processor = DataProcessor::new(1.5);
+        assert!(processor.is_err());
     }
 
     #[test]
-    fn test_transformations() {
-        let processor = DataProcessor::new();
-        
-        let uppercase_result = processor.transform("hello".to_string(), "uppercase");
-        assert_eq!(uppercase_result, Some("HELLO".to_string()));
-        
-        let trim_result = processor.transform("  spaced  ".to_string(), "trim");
-        assert_eq!(trim_result, Some("spaced".to_string()));
-        
-        let reverse_result = processor.transform("rust".to_string(), "reverse");
-        assert_eq!(reverse_result, Some("tsur".to_string()));
-    }
-
-    #[test]
-    fn test_processing_pipeline() {
-        let processor = DataProcessor::new();
-        
-        let result = processor.process_pipeline(
-            "  test@example.com  ".to_string(),
-            &["trim", "email", "uppercase"]
-        );
-        
+    fn test_process_values() {
+        let processor = DataProcessor::new(0.3).unwrap();
+        let values = vec![0.1, 0.4, 0.5, 0.2, 0.8];
+        let result = processor.process_values(&values);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "TEST@EXAMPLE.COM");
+        let processed = result.unwrap();
+        assert_eq!(processed.len(), 3);
+        assert!(processed[2] <= 1.0);
+    }
+
+    #[test]
+    fn test_calculate_statistics() {
+        let processor = DataProcessor::new(0.0).unwrap();
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let (mean, variance, std_dev) = processor.calculate_statistics(&data);
+        assert_eq!(mean, 3.0);
+        assert_eq!(variance, 2.0);
+        assert_eq!(std_dev, 2.0_f64.sqrt());
     }
 }

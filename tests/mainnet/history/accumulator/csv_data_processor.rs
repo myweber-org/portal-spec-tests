@@ -286,3 +286,149 @@ mod tests {
         assert_eq!(groups.get("Books").unwrap().len(), 1);
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{self, BufRead, BufReader, Write};
+
+#[derive(Debug, Clone)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
+}
+
+impl Record {
+    fn new(id: u32, name: String, value: f64, active: bool) -> Self {
+        Record {
+            id,
+            name,
+            value,
+            active,
+        }
+    }
+
+    fn to_csv_string(&self) -> String {
+        format!("{},{},{},{}", self.id, self.name, self.value, self.active)
+    }
+
+    fn from_csv_line(line: &str) -> Result<Self, Box<dyn Error>> {
+        let parts: Vec<&str> = line.split(',').collect();
+        if parts.len() != 4 {
+            return Err("Invalid CSV line format".into());
+        }
+
+        let id = parts[0].parse()?;
+        let name = parts[1].to_string();
+        let value = parts[2].parse()?;
+        let active = parts[3].parse()?;
+
+        Ok(Record::new(id, name, value, active))
+    }
+}
+
+struct DataProcessor {
+    records: Vec<Record>,
+}
+
+impl DataProcessor {
+    fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    fn load_from_file(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+
+        for line in reader.lines() {
+            let line = line?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            let record = Record::from_csv_line(&line)?;
+            self.records.push(record);
+        }
+
+        Ok(())
+    }
+
+    fn filter_by_value(&self, threshold: f64) -> Vec<Record> {
+        self.records
+            .iter()
+            .filter(|r| r.value >= threshold)
+            .cloned()
+            .collect()
+    }
+
+    fn filter_active(&self) -> Vec<Record> {
+        self.records
+            .iter()
+            .filter(|r| r.active)
+            .cloned()
+            .collect()
+    }
+
+    fn calculate_total(&self) -> f64 {
+        self.records.iter().map(|r| r.value).sum()
+    }
+
+    fn save_to_file(&self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let mut file = File::create(file_path)?;
+        writeln!(file, "id,name,value,active")?;
+
+        for record in &self.records {
+            writeln!(file, "{}", record.to_csv_string())?;
+        }
+
+        Ok(())
+    }
+
+    fn add_record(&mut self, record: Record) {
+        self.records.push(record);
+    }
+
+    fn sort_by_value(&mut self) {
+        self.records.sort_by(|a, b| a.value.partial_cmp(&b.value).unwrap());
+    }
+}
+
+fn process_user_input() -> Result<(), Box<dyn Error>> {
+    let mut processor = DataProcessor::new();
+
+    println!("Enter CSV file path to load:");
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    let file_path = input.trim();
+
+    processor.load_from_file(file_path)?;
+    println!("Loaded {} records", processor.records.len());
+
+    println!("Enter minimum value threshold:");
+    input.clear();
+    io::stdin().read_line(&mut input)?;
+    let threshold: f64 = input.trim().parse()?;
+
+    let filtered = processor.filter_by_value(threshold);
+    println!("Found {} records with value >= {}", filtered.len(), threshold);
+
+    let active_records = processor.filter_active();
+    println!("Active records: {}", active_records.len());
+
+    let total = processor.calculate_total();
+    println!("Total value: {:.2}", total);
+
+    processor.sort_by_value();
+    processor.save_to_file("output.csv")?;
+    println!("Results saved to output.csv");
+
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = process_user_input() {
+        eprintln!("Error: {}", e);
+        std::process::exit(1);
+    }
+}

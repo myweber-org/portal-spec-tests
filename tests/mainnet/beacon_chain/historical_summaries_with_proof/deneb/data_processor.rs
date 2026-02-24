@@ -2925,4 +2925,95 @@ mod tests {
         assert_eq!(freq.get("A"), Some(&2));
         assert_eq!(freq.get("B"), Some(&1));
     }
+}use csv::Reader;
+use serde::Deserialize;
+use std::error::Error;
+use std::path::Path;
+
+#[derive(Debug, Deserialize)]
+pub struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
+}
+
+pub struct DataProcessor {
+    records: Vec<Record>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_file<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn Error>> {
+        let mut reader = Reader::from_path(path)?;
+        for result in reader.deserialize() {
+            let record: Record = result?;
+            self.records.push(record);
+        }
+        Ok(())
+    }
+
+    pub fn validate_records(&self) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|r| r.value > 0.0 && !r.name.is_empty())
+            .collect()
+    }
+
+    pub fn calculate_average(&self) -> Option<f64> {
+        let valid_records: Vec<&Record> = self.validate_records();
+        if valid_records.is_empty() {
+            return None;
+        }
+
+        let sum: f64 = valid_records.iter().map(|r| r.value).sum();
+        Some(sum / valid_records.len() as f64)
+    }
+
+    pub fn get_active_records(&self) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|r| r.active)
+            .collect()
+    }
+
+    pub fn find_by_id(&self, target_id: u32) -> Option<&Record> {
+        self.records
+            .iter()
+            .find(|r| r.id == target_id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+    use std::io::Write;
+
+    #[test]
+    fn test_data_processing() {
+        let csv_data = "id,name,value,active\n1,Test1,10.5,true\n2,Test2,0.0,false\n3,Test3,15.2,true\n";
+        
+        let mut temp_file = NamedTempFile::new().unwrap();
+        write!(temp_file, "{}", csv_data).unwrap();
+        
+        let mut processor = DataProcessor::new();
+        let result = processor.load_from_file(temp_file.path());
+        assert!(result.is_ok());
+        
+        let average = processor.calculate_average();
+        assert_eq!(average, Some(12.85));
+        
+        let active_records = processor.get_active_records();
+        assert_eq!(active_records.len(), 2);
+        
+        let record = processor.find_by_id(3);
+        assert!(record.is_some());
+        assert_eq!(record.unwrap().name, "Test3");
+    }
 }

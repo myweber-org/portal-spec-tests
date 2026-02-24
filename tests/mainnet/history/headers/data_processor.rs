@@ -111,3 +111,132 @@ mod tests {
         assert!(result.is_err());
     }
 }
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub value: f64,
+    pub category: String,
+}
+
+#[derive(Debug)]
+pub enum DataError {
+    InvalidValue,
+    InvalidCategory,
+    EmptyData,
+}
+
+impl fmt::Display for DataError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DataError::InvalidValue => write!(f, "Value must be positive"),
+            DataError::InvalidCategory => write!(f, "Category cannot be empty"),
+            DataError::EmptyData => write!(f, "No data records provided"),
+        }
+    }
+}
+
+impl Error for DataError {}
+
+pub struct DataProcessor {
+    records: Vec<DataRecord>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn add_record(&mut self, record: DataRecord) -> Result<(), DataError> {
+        Self::validate_record(&record)?;
+        self.records.push(record);
+        Ok(())
+    }
+
+    pub fn process_records(&self) -> Result<Vec<DataRecord>, DataError> {
+        if self.records.is_empty() {
+            return Err(DataError::EmptyData);
+        }
+
+        let mut processed = Vec::with_capacity(self.records.len());
+        for record in &self.records {
+            let transformed = DataRecord {
+                id: record.id,
+                value: record.value * 1.1,
+                category: record.category.to_uppercase(),
+            };
+            processed.push(transformed);
+        }
+
+        Ok(processed)
+    }
+
+    pub fn calculate_average(&self) -> Option<f64> {
+        if self.records.is_empty() {
+            return None;
+        }
+
+        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        Some(sum / self.records.len() as f64)
+    }
+
+    fn validate_record(record: &DataRecord) -> Result<(), DataError> {
+        if record.value <= 0.0 {
+            return Err(DataError::InvalidValue);
+        }
+
+        if record.category.trim().is_empty() {
+            return Err(DataError::InvalidCategory);
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_record() {
+        let record = DataRecord {
+            id: 1,
+            value: 42.5,
+            category: "test".to_string(),
+        };
+        assert!(DataProcessor::validate_record(&record).is_ok());
+    }
+
+    #[test]
+    fn test_invalid_value() {
+        let record = DataRecord {
+            id: 1,
+            value: -5.0,
+            category: "test".to_string(),
+        };
+        assert!(matches!(
+            DataProcessor::validate_record(&record),
+            Err(DataError::InvalidValue)
+        ));
+    }
+
+    #[test]
+    fn test_process_records() {
+        let mut processor = DataProcessor::new();
+        processor
+            .add_record(DataRecord {
+                id: 1,
+                value: 10.0,
+                category: "alpha".to_string(),
+            })
+            .unwrap();
+
+        let processed = processor.process_records().unwrap();
+        assert_eq!(processed[0].value, 11.0);
+        assert_eq!(processed[0].category, "ALPHA");
+    }
+}

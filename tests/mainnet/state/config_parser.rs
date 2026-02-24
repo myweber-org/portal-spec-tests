@@ -445,3 +445,133 @@ mod tests {
         );
     }
 }
+use std::collections::HashMap;
+use std::fs;
+
+#[derive(Debug, PartialEq)]
+pub enum ConfigValue {
+    String(String),
+    Integer(i64),
+    Float(f64),
+    Boolean(bool),
+}
+
+#[derive(Debug)]
+pub struct ConfigSection {
+    pub name: String,
+    pub values: HashMap<String, ConfigValue>,
+}
+
+pub struct ConfigParser {
+    sections: HashMap<String, ConfigSection>,
+}
+
+impl ConfigParser {
+    pub fn new() -> Self {
+        ConfigParser {
+            sections: HashMap::new(),
+        }
+    }
+
+    pub fn parse_file(&mut self, path: &str) -> Result<(), String> {
+        let content = fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read config file: {}", e))?;
+
+        self.parse_content(&content)
+    }
+
+    pub fn parse_content(&mut self, content: &str) -> Result<(), String> {
+        let mut current_section = None;
+        let mut current_section_name = String::from("default");
+
+        for (line_num, line) in content.lines().enumerate() {
+            let trimmed = line.trim();
+
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+
+            if trimmed.starts_with('[') && trimmed.ends_with(']') {
+                let section_name = &trimmed[1..trimmed.len() - 1].trim();
+                if section_name.is_empty() {
+                    return Err(format!("Empty section name at line {}", line_num + 1));
+                }
+                current_section_name = section_name.to_string();
+                current_section = Some(ConfigSection {
+                    name: current_section_name.clone(),
+                    values: HashMap::new(),
+                });
+                continue;
+            }
+
+            let parts: Vec<&str> = trimmed.splitn(2, '=').collect();
+            if parts.len() != 2 {
+                return Err(format!("Invalid key-value pair at line {}", line_num + 1));
+            }
+
+            let key = parts[0].trim().to_string();
+            let value_str = parts[1].trim();
+
+            let value = self.parse_value(value_str)
+                .ok_or_else(|| format!("Invalid value format at line {}", line_num + 1))?;
+
+            if current_section.is_none() {
+                current_section = Some(ConfigSection {
+                    name: current_section_name.clone(),
+                    values: HashMap::new(),
+                });
+            }
+
+            if let Some(section) = &mut current_section {
+                section.values.insert(key, value);
+            }
+        }
+
+        if let Some(section) = current_section {
+            self.sections.insert(section.name.clone(), section);
+        }
+
+        Ok(())
+    }
+
+    fn parse_value(&self, value: &str) -> Option<ConfigValue> {
+        if value.starts_with('"') && value.ends_with('"') {
+            let inner = &value[1..value.len() - 1];
+            return Some(ConfigValue::String(inner.to_string()));
+        }
+
+        if let Ok(int_val) = value.parse::<i64>() {
+            return Some(ConfigValue::Integer(int_val));
+        }
+
+        if let Ok(float_val) = value.parse::<f64>() {
+            return Some(ConfigValue::Float(float_val));
+        }
+
+        match value.to_lowercase().as_str() {
+            "true" => Some(ConfigValue::Boolean(true)),
+            "false" => Some(ConfigValue::Boolean(false)),
+            _ => None,
+        }
+    }
+
+    pub fn get_section(&self, name: &str) -> Option<&ConfigSection> {
+        self.sections.get(name)
+    }
+
+    pub fn get_value(&self, section: &str, key: &str) -> Option<&ConfigValue> {
+        self.sections
+            .get(section)
+            .and_then(|s| s.values.get(key))
+    }
+
+    pub fn sections(&self) -> Vec<&str> {
+        self.sections.keys().map(|k| k.as_str()).collect()
+    }
+}
+
+impl Default for ConfigParser {
+    fn default() -> Self {
+        Self::new()
+    }
+}

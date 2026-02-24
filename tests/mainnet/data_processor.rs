@@ -450,3 +450,145 @@ mod tests {
         assert_eq!(filtered.len(), 2);
     }
 }
+use std::collections::HashMap;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub tags: Vec<String>,
+}
+
+impl DataRecord {
+    pub fn new(id: u32, name: &str, value: f64) -> Self {
+        Self {
+            id,
+            name: name.to_string(),
+            value,
+            tags: Vec::new(),
+        }
+    }
+
+    pub fn add_tag(&mut self, tag: &str) {
+        if !self.tags.contains(&tag.to_string()) {
+            self.tags.push(tag.to_string());
+        }
+    }
+
+    pub fn is_valid(&self) -> bool {
+        !self.name.is_empty() && self.value >= 0.0
+    }
+}
+
+pub struct DataProcessor {
+    records: HashMap<u32, DataRecord>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        Self {
+            records: HashMap::new(),
+        }
+    }
+
+    pub fn add_record(&mut self, record: DataRecord) -> Result<(), String> {
+        if !record.is_valid() {
+            return Err("Invalid record data".to_string());
+        }
+
+        if self.records.contains_key(&record.id) {
+            return Err(format!("Record with id {} already exists", record.id));
+        }
+
+        self.records.insert(record.id, record);
+        Ok(())
+    }
+
+    pub fn get_record(&self, id: u32) -> Option<&DataRecord> {
+        self.records.get(&id)
+    }
+
+    pub fn filter_by_value(&self, min_value: f64) -> Vec<&DataRecord> {
+        self.records
+            .values()
+            .filter(|record| record.value >= min_value)
+            .collect()
+    }
+
+    pub fn calculate_statistics(&self) -> (f64, f64, usize) {
+        let values: Vec<f64> = self.records.values().map(|r| r.value).collect();
+        
+        if values.is_empty() {
+            return (0.0, 0.0, 0);
+        }
+
+        let sum: f64 = values.iter().sum();
+        let count = values.len();
+        let average = sum / count as f64;
+        
+        let variance: f64 = values.iter()
+            .map(|v| (v - average).powi(2))
+            .sum::<f64>() / count as f64;
+        
+        (average, variance, count)
+    }
+
+    pub fn transform_records<F>(&mut self, transform_fn: F) 
+    where
+        F: Fn(&mut DataRecord),
+    {
+        for record in self.records.values_mut() {
+            transform_fn(record);
+        }
+    }
+}
+
+pub fn process_data_batch(records: Vec<DataRecord>) -> DataProcessor {
+    let mut processor = DataProcessor::new();
+    
+    for record in records {
+        if let Err(e) = processor.add_record(record) {
+            eprintln!("Failed to add record: {}", e);
+        }
+    }
+    
+    processor
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_record_validation() {
+        let valid_record = DataRecord::new(1, "test", 10.5);
+        assert!(valid_record.is_valid());
+
+        let invalid_record = DataRecord::new(2, "", -5.0);
+        assert!(!invalid_record.is_valid());
+    }
+
+    #[test]
+    fn test_data_processor_operations() {
+        let mut processor = DataProcessor::new();
+        let record = DataRecord::new(1, "sample", 25.0);
+        
+        assert!(processor.add_record(record).is_ok());
+        assert!(processor.get_record(1).is_some());
+        assert!(processor.get_record(2).is_none());
+    }
+
+    #[test]
+    fn test_statistics_calculation() {
+        let mut processor = DataProcessor::new();
+        processor.add_record(DataRecord::new(1, "a", 10.0)).unwrap();
+        processor.add_record(DataRecord::new(2, "b", 20.0)).unwrap();
+        processor.add_record(DataRecord::new(3, "c", 30.0)).unwrap();
+        
+        let (avg, var, count) = processor.calculate_statistics();
+        assert_eq!(count, 3);
+        assert!((avg - 20.0).abs() < 0.001);
+        assert!(var > 0.0);
+    }
+}

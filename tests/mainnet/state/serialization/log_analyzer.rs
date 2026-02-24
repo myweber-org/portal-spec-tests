@@ -282,4 +282,127 @@ mod tests {
         assert_eq!(analyzer.get_level_summary().get("ERROR"), Some(&1));
         assert_eq!(analyzer.get_level_summary().get("WARN"), Some(&1));
     }
+}use std::collections::HashMap;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug)]
+pub struct LogEntry {
+    timestamp: String,
+    level: String,
+    message: String,
+    source: String,
+}
+
+#[derive(Debug)]
+pub struct LogSummary {
+    total_entries: usize,
+    error_count: usize,
+    warning_count: usize,
+    info_count: usize,
+    sources: HashMap<String, usize>,
+}
+
+pub struct LogAnalyzer {
+    entries: Vec<LogEntry>,
+    summary: LogSummary,
+}
+
+impl LogAnalyzer {
+    pub fn new() -> Self {
+        LogAnalyzer {
+            entries: Vec::new(),
+            summary: LogSummary {
+                total_entries: 0,
+                error_count: 0,
+                warning_count: 0,
+                info_count: 0,
+                sources: HashMap::new(),
+            },
+        }
+    }
+
+    pub fn load_from_file<P: AsRef<Path>>(&mut self, path: P) -> Result<(), std::io::Error> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+
+        for line in reader.lines() {
+            let line = line?;
+            self.process_line(&line);
+        }
+
+        Ok(())
+    }
+
+    fn process_line(&mut self, line: &str) {
+        let parts: Vec<&str> = line.splitn(4, '|').collect();
+        if parts.len() == 4 {
+            let entry = LogEntry {
+                timestamp: parts[0].trim().to_string(),
+                level: parts[1].trim().to_string(),
+                source: parts[2].trim().to_string(),
+                message: parts[3].trim().to_string(),
+            };
+
+            self.update_summary(&entry);
+            self.entries.push(entry);
+        }
+    }
+
+    fn update_summary(&mut self, entry: &LogEntry) {
+        self.summary.total_entries += 1;
+
+        match entry.level.as_str() {
+            "ERROR" => self.summary.error_count += 1,
+            "WARNING" => self.summary.warning_count += 1,
+            "INFO" => self.summary.info_count += 1,
+            _ => {}
+        }
+
+        *self.summary.sources.entry(entry.source.clone()).or_insert(0) += 1;
+    }
+
+    pub fn filter_by_level(&self, level: &str) -> Vec<&LogEntry> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.level == level)
+            .collect()
+    }
+
+    pub fn filter_by_source(&self, source: &str) -> Vec<&LogEntry> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.source == source)
+            .collect()
+    }
+
+    pub fn search_messages(&self, keyword: &str) -> Vec<&LogEntry> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.message.contains(keyword))
+            .collect()
+    }
+
+    pub fn get_summary(&self) -> &LogSummary {
+        &self.summary
+    }
+
+    pub fn get_entries(&self) -> &Vec<LogEntry> {
+        &self.entries
+    }
+}
+
+impl LogSummary {
+    pub fn print_summary(&self) {
+        println!("Log Analysis Summary:");
+        println!("Total entries: {}", self.total_entries);
+        println!("Errors: {}", self.error_count);
+        println!("Warnings: {}", self.warning_count);
+        println!("Info messages: {}", self.info_count);
+        println!("\nSources:");
+        for (source, count) in &self.sources {
+            println!("  {}: {}", source, count);
+        }
+    }
 }

@@ -334,3 +334,65 @@ mod tests {
         );
     }
 }
+use std::collections::HashSet;
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader, Write};
+use std::path::Path;
+
+pub fn clean_duplicate_rows(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
+    let input_file = File::open(Path::new(input_path))?;
+    let reader = BufReader::new(input_file);
+    let mut lines = reader.lines();
+    
+    let header = match lines.next() {
+        Some(Ok(h)) => h,
+        _ => return Err("Empty or invalid input file".into()),
+    };
+    
+    let mut seen = HashSet::new();
+    let mut unique_rows = Vec::new();
+    
+    for line_result in lines {
+        let line = line_result?;
+        if !seen.contains(&line) {
+            seen.insert(line.clone());
+            unique_rows.push(line);
+        }
+    }
+    
+    let mut output_file = File::create(Path::new(output_path))?;
+    writeln!(output_file, "{}", header)?;
+    
+    for row in unique_rows {
+        writeln!(output_file, "{}", row)?;
+    }
+    
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_remove_duplicates() {
+        let input_content = "id,name,value\n1,test,100\n2,example,200\n1,test,100\n3,sample,300";
+        let mut input_file = NamedTempFile::new().unwrap();
+        writeln!(input_file, "{}", input_content).unwrap();
+        
+        let output_file = NamedTempFile::new().unwrap();
+        
+        clean_duplicate_rows(
+            input_file.path().to_str().unwrap(),
+            output_file.path().to_str().unwrap()
+        ).unwrap();
+        
+        let output_content = fs::read_to_string(output_file.path()).unwrap();
+        let expected = "id,name,value\n1,test,100\n2,example,200\n3,sample,300\n";
+        
+        assert_eq!(output_content, expected);
+    }
+}

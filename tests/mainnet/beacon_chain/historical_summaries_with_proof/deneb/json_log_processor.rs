@@ -393,3 +393,151 @@ mod tests {
         assert!(!processor.should_include(&test_entry));
     }
 }
+use serde_json::{Value, Error as JsonError};
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug)]
+pub enum LogError {
+    IoError(std::io::Error),
+    JsonError(JsonError),
+    InvalidLogFormat,
+}
+
+impl From<std::io::Error> for LogError {
+    fn from(err: std::io::Error) -> Self {
+        LogError::IoError(err)
+    }
+}
+
+impl From<JsonError> for LogError {
+    fn from(err: JsonError) -> Self {
+        LogError::JsonError(err)
+    }
+}
+
+pub struct LogProcessor {
+    filters: HashMap<String, String>,
+    max_level: Option<String>,
+}
+
+impl LogProcessor {
+    pub fn new() -> Self {
+        LogProcessor {
+            filters: HashMap::new(),
+            max_level: None,
+        }
+    }
+
+    pub fn add_filter(&mut self, key: &str, value: &str) {
+        self.filters.insert(key.to_string(), value.to_string());
+    }
+
+    pub fn set_max_level(&mut self, level: &str) {
+        self.max_level = Some(level.to_string());
+    }
+
+    pub fn process_file<P: AsRef<Path>>(&self, path: P) -> Result<Vec<Value>, LogError> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut results = Vec::new();
+
+        for line in reader.lines() {
+            let line = line?;
+            if let Ok(log_entry) = self.parse_log_line(&line) {
+                if self.matches_filters(&log_entry) {
+                    results.push(log_entry);
+                }
+            }
+        }
+
+        Ok(results)
+    }
+
+    fn parse_log_line(&self, line: &str) -> Result<Value, LogError> {
+        let json_value: Value = serde_json::from_str(line)?;
+        
+        if !json_value.is_object() {
+            return Err(LogError::InvalidLogFormat);
+        }
+
+        Ok(json_value)
+    }
+
+    fn matches_filters(&self, log_entry: &Value) -> bool {
+        if let Some(level) = &self.max_level {
+            if let Some(log_level) = log_entry.get("level").and_then(|v| v.as_str()) {
+                if !self.is_level_allowed(log_level, level) {
+                    return false;
+                }
+            }
+        }
+
+        for (key, value) in &self.filters {
+            if let Some(entry_value) = log_entry.get(key) {
+                match entry_value {
+                    Value::String(s) if s != value => return false,
+                    Value::Number(n) if n.to_string() != *value => return false,
+                    Value::Bool(b) if b.to_string() != *value => return false,
+                    _ => continue,
+                }
+            } else {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    fn is_level_allowed(&self, log_level: &str, max_level: &str) -> bool {
+        let levels = ["trace", "debug", "info", "warn", "error", "fatal"];
+        let log_idx = levels.iter().position(|&l| l == log_level);
+        let max_idx = levels.iter().position(|&l| l == max_level);
+
+        match (log_idx, max_idx) {
+            (Some(l), Some(m)) => l >= m,
+            _ => false,
+        }
+    }
+}
+
+pub fn extract_field(log_entry: &Value, field: &str) -> Option<String> {
+    log_entry.get(field).map(|v| match v {
+        Value::String(s) => s.clone(),
+        Value::Number(n) => n.to_string(),
+        Value::Bool(b) => b.to_string(),
+        _ => v.to_string(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_log_processor() {
+        let mut processor = LogProcessor::new();
+        processor.add_filter("service", "api");
+        processor.set_max_level("warn");
+
+        let test_log = json!({
+            "timestamp": "2024-01-15T10:30:00Z",
+            "level": "error",
+            "service": "api",
+            "message": "Database connection failed"
+        });
+
+        assert!(processor.matches_filters(&test_log));
+    }
+
+    #[test]
+    fn test_level_filtering() {
+        let processor = LogProcessor::new();
+        
+        assert!(processor.is_level_allowed("error", "warn"));
+        assert!(!processor.is_level_allowed("debug", "warn"));
+    }
+}

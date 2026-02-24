@@ -244,4 +244,93 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     
     Ok(())
+}use std::collections::HashSet;
+use std::error::Error;
+
+pub struct DataCleaner {
+    unique_items: HashSet<String>,
+}
+
+impl DataCleaner {
+    pub fn new() -> Self {
+        DataCleaner {
+            unique_items: HashSet::new(),
+        }
+    }
+
+    pub fn deduplicate(&mut self, data: &[String]) -> Vec<String> {
+        let mut result = Vec::new();
+        
+        for item in data {
+            let normalized = Self::normalize_string(item);
+            if self.unique_items.insert(normalized.clone()) {
+                result.push(item.clone());
+            }
+        }
+        
+        result
+    }
+
+    pub fn normalize_string(input: &str) -> String {
+        input.trim()
+            .to_lowercase()
+            .chars()
+            .filter(|c| c.is_alphanumeric() || c.is_whitespace())
+            .collect()
+    }
+
+    pub fn validate_email(email: &str) -> Result<(), Box<dyn Error>> {
+        if email.contains('@') && email.contains('.') {
+            Ok(())
+        } else {
+            Err("Invalid email format".into())
+        }
+    }
+
+    pub fn clean_phone_number(phone: &str) -> String {
+        phone.chars()
+            .filter(|c| c.is_numeric())
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_deduplicate() {
+        let mut cleaner = DataCleaner::new();
+        let data = vec![
+            "hello".to_string(),
+            "HELLO".to_string(),
+            "world".to_string(),
+            "hello ".to_string(),
+        ];
+        
+        let cleaned = cleaner.deduplicate(&data);
+        assert_eq!(cleaned.len(), 2);
+    }
+
+    #[test]
+    fn test_normalize_string() {
+        assert_eq!(
+            DataCleaner::normalize_string("  HELLO World!  "),
+            "hello world"
+        );
+    }
+
+    #[test]
+    fn test_validate_email() {
+        assert!(DataCleaner::validate_email("test@example.com").is_ok());
+        assert!(DataCleaner::validate_email("invalid").is_err());
+    }
+
+    #[test]
+    fn test_clean_phone_number() {
+        assert_eq!(
+            DataCleaner::clean_phone_number("+1 (123) 456-7890"),
+            "11234567890"
+        );
+    }
 }

@@ -140,4 +140,103 @@ mod tests {
         let config = Config::new();
         assert_eq!(config.get_with_default("MISSING", "default_value"), "default_value");
     }
+}use std::collections::HashMap;
+use std::env;
+use std::fs;
+
+pub struct Config {
+    settings: HashMap<String, String>,
+}
+
+impl Config {
+    pub fn new() -> Self {
+        let mut settings = HashMap::new();
+        settings.insert("default_timeout".to_string(), "30".to_string());
+        settings.insert("max_connections".to_string(), "100".to_string());
+        settings.insert("log_level".to_string(), "info".to_string());
+        Config { settings }
+    }
+
+    pub fn from_file(filename: &str) -> std::io::Result<Self> {
+        let content = fs::read_to_string(filename)?;
+        let mut settings = HashMap::new();
+
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+
+            if let Some((key, value)) = trimmed.split_once('=') {
+                let key = key.trim().to_string();
+                let value = value.trim().to_string();
+                settings.insert(key, value);
+            }
+        }
+
+        Ok(Config { settings })
+    }
+
+    pub fn get(&self, key: &str) -> Option<&String> {
+        env::var(key)
+            .ok()
+            .map(|env_val| env_val)
+            .or_else(|| self.settings.get(key))
+    }
+
+    pub fn set(&mut self, key: &str, value: &str) {
+        self.settings.insert(key.to_string(), value.to_string());
+    }
+
+    pub fn all_settings(&self) -> &HashMap<String, String> {
+        &self.settings
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_default_config() {
+        let config = Config::new();
+        assert_eq!(config.get("default_timeout"), Some(&"30".to_string()));
+        assert_eq!(config.get("max_connections"), Some(&"100".to_string()));
+        assert_eq!(config.get("log_level"), Some(&"info".to_string()));
+    }
+
+    #[test]
+    fn test_file_config() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "server_host=localhost").unwrap();
+        writeln!(file, "server_port=8080").unwrap();
+        writeln!(file, "# This is a comment").unwrap();
+        writeln!(file, "").unwrap();
+        writeln!(file, "timeout=60").unwrap();
+
+        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.get("server_host"), Some(&"localhost".to_string()));
+        assert_eq!(config.get("server_port"), Some(&"8080".to_string()));
+        assert_eq!(config.get("timeout"), Some(&"60".to_string()));
+        assert_eq!(config.get("nonexistent"), None);
+    }
+
+    #[test]
+    fn test_env_override() {
+        env::set_var("CUSTOM_SETTING", "env_value");
+        let config = Config::new();
+        
+        config.get("CUSTOM_SETTING");
+        
+        env::remove_var("CUSTOM_SETTING");
+    }
+
+    #[test]
+    fn test_set_method() {
+        let mut config = Config::new();
+        config.set("custom_key", "custom_value");
+        assert_eq!(config.get("custom_key"), Some(&"custom_value".to_string()));
+    }
 }

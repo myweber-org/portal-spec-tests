@@ -149,4 +149,137 @@ mod tests {
         
         assert!(parser.parse_line(log_line).is_err());
     }
+}use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
+enum LogLevel {
+    INFO,
+    WARN,
+    ERROR,
+    DEBUG,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct LogEntry {
+    timestamp: DateTime<Utc>,
+    level: LogLevel,
+    message: String,
+    component: String,
+}
+
+struct LogFilter {
+    min_level: LogLevel,
+    start_time: Option<DateTime<Utc>>,
+    end_time: Option<DateTime<Utc>>,
+    component_filter: Option<String>,
+}
+
+impl LogFilter {
+    fn matches(&self, entry: &LogEntry) -> bool {
+        if entry.level < self.min_level {
+            return false;
+        }
+
+        if let Some(start) = self.start_time {
+            if entry.timestamp < start {
+                return false;
+            }
+        }
+
+        if let Some(end) = self.end_time {
+            if entry.timestamp > end {
+                return false;
+            }
+        }
+
+        if let Some(ref component) = self.component_filter {
+            if !entry.component.contains(component) {
+                return false;
+            }
+        }
+
+        true
+    }
+}
+
+fn parse_log_file(path: &str, filter: &LogFilter) -> Result<Vec<LogEntry>, Box<dyn Error>> {
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+    let mut entries = Vec::new();
+
+    for line in reader.lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let entry: LogEntry = serde_json::from_str(&line)?;
+        if filter.matches(&entry) {
+            entries.push(entry);
+        }
+    }
+
+    Ok(entries)
+}
+
+fn analyze_logs(entries: &[LogEntry]) {
+    let mut level_counts = std::collections::HashMap::new();
+    let mut component_counts = std::collections::HashMap::new();
+
+    for entry in entries {
+        *level_counts.entry(&entry.level).or_insert(0) += 1;
+        *component_counts.entry(&entry.component).or_insert(0) += 1;
+    }
+
+    println!("Log Analysis:");
+    println!("Total entries: {}", entries.len());
+    println!("\nBy level:");
+    for (level, count) in &level_counts {
+        println!("  {:?}: {}", level, count);
+    }
+    println!("\nBy component:");
+    for (component, count) in &component_counts {
+        println!("  {}: {}", component, count);
+    }
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let filter = LogFilter {
+        min_level: LogLevel::WARN,
+        start_time: Some(DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")?.with_timezone(&Utc)),
+        end_time: None,
+        component_filter: Some("database".to_string()),
+    };
+
+    let entries = parse_log_file("logs.jsonl", &filter)?;
+    analyze_logs(&entries);
+
+    if let Some(latest) = entries.last() {
+        println!("\nLatest matching entry:");
+        println!("{:?}", latest);
+    }
+
+    Ok(())
+}
+
+impl PartialOrd for LogLevel {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        let self_val = match self {
+            LogLevel::DEBUG => 0,
+            LogLevel::INFO => 1,
+            LogLevel::WARN => 2,
+            LogLevel::ERROR => 3,
+        };
+        let other_val = match other {
+            LogLevel::DEBUG => 0,
+            LogLevel::INFO => 1,
+            LogLevel::WARN => 2,
+            LogLevel::ERROR => 3,
+        };
+        Some(self_val.cmp(&other_val))
+    }
 }

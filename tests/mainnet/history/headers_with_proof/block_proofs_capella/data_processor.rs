@@ -1302,3 +1302,150 @@ mod tests {
         assert!(!processor.validate_record(&invalid_record, 2));
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    id: u32,
+    value: f64,
+    category: String,
+    valid: bool,
+}
+
+impl DataRecord {
+    pub fn new(id: u32, value: f64, category: String) -> Self {
+        let valid = value >= 0.0 && !category.is_empty();
+        Self {
+            id,
+            value,
+            category,
+            valid,
+        }
+    }
+
+    pub fn is_valid(&self) -> bool {
+        self.valid
+    }
+
+    pub fn get_value(&self) -> f64 {
+        self.value
+    }
+}
+
+pub struct DataProcessor {
+    records: Vec<DataRecord>,
+    total_value: f64,
+    valid_count: usize,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        Self {
+            records: Vec::new(),
+            total_value: 0.0,
+            valid_count: 0,
+        }
+    }
+
+    pub fn load_from_file<P: AsRef<Path>>(&mut self, path: P) -> Result<usize, Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut count = 0;
+
+        for line in reader.lines().skip(1) {
+            let line = line?;
+            let parts: Vec<&str> = line.split(',').collect();
+            
+            if parts.len() >= 3 {
+                let id = parts[0].parse::<u32>().unwrap_or(0);
+                let value = parts[1].parse::<f64>().unwrap_or(0.0);
+                let category = parts[2].to_string();
+                
+                let record = DataRecord::new(id, value, category);
+                self.add_record(record);
+                count += 1;
+            }
+        }
+        
+        Ok(count)
+    }
+
+    pub fn add_record(&mut self, record: DataRecord) {
+        if record.is_valid() {
+            self.total_value += record.get_value();
+            self.valid_count += 1;
+        }
+        self.records.push(record);
+    }
+
+    pub fn get_average_value(&self) -> Option<f64> {
+        if self.valid_count > 0 {
+            Some(self.total_value / self.valid_count as f64)
+        } else {
+            None
+        }
+    }
+
+    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
+        self.records
+            .iter()
+            .filter(|r| r.category == category && r.is_valid())
+            .collect()
+    }
+
+    pub fn get_statistics(&self) -> (usize, usize, Option<f64>) {
+        (
+            self.records.len(),
+            self.valid_count,
+            self.get_average_value(),
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_record_validation() {
+        let valid_record = DataRecord::new(1, 10.5, "A".to_string());
+        assert!(valid_record.is_valid());
+
+        let invalid_value = DataRecord::new(2, -5.0, "B".to_string());
+        assert!(!invalid_value.is_valid());
+
+        let invalid_category = DataRecord::new(3, 7.5, "".to_string());
+        assert!(!invalid_category.is_valid());
+    }
+
+    #[test]
+    fn test_processor_average() {
+        let mut processor = DataProcessor::new();
+        
+        processor.add_record(DataRecord::new(1, 10.0, "Test".to_string()));
+        processor.add_record(DataRecord::new(2, 20.0, "Test".to_string()));
+        processor.add_record(DataRecord::new(3, -5.0, "Invalid".to_string()));
+        
+        assert_eq!(processor.get_average_value(), Some(15.0));
+        assert_eq!(processor.get_statistics().0, 3);
+        assert_eq!(processor.get_statistics().1, 2);
+    }
+
+    #[test]
+    fn test_filter_category() {
+        let mut processor = DataProcessor::new();
+        
+        processor.add_record(DataRecord::new(1, 10.0, "Alpha".to_string()));
+        processor.add_record(DataRecord::new(2, 20.0, "Beta".to_string()));
+        processor.add_record(DataRecord::new(3, 30.0, "Alpha".to_string()));
+        
+        let alpha_records = processor.filter_by_category("Alpha");
+        assert_eq!(alpha_records.len(), 2);
+        
+        let beta_records = processor.filter_by_category("Beta");
+        assert_eq!(beta_records.len(), 1);
+    }
+}

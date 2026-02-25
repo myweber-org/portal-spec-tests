@@ -160,4 +160,95 @@ mod tests {
         let decrypted_data = fs::read(decrypted_file.path()).unwrap();
         assert_eq!(test_data.to_vec(), decrypted_data);
     }
+}use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce
+};
+use argon2::{
+    password_hash::{
+        rand_core::OsRng,
+        PasswordHasher, SaltString
+    },
+    Argon2, Params
+};
+use std::fs;
+use std::path::Path;
+
+pub struct FileEncryptor {
+    cipher: Aes256Gcm,
+    salt: SaltString,
+}
+
+impl FileEncryptor {
+    pub fn new(password: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let salt = SaltString::generate(&mut OsRng);
+        let argon2 = Argon2::new(
+            argon2::Algorithm::Argon2id,
+            argon2::Version::V0x13,
+            Params::new(15000, 2, 1, Some(32))?,
+        );
+        
+        let password_hash = argon2.hash_password(password.as_bytes(), &salt)?;
+        let key_bytes = password_hash.hash.ok_or("Hash generation failed")?;
+        let key = Key::<Aes256Gcm>::from_slice(key_bytes.as_bytes());
+        let cipher = Aes256Gcm::new(key);
+        
+        Ok(Self { cipher, salt })
+    }
+
+    pub fn encrypt_file(&self, input_path: &Path, output_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+        let data = fs::read(input_path)?;
+        let nonce = Nonce::generate(&mut OsRng);
+        
+        let encrypted_data = self.cipher.encrypt(&nonce, data.as_ref())
+            .map_err(|e| format!("Encryption failed: {}", e))?;
+        
+        let mut output = Vec::new();
+        output.extend_from_slice(self.salt.as_str().as_bytes());
+        output.push(b'|');
+        output.extend_from_slice(nonce.as_slice());
+        output.push(b'|');
+        output.extend_from_slice(&encrypted_data);
+        
+        fs::write(output_path, output)?;
+        Ok(())
+    }
+
+    pub fn decrypt_file(&self, input_path: &Path, output_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+        let encrypted_content = fs::read(input_path)?;
+        let parts: Vec<&[u8]> = encrypted_content.split(|&b| b == b'|').collect();
+        
+        if parts.len() != 3 {
+            return Err("Invalid encrypted file format".into());
+        }
+        
+        let stored_salt = std::str::from_utf8(parts[0])?;
+        if stored_salt != self.salt.as_str() {
+            return Err("Salt mismatch - wrong password?".into());
+        }
+        
+        let nonce = Nonce::from_slice(parts[1]);
+        let ciphertext = parts[2];
+        
+        let decrypted_data = self.cipher.decrypt(nonce, ciphertext)
+            .map_err(|e| format!("Decryption failed: {}", e))?;
+        
+        fs::write(output_path, decrypted_data)?;
+        Ok(())
+    }
+}
+
+pub fn generate_secure_password(length: usize) -> String {
+    use rand::Rng;
+    const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ\
+                            abcdefghijklmnopqrstuvwxyz\
+                            0123456789!@#$%^&*()_+-=[]{}|;:,.<>?";
+    
+    let mut rng = rand::thread_rng();
+    (0..length)
+        .map(|_| {
+            let idx = rng.gen_range(0..CHARSET.len());
+            CHARSET[idx] as char
+        })
+        .collect()
 }

@@ -48,3 +48,70 @@ mod tests {
         assert!(verified);
     }
 }
+use std::fs::File;
+use std::io::{Read, self};
+use sha2::{Sha256, Digest};
+
+pub fn compute_file_hash(file_path: &str) -> io::Result<String> {
+    let mut file = File::open(file_path)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0; 4096];
+
+    loop {
+        let bytes_read = file.read(&mut buffer)?;
+        if bytes_read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..bytes_read]);
+    }
+
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+pub fn verify_file_integrity(original_path: &str, comparison_path: &str) -> io::Result<bool> {
+    let original_hash = compute_file_hash(original_path)?;
+    let comparison_hash = compute_file_hash(comparison_path)?;
+    
+    Ok(original_hash == comparison_hash)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_identical_files() -> io::Result<()> {
+        let mut file1 = NamedTempFile::new()?;
+        let mut file2 = NamedTempFile::new()?;
+        
+        file1.write_all(b"identical content")?;
+        file2.write_all(b"identical content")?;
+        
+        let result = verify_file_integrity(
+            file1.path().to_str().unwrap(),
+            file2.path().to_str().unwrap()
+        )?;
+        
+        assert!(result);
+        Ok(())
+    }
+
+    #[test]
+    fn test_different_files() -> io::Result<()> {
+        let mut file1 = NamedTempFile::new()?;
+        let mut file2 = NamedTempFile::new()?;
+        
+        file1.write_all(b"content one")?;
+        file2.write_all(b"content two")?;
+        
+        let result = verify_file_integrity(
+            file1.path().to_str().unwrap(),
+            file2.path().to_str().unwrap()
+        )?;
+        
+        assert!(!result);
+        Ok(())
+    }
+}

@@ -140,3 +140,111 @@ mod tests {
         Ok(())
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug, PartialEq)]
+pub struct DataRecord {
+    pub id: u32,
+    pub value: f64,
+    pub category: String,
+}
+
+pub struct DataProcessor {
+    records: Vec<DataRecord>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_csv(&mut self, file_path: &str) -> Result<usize, Box<dyn Error>> {
+        let path = Path::new(file_path);
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        
+        let mut count = 0;
+        for (line_num, line) in reader.lines().enumerate() {
+            let line = line?;
+            
+            if line_num == 0 {
+                continue;
+            }
+            
+            let parts: Vec<&str> = line.split(',').collect();
+            if parts.len() != 3 {
+                continue;
+            }
+            
+            let id = match parts[0].parse::<u32>() {
+                Ok(val) => val,
+                Err(_) => continue,
+            };
+            
+            let value = match parts[1].parse::<f64>() {
+                Ok(val) => val,
+                Err(_) => continue,
+            };
+            
+            let category = parts[2].trim().to_string();
+            
+            if !self.validate_record(&category, value) {
+                continue;
+            }
+            
+            self.records.push(DataRecord { id, value, category });
+            count += 1;
+        }
+        
+        Ok(count)
+    }
+    
+    fn validate_record(&self, category: &str, value: f64) -> bool {
+        !category.is_empty() && value >= 0.0
+    }
+    
+    pub fn calculate_average(&self) -> Option<f64> {
+        if self.records.is_empty() {
+            return None;
+        }
+        
+        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        Some(sum / self.records.len() as f64)
+    }
+    
+    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
+        self.records
+            .iter()
+            .filter(|r| r.category == category)
+            .collect()
+    }
+    
+    pub fn get_records(&self) -> &[DataRecord] {
+        &self.records
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_empty_processor() {
+        let processor = DataProcessor::new();
+        assert_eq!(processor.get_records().len(), 0);
+        assert_eq!(processor.calculate_average(), None);
+    }
+    
+    #[test]
+    fn test_validation() {
+        let processor = DataProcessor::new();
+        assert!(processor.validate_record("test", 10.5));
+        assert!(!processor.validate_record("", 10.5));
+        assert!(!processor.validate_record("test", -5.0));
+    }
+}

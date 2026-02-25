@@ -1230,3 +1230,231 @@ mod tests {
         assert_eq!(avg, 20.0);
     }
 }
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub category: String,
+    pub metadata: HashMap<String, String>,
+}
+
+#[derive(Debug)]
+pub enum DataError {
+    InvalidId,
+    InvalidValue,
+    EmptyName,
+    UnknownCategory,
+    ValidationFailed(String),
+}
+
+impl fmt::Display for DataError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DataError::InvalidId => write!(f, "ID must be greater than zero"),
+            DataError::InvalidValue => write!(f, "Value must be positive"),
+            DataError::EmptyName => write!(f, "Name cannot be empty"),
+            DataError::UnknownCategory => write!(f, "Category not recognized"),
+            DataError::ValidationFailed(msg) => write!(f, "Validation failed: {}", msg),
+        }
+    }
+}
+
+impl Error for DataError {}
+
+pub struct DataProcessor {
+    allowed_categories: Vec<String>,
+    max_value: f64,
+}
+
+impl DataProcessor {
+    pub fn new(allowed_categories: Vec<String>, max_value: f64) -> Self {
+        DataProcessor {
+            allowed_categories,
+            max_value,
+        }
+    }
+
+    pub fn validate_record(&self, record: &DataRecord) -> Result<(), DataError> {
+        if record.id == 0 {
+            return Err(DataError::InvalidId);
+        }
+
+        if record.name.trim().is_empty() {
+            return Err(DataError::EmptyName);
+        }
+
+        if record.value <= 0.0 || record.value > self.max_value {
+            return Err(DataError::InvalidValue);
+        }
+
+        if !self.allowed_categories.contains(&record.category) {
+            return Err(DataError::UnknownCategory);
+        }
+
+        Ok(())
+    }
+
+    pub fn transform_record(&self, record: &DataRecord) -> DataRecord {
+        let mut transformed = record.clone();
+        transformed.name = transformed.name.to_uppercase();
+        transformed.value = (transformed.value * 100.0).round() / 100.0;
+        transformed
+    }
+
+    pub fn process_batch(&self, records: Vec<DataRecord>) -> Result<Vec<DataRecord>, DataError> {
+        let mut processed = Vec::with_capacity(records.len());
+
+        for record in records {
+            self.validate_record(&record)?;
+            let transformed = self.transform_record(&record);
+            processed.push(transformed);
+        }
+
+        Ok(processed)
+    }
+
+    pub fn calculate_statistics(&self, records: &[DataRecord]) -> HashMap<String, f64> {
+        let mut stats = HashMap::new();
+
+        if records.is_empty() {
+            return stats;
+        }
+
+        let count = records.len() as f64;
+        let sum: f64 = records.iter().map(|r| r.value).sum();
+        let avg = sum / count;
+
+        let variance: f64 = records.iter()
+            .map(|r| (r.value - avg).powi(2))
+            .sum::<f64>() / count;
+
+        stats.insert("count".to_string(), count);
+        stats.insert("sum".to_string(), sum);
+        stats.insert("average".to_string(), avg);
+        stats.insert("variance".to_string(), variance);
+
+        stats
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_test_processor() -> DataProcessor {
+        DataProcessor::new(
+            vec!["A".to_string(), "B".to_string(), "C".to_string()],
+            1000.0
+        )
+    }
+
+    #[test]
+    fn test_valid_record() {
+        let processor = create_test_processor();
+        let record = DataRecord {
+            id: 1,
+            name: "Test".to_string(),
+            value: 100.0,
+            category: "A".to_string(),
+            metadata: HashMap::new(),
+        };
+
+        assert!(processor.validate_record(&record).is_ok());
+    }
+
+    #[test]
+    fn test_invalid_id() {
+        let processor = create_test_processor();
+        let record = DataRecord {
+            id: 0,
+            name: "Test".to_string(),
+            value: 100.0,
+            category: "A".to_string(),
+            metadata: HashMap::new(),
+        };
+
+        assert!(matches!(processor.validate_record(&record), Err(DataError::InvalidId)));
+    }
+
+    #[test]
+    fn test_transform_record() {
+        let processor = create_test_processor();
+        let record = DataRecord {
+            id: 1,
+            name: "test record".to_string(),
+            value: 123.456,
+            category: "A".to_string(),
+            metadata: HashMap::new(),
+        };
+
+        let transformed = processor.transform_record(&record);
+        assert_eq!(transformed.name, "TEST RECORD");
+        assert_eq!(transformed.value, 123.46);
+    }
+
+    #[test]
+    fn test_process_batch() {
+        let processor = create_test_processor();
+        let records = vec![
+            DataRecord {
+                id: 1,
+                name: "first".to_string(),
+                value: 50.0,
+                category: "A".to_string(),
+                metadata: HashMap::new(),
+            },
+            DataRecord {
+                id: 2,
+                name: "second".to_string(),
+                value: 75.0,
+                category: "B".to_string(),
+                metadata: HashMap::new(),
+            },
+        ];
+
+        let result = processor.process_batch(records);
+        assert!(result.is_ok());
+        let processed = result.unwrap();
+        assert_eq!(processed.len(), 2);
+        assert_eq!(processed[0].name, "FIRST");
+        assert_eq!(processed[1].name, "SECOND");
+    }
+
+    #[test]
+    fn test_calculate_statistics() {
+        let processor = create_test_processor();
+        let records = vec![
+            DataRecord {
+                id: 1,
+                name: "a".to_string(),
+                value: 10.0,
+                category: "A".to_string(),
+                metadata: HashMap::new(),
+            },
+            DataRecord {
+                id: 2,
+                name: "b".to_string(),
+                value: 20.0,
+                category: "A".to_string(),
+                metadata: HashMap::new(),
+            },
+            DataRecord {
+                id: 3,
+                name: "c".to_string(),
+                value: 30.0,
+                category: "A".to_string(),
+                metadata: HashMap::new(),
+            },
+        ];
+
+        let stats = processor.calculate_statistics(&records);
+        assert_eq!(stats.get("count"), Some(&3.0));
+        assert_eq!(stats.get("sum"), Some(&60.0));
+        assert_eq!(stats.get("average"), Some(&20.0));
+    }
+}

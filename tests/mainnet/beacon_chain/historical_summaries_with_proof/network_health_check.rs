@@ -67,4 +67,77 @@ mod tests {
         let open_ports = checker.scan_ports("localhost", &ports);
         assert!(open_ports.len() <= ports.len());
     }
+}use std::net::{TcpStream, ToSocketAddrs};
+use std::time::Duration;
+
+pub struct NetworkHealth {
+    timeout: Duration,
+}
+
+impl NetworkHealth {
+    pub fn new(timeout_secs: u64) -> Self {
+        NetworkHealth {
+            timeout: Duration::from_secs(timeout_secs),
+        }
+    }
+
+    pub fn check_port(&self, host: &str, port: u16) -> bool {
+        let addr_string = format!("{}:{}", host, port);
+        
+        match addr_string.to_socket_addrs() {
+            Ok(mut addrs) => {
+                if let Some(addr) = addrs.next() {
+                    match TcpStream::connect_timeout(&addr, self.timeout) {
+                        Ok(_) => true,
+                        Err(_) => false,
+                    }
+                } else {
+                    false
+                }
+            }
+            Err(_) => false,
+        }
+    }
+
+    pub fn check_multiple_ports(&self, host: &str, ports: &[u16]) -> Vec<(u16, bool)> {
+        ports.iter()
+            .map(|&port| (port, self.check_port(host, port)))
+            .collect()
+    }
+
+    pub fn basic_connectivity_test(&self, hosts: &[&str]) -> Vec<(&str, bool)> {
+        hosts.iter()
+            .map(|&host| {
+                let result = self.check_port(host, 80) || self.check_port(host, 443);
+                (host, result)
+            })
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_port_check() {
+        let checker = NetworkHealth::new(2);
+        // Test with localhost - should succeed for open ports
+        let result = checker.check_port("127.0.0.1", 80);
+        // We can't guarantee port 80 is open, so just verify the function runs
+        assert!(result == true || result == false);
+    }
+
+    #[test]
+    fn test_multiple_ports() {
+        let checker = NetworkHealth::new(1);
+        let ports = vec![80, 443, 8080];
+        let results = checker.check_multiple_ports("example.com", &ports);
+        
+        assert_eq!(results.len(), 3);
+        for (port, status) in results {
+            assert!(port == 80 || port == 443 || port == 8080);
+            assert!(status == true || status == false);
+        }
+    }
 }

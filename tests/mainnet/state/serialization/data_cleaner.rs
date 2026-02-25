@@ -400,3 +400,62 @@ mod tests {
         assert_eq!(cleaner.normalize_text("  HELLO World  "), "hello world");
     }
 }
+use regex::Regex;
+use std::collections::HashSet;
+
+pub fn sanitize_input(input: &str) -> String {
+    let trimmed = input.trim();
+    
+    let re = Regex::new(r"\s+").unwrap();
+    let normalized_whitespace = re.replace_all(trimmed, " ");
+    
+    let re_special = Regex::new(r"[^\w\s\-.,!?]").unwrap();
+    let cleaned = re_special.replace_all(&normalized_whitespace, "");
+    
+    cleaned.to_string()
+}
+
+pub fn remove_duplicates(items: Vec<String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut result = Vec::new();
+    
+    for item in items {
+        if seen.insert(item.clone()) {
+            result.push(item);
+        }
+    }
+    
+    result
+}
+
+pub fn normalize_case(input: &str, to_lowercase: bool) -> String {
+    if to_lowercase {
+        input.to_lowercase()
+    } else {
+        input.to_uppercase()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sanitize_input() {
+        let input = "  Hello   World!@#  ";
+        let result = sanitize_input(input);
+        assert_eq!(result, "Hello World!");
+    }
+
+    #[test]
+    fn test_remove_duplicates() {
+        let items = vec![
+            "apple".to_string(),
+            "banana".to_string(),
+            "apple".to_string(),
+            "orange".to_string(),
+        ];
+        let result = remove_duplicates(items);
+        assert_eq!(result.len(), 3);
+    }
+}

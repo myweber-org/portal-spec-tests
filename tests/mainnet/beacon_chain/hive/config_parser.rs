@@ -258,4 +258,68 @@ impl AppConfig {
     pub fn to_toml(&self) -> Result<String, toml::ser::Error> {
         toml::to_string_pretty(self)
     }
+}use std::fs;
+use std::collections::HashMap;
+
+pub struct Config {
+    pub settings: HashMap<String, String>,
+}
+
+impl Config {
+    pub fn new() -> Self {
+        Config {
+            settings: HashMap::new(),
+        }
+    }
+
+    pub fn load_from_file(&mut self, path: &str) -> Result<(), String> {
+        let content = fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read config file: {}", e))?;
+
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+
+            let parts: Vec<&str> = trimmed.splitn(2, '=').collect();
+            if parts.len() == 2 {
+                let key = parts[0].trim().to_string();
+                let value = parts[1].trim().to_string();
+                self.settings.insert(key, value);
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn get(&self, key: &str) -> Option<&String> {
+        self.settings.get(key)
+    }
+
+    pub fn set(&mut self, key: &str, value: &str) {
+        self.settings.insert(key.to_string(), value.to_string());
+    }
+}
+
+pub fn parse_toml_simple(content: &str) -> HashMap<String, String> {
+    let mut result = HashMap::new();
+    
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+
+        if let Some(pos) = trimmed.find('=') {
+            let key = trimmed[..pos].trim().to_string();
+            let value = trimmed[pos+1..].trim().to_string();
+            
+            // Remove surrounding quotes if present
+            let value = value.trim_matches(|c| c == '"' || c == '\'').to_string();
+            result.insert(key, value);
+        }
+    }
+    
+    result
 }

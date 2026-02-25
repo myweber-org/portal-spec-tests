@@ -905,3 +905,73 @@ mod tests {
         Ok(())
     }
 }
+use std::fs;
+use std::io::{self, Read, Write};
+
+pub fn xor_encrypt(data: &[u8], key: &[u8]) -> Vec<u8> {
+    data.iter()
+        .enumerate()
+        .map(|(i, &byte)| byte ^ key[i % key.len()])
+        .collect()
+}
+
+pub fn encrypt_file(input_path: &str, output_path: &str, key: &[u8]) -> io::Result<()> {
+    let mut file = fs::File::open(input_path)?;
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer)?;
+    
+    let encrypted = xor_encrypt(&buffer, key);
+    
+    let mut output = fs::File::create(output_path)?;
+    output.write_all(&encrypted)?;
+    
+    Ok(())
+}
+
+pub fn decrypt_file(input_path: &str, output_path: &str, key: &[u8]) -> io::Result<()> {
+    encrypt_file(input_path, output_path, key)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+    
+    #[test]
+    fn test_xor_symmetry() {
+        let data = b"Hello, World!";
+        let key = b"secret";
+        
+        let encrypted = xor_encrypt(data, key);
+        let decrypted = xor_encrypt(&encrypted, key);
+        
+        assert_eq!(data, decrypted.as_slice());
+    }
+    
+    #[test]
+    fn test_file_encryption() -> io::Result<()> {
+        let original = b"Test file content";
+        let key = b"testkey123";
+        
+        let mut temp_input = NamedTempFile::new()?;
+        temp_input.write_all(original)?;
+        
+        let temp_output = NamedTempFile::new()?;
+        let temp_decrypted = NamedTempFile::new()?;
+        
+        encrypt_file(temp_input.path().to_str().unwrap(), 
+                    temp_output.path().to_str().unwrap(), 
+                    key)?;
+        
+        decrypt_file(temp_output.path().to_str().unwrap(),
+                    temp_decrypted.path().to_str().unwrap(),
+                    key)?;
+        
+        let mut decrypted_content = Vec::new();
+        fs::File::open(temp_decrypted.path())?
+            .read_to_end(&mut decrypted_content)?;
+        
+        assert_eq!(original, decrypted_content.as_slice());
+        Ok(())
+    }
+}

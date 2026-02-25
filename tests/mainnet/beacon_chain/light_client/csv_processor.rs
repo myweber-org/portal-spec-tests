@@ -1,151 +1,7 @@
 use std::error::Error;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Write};
-
-pub struct CsvProcessor {
-    input_path: String,
-    output_path: String,
-    filter_column: usize,
-    filter_value: String,
-}
-
-impl CsvProcessor {
-    pub fn new(input_path: &str, output_path: &str, filter_column: usize, filter_value: &str) -> Self {
-        CsvProcessor {
-            input_path: input_path.to_string(),
-            output_path: output_path.to_string(),
-            filter_column,
-            filter_value: filter_value.to_string(),
-        }
-    }
-
-    pub fn process(&self) -> Result<usize, Box<dyn Error>> {
-        let input_file = File::open(&self.input_path)?;
-        let reader = BufReader::new(input_file);
-        let mut output_file = File::create(&self.output_path)?;
-        let mut processed_count = 0;
-
-        for (line_num, line) in reader.lines().enumerate() {
-            let line = line?;
-            
-            if line_num == 0 {
-                writeln!(output_file, "{}", line)?;
-                continue;
-            }
-
-            let columns: Vec<&str> = line.split(',').collect();
-            if columns.len() > self.filter_column {
-                if columns[self.filter_column] == self.filter_value {
-                    writeln!(output_file, "{}", line)?;
-                    processed_count += 1;
-                }
-            }
-        }
-
-        Ok(processed_count)
-    }
-
-    pub fn transform_column<F>(&self, transform_fn: F) -> Result<(), Box<dyn Error>>
-    where
-        F: Fn(&str) -> String,
-    {
-        let input_file = File::open(&self.input_path)?;
-        let reader = BufReader::new(input_file);
-        let mut output_file = File::create(&self.output_path)?;
-
-        for (line_num, line) in reader.lines().enumerate() {
-            let line = line?;
-            
-            if line_num == 0 {
-                writeln!(output_file, "{}", line)?;
-                continue;
-            }
-
-            let mut columns: Vec<&str> = line.split(',').collect();
-            if !columns.is_empty() {
-                let transformed = transform_fn(columns[0]);
-                columns[0] = &transformed;
-                let new_line = columns.join(",");
-                writeln!(output_file, "{}", new_line)?;
-            }
-        }
-
-        Ok(())
-    }
-}
-
-pub fn validate_csv_format(content: &str) -> bool {
-    let lines: Vec<&str> = content.lines().collect();
-    if lines.is_empty() {
-        return false;
-    }
-
-    let column_count = lines[0].split(',').count();
-    for line in lines.iter().skip(1) {
-        if line.split(',').count() != column_count {
-            return false;
-        }
-    }
-    true
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fs;
-
-    #[test]
-    fn test_csv_processing() {
-        let test_data = "id,name,status\n1,Alice,active\n2,Bob,inactive\n3,Charlie,active";
-        fs::write("test_input.csv", test_data).unwrap();
-
-        let processor = CsvProcessor::new("test_input.csv", "test_output.csv", 2, "active");
-        let result = processor.process().unwrap();
-        
-        assert_eq!(result, 2);
-        
-        let output = fs::read_to_string("test_output.csv").unwrap();
-        assert!(output.contains("Alice"));
-        assert!(!output.contains("Bob"));
-        assert!(output.contains("Charlie"));
-
-        fs::remove_file("test_input.csv").unwrap();
-        fs::remove_file("test_output.csv").unwrap();
-    }
-
-    #[test]
-    fn test_validate_csv_format() {
-        let valid_csv = "a,b,c\n1,2,3\n4,5,6";
-        assert!(validate_csv_format(valid_csv));
-
-        let invalid_csv = "a,b,c\n1,2\n3,4,5";
-        assert!(!validate_csv_format(invalid_csv));
-    }
-}use std::error::Error;
-use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
-
-#[derive(Debug)]
-pub struct CsvRecord {
-    pub id: u32,
-    pub name: String,
-    pub value: f64,
-    pub active: bool,
-}
-
-#[derive(Debug)]
-pub enum CsvError {
-    IoError(std::io::Error),
-    ParseError(String),
-    ValidationError(String),
-}
-
-impl From<std::io::Error> for CsvError {
-    fn from(err: std::io::Error) -> Self {
-        CsvError::IoError(err)
-    }
-}
 
 pub struct CsvProcessor {
     delimiter: char,
@@ -160,85 +16,45 @@ impl CsvProcessor {
         }
     }
 
-    pub fn process_file<P: AsRef<Path>>(&self, path: P) -> Result<Vec<CsvRecord>, CsvError> {
-        let file = File::open(path)?;
+    pub fn filter_rows<P: AsRef<Path>>(
+        &self,
+        file_path: P,
+        predicate: impl Fn(&[String]) -> bool,
+    ) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let file = File::open(file_path)?;
         let reader = BufReader::new(file);
-        let mut records = Vec::new();
+        let mut lines = reader.lines();
 
-        for (line_num, line) in reader.lines().enumerate() {
-            let line = line?;
-            
-            if line_num == 0 && self.has_header {
-                continue;
-            }
-
-            if line.trim().is_empty() {
-                continue;
-            }
-
-            let record = self.parse_line(&line, line_num + 1)?;
-            records.push(record);
+        if self.has_header {
+            lines.next();
         }
 
-        Ok(records)
+        let mut filtered = Vec::new();
+        for line_result in lines {
+            let line = line_result?;
+            let fields: Vec<String> = line
+                .split(self.delimiter)
+                .map(|s| s.trim().to_string())
+                .collect();
+
+            if predicate(&fields) {
+                filtered.push(fields);
+            }
+        }
+
+        Ok(filtered)
     }
 
-    fn parse_line(&self, line: &str, line_num: usize) -> Result<CsvRecord, CsvError> {
-        let parts: Vec<&str> = line.split(self.delimiter).collect();
-        
-        if parts.len() != 4 {
-            return Err(CsvError::ParseError(
-                format!("Line {}: Expected 4 fields, found {}", line_num, parts.len())
-            ));
-        }
-
-        let id = parts[0].parse::<u32>()
-            .map_err(|e| CsvError::ParseError(
-                format!("Line {}: Invalid ID '{}': {}", line_num, parts[0], e)
-            ))?;
-
-        let name = parts[1].trim().to_string();
-        if name.is_empty() {
-            return Err(CsvError::ValidationError(
-                format!("Line {}: Name cannot be empty", line_num)
-            ));
-        }
-
-        let value = parts[2].parse::<f64>()
-            .map_err(|e| CsvError::ParseError(
-                format!("Line {}: Invalid value '{}': {}", line_num, parts[2], e)
-            ))?;
-
-        let active = match parts[3].trim().to_lowercase().as_str() {
-            "true" | "1" | "yes" => true,
-            "false" | "0" | "no" => false,
-            _ => return Err(CsvError::ParseError(
-                format!("Line {}: Invalid boolean value '{}'", line_num, parts[3])
-            )),
-        };
-
-        Ok(CsvRecord {
-            id,
-            name,
-            value,
-            active,
-        })
-    }
-
-    pub fn calculate_stats(records: &[CsvRecord]) -> (f64, f64, usize) {
-        if records.is_empty() {
-            return (0.0, 0.0, 0);
-        }
-
-        let sum: f64 = records.iter().map(|r| r.value).sum();
-        let count = records.len();
-        let mean = sum / count as f64;
-
-        let variance: f64 = records.iter()
-            .map(|r| (r.value - mean).powi(2))
-            .sum::<f64>() / count as f64;
-
-        (mean, variance, count)
+    pub fn count_matching_rows<P: AsRef<Path>>(
+        &self,
+        file_path: P,
+        column_index: usize,
+        expected_value: &str,
+    ) -> Result<usize, Box<dyn Error>> {
+        let filtered = self.filter_rows(file_path, |fields| {
+            fields.get(column_index).map_or(false, |val| val == expected_value)
+        })?;
+        Ok(filtered.len())
     }
 }
 
@@ -249,32 +65,36 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_csv_processing() {
-        let csv_data = "id,name,value,active\n1,Test1,10.5,true\n2,Test2,20.0,false\n";
-        
+    fn test_filter_rows() {
         let mut temp_file = NamedTempFile::new().unwrap();
-        write!(temp_file, "{}", csv_data).unwrap();
-        
+        writeln!(temp_file, "name,age,city").unwrap();
+        writeln!(temp_file, "Alice,30,London").unwrap();
+        writeln!(temp_file, "Bob,25,Paris").unwrap();
+        writeln!(temp_file, "Charlie,30,Tokyo").unwrap();
+
         let processor = CsvProcessor::new(',', true);
-        let records = processor.process_file(temp_file.path()).unwrap();
-        
-        assert_eq!(records.len(), 2);
-        assert_eq!(records[0].name, "Test1");
-        assert_eq!(records[1].value, 20.0);
+        let result = processor
+            .filter_rows(temp_file.path(), |fields| fields[1] == "30")
+            .unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0][0], "Alice");
+        assert_eq!(result[1][0], "Charlie");
     }
 
     #[test]
-    fn test_stats_calculation() {
-        let records = vec![
-            CsvRecord { id: 1, name: "A".to_string(), value: 10.0, active: true },
-            CsvRecord { id: 2, name: "B".to_string(), value: 20.0, active: false },
-            CsvRecord { id: 3, name: "C".to_string(), value: 30.0, active: true },
-        ];
-        
-        let (mean, variance, count) = CsvProcessor::calculate_stats(&records);
-        
-        assert_eq!(count, 3);
-        assert_eq!(mean, 20.0);
-        assert!((variance - 66.666).abs() < 0.001);
+    fn test_count_matching_rows() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,status,value").unwrap();
+        writeln!(temp_file, "1,active,100").unwrap();
+        writeln!(temp_file, "2,inactive,200").unwrap();
+        writeln!(temp_file, "3,active,150").unwrap();
+
+        let processor = CsvProcessor::new(',', true);
+        let count = processor
+            .count_matching_rows(temp_file.path(), 1, "active")
+            .unwrap();
+
+        assert_eq!(count, 2);
     }
 }

@@ -367,3 +367,137 @@ mod tests {
         assert_eq!(parsed.path, "");
     }
 }
+use std::collections::HashMap;
+
+#[derive(Debug, PartialEq)]
+pub struct ParsedUrl {
+    pub protocol: String,
+    pub domain: String,
+    pub path: String,
+    pub query_params: HashMap<String, String>,
+    pub fragment: Option<String>,
+}
+
+impl ParsedUrl {
+    pub fn new(url: &str) -> Result<Self, String> {
+        let mut protocol = String::new();
+        let mut domain = String::new();
+        let mut path = String::new();
+        let mut query_params = HashMap::new();
+        let mut fragment = None;
+
+        let remaining = if let Some(proto_end) = url.find("://") {
+            protocol = url[..proto_end].to_string();
+            &url[proto_end + 3..]
+        } else {
+            return Err("Missing protocol".to_string());
+        };
+
+        let (domain_part, path_part) = if let Some(path_start) = remaining.find('/') {
+            (
+                &remaining[..path_start],
+                &remaining[path_start..],
+            )
+        } else {
+            (remaining, "/")
+        };
+
+        domain = domain_part.to_string();
+
+        let (path_without_fragment, frag) = if let Some(frag_start) = path_part.find('#') {
+            (&path_part[..frag_start], Some(&path_part[frag_start + 1..]))
+        } else {
+            (path_part, None)
+        };
+
+        fragment = frag.map(|s| s.to_string());
+
+        let (actual_path, query_str) = if let Some(query_start) = path_without_fragment.find('?') {
+            (&path_without_fragment[..query_start], Some(&path_without_fragment[query_start + 1..]))
+        } else {
+            (path_without_fragment, None)
+        };
+
+        path = actual_path.to_string();
+
+        if let Some(query) = query_str {
+            for param in query.split('&') {
+                if let Some(eq_pos) = param.find('=') {
+                    let key = &param[..eq_pos];
+                    let value = &param[eq_pos + 1..];
+                    if !key.is_empty() {
+                        query_params.insert(key.to_string(), value.to_string());
+                    }
+                }
+            }
+        }
+
+        Ok(ParsedUrl {
+            protocol,
+            domain,
+            path,
+            query_params,
+            fragment,
+        })
+    }
+
+    pub fn get_domain_root(&self) -> Option<&str> {
+        let parts: Vec<&str> = self.domain.split('.').collect();
+        if parts.len() >= 2 {
+            Some(parts[parts.len() - 2])
+        } else {
+            None
+        }
+    }
+
+    pub fn get_query_param(&self, key: &str) -> Option<&String> {
+        self.query_params.get(key)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_basic_url() {
+        let url = "https://example.com/path/to/resource";
+        let parsed = ParsedUrl::new(url).unwrap();
+        
+        assert_eq!(parsed.protocol, "https");
+        assert_eq!(parsed.domain, "example.com");
+        assert_eq!(parsed.path, "/path/to/resource");
+        assert!(parsed.query_params.is_empty());
+        assert_eq!(parsed.fragment, None);
+    }
+
+    #[test]
+    fn test_parse_url_with_query_and_fragment() {
+        let url = "https://api.example.com/search?q=rust&page=2#results";
+        let parsed = ParsedUrl::new(url).unwrap();
+        
+        assert_eq!(parsed.protocol, "https");
+        assert_eq!(parsed.domain, "api.example.com");
+        assert_eq!(parsed.path, "/search");
+        assert_eq!(parsed.query_params.get("q"), Some(&"rust".to_string()));
+        assert_eq!(parsed.query_params.get("page"), Some(&"2".to_string()));
+        assert_eq!(parsed.fragment, Some("results".to_string()));
+    }
+
+    #[test]
+    fn test_domain_root_extraction() {
+        let url = "https://subdomain.example.co.uk/path";
+        let parsed = ParsedUrl::new(url).unwrap();
+        
+        assert_eq!(parsed.get_domain_root(), Some("example"));
+    }
+
+    #[test]
+    fn test_invalid_url_missing_protocol() {
+        let url = "example.com/path";
+        let result = ParsedUrl::new(url);
+        
+        assert!(result.is_err());
+        assert_eq!(result.err(), Some("Missing protocol".to_string()));
+    }
+}

@@ -305,3 +305,113 @@ mod tests {
         assert_eq!(count, 3);
     }
 }
+use csv::Reader;
+use serde::Deserialize;
+use std::error::Error;
+use std::fs::File;
+
+#[derive(Debug, Deserialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    category: String,
+}
+
+pub struct DataProcessor {
+    records: Vec<Record>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let mut rdr = Reader::from_reader(file);
+
+        for result in rdr.deserialize() {
+            let record: Record = result?;
+            self.records.push(record);
+        }
+
+        Ok(())
+    }
+
+    pub fn validate_records(&self) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|r| r.value >= 0.0 && !r.name.is_empty())
+            .collect()
+    }
+
+    pub fn calculate_average(&self) -> Option<f64> {
+        if self.records.is_empty() {
+            return None;
+        }
+
+        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        Some(sum / self.records.len() as f64)
+    }
+
+    pub fn group_by_category(&self) -> std::collections::HashMap<String, Vec<&Record>> {
+        let mut groups = std::collections::HashMap::new();
+
+        for record in &self.records {
+            groups
+                .entry(record.category.clone())
+                .or_insert_with(Vec::new)
+                .push(record);
+        }
+
+        groups
+    }
+
+    pub fn get_statistics(&self) -> Statistics {
+        let valid_records = self.validate_records();
+        let avg = self.calculate_average().unwrap_or(0.0);
+        let max = self
+            .records
+            .iter()
+            .map(|r| r.value)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let min = self
+            .records
+            .iter()
+            .map(|r| r.value)
+            .fold(f64::INFINITY, f64::min);
+
+        Statistics {
+            total_records: self.records.len(),
+            valid_records: valid_records.len(),
+            average_value: avg,
+            max_value: max,
+            min_value: min,
+        }
+    }
+}
+
+pub struct Statistics {
+    pub total_records: usize,
+    pub valid_records: usize,
+    pub average_value: f64,
+    pub max_value: f64,
+    pub min_value: f64,
+}
+
+impl std::fmt::Display for Statistics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Total: {}, Valid: {}, Avg: {:.2}, Max: {:.2}, Min: {:.2}",
+            self.total_records,
+            self.valid_records,
+            self.average_value,
+            self.max_value,
+            self.min_value
+        )
+    }
+}

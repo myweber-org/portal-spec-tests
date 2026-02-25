@@ -230,4 +230,51 @@ mod tests {
         assert!(UrlParser::is_valid_url("http://example.com"));
         assert!(!UrlParser::is_valid_url("ftp://example.com"));
     }
+}use regex::Regex;
+
+pub struct ParsedUrl {
+    pub scheme: String,
+    pub host: String,
+    pub path: String,
+}
+
+pub fn parse_url(url: &str) -> Option<ParsedUrl> {
+    let re = Regex::new(r"^(?P<scheme>https?|ftp)://(?P<host>[^/]+)(?P<path>/.*)?$").unwrap();
+    let captures = re.captures(url)?;
+
+    Some(ParsedUrl {
+        scheme: captures.name("scheme")?.as_str().to_string(),
+        host: captures.name("host")?.as_str().to_string(),
+        path: captures
+            .name("path")
+            .map(|m| m.as_str().to_string())
+            .unwrap_or_else(|| "/".to_string()),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_http_url() {
+        let parsed = parse_url("http://example.com/path/to/resource").unwrap();
+        assert_eq!(parsed.scheme, "http");
+        assert_eq!(parsed.host, "example.com");
+        assert_eq!(parsed.path, "/path/to/resource");
+    }
+
+    #[test]
+    fn test_parse_https_url_without_path() {
+        let parsed = parse_url("https://example.com").unwrap();
+        assert_eq!(parsed.scheme, "https");
+        assert_eq!(parsed.host, "example.com");
+        assert_eq!(parsed.path, "/");
+    }
+
+    #[test]
+    fn test_parse_invalid_url() {
+        let parsed = parse_url("not-a-valid-url");
+        assert!(parsed.is_none());
+    }
 }

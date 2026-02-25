@@ -427,4 +427,145 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}use chrono::{DateTime, Utc};
+use serde::Deserialize;
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug, Deserialize, PartialEq)]
+enum LogLevel {
+    ERROR,
+    WARN,
+    INFO,
+    DEBUG,
+    TRACE,
+}
+
+#[derive(Debug, Deserialize)]
+struct LogEntry {
+    timestamp: DateTime<Utc>,
+    level: LogLevel,
+    message: String,
+    fields: HashMap<String, String>,
+}
+
+struct LogParser {
+    min_level: LogLevel,
+    start_time: Option<DateTime<Utc>>,
+    end_time: Option<DateTime<Utc>>,
+}
+
+impl LogParser {
+    fn new(min_level: LogLevel) -> Self {
+        LogParser {
+            min_level,
+            start_time: None,
+            end_time: None,
+        }
+    }
+
+    fn with_time_range(mut self, start: DateTime<Utc>, end: DateTime<Utc>) -> Self {
+        self.start_time = Some(start);
+        self.end_time = Some(end);
+        self
+    }
+
+    fn parse_file<P: AsRef<Path>>(&self, path: P) -> Result<Vec<LogEntry>, Box<dyn std::error::Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut entries = Vec::new();
+
+        for line in reader.lines() {
+            let line = line?;
+            if line.trim().is_empty() {
+                continue;
+            }
+
+            let entry: LogEntry = serde_json::from_str(&line)?;
+            
+            if entry.level as u8 > self.min_level as u8 {
+                continue;
+            }
+
+            if let Some(start) = self.start_time {
+                if entry.timestamp < start {
+                    continue;
+                }
+            }
+
+            if let Some(end) = self.end_time {
+                if entry.timestamp > end {
+                    continue;
+                }
+            }
+
+            entries.push(entry);
+        }
+
+        Ok(entries)
+    }
+
+    fn count_by_level(&self, entries: &[LogEntry]) -> HashMap<LogLevel, usize> {
+        let mut counts = HashMap::new();
+        for entry in entries {
+            *counts.entry(entry.level).or_insert(0) += 1;
+        }
+        counts
+    }
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let parser = LogParser::new(LogLevel::INFO)
+        .with_time_range(
+            "2024-01-01T00:00:00Z".parse()?,
+            "2024-12-31T23:59:59Z".parse()?,
+        );
+
+    let entries = parser.parse_file("logs/app.log")?;
+    
+    println!("Found {} log entries", entries.len());
+    
+    let counts = parser.count_by_level(&entries);
+    for (level, count) in counts {
+        println!("{:?}: {}", level, count);
+    }
+
+    if let Some(error_entry) = entries.iter().find(|e| e.level == LogLevel::ERROR) {
+        println!("Latest error: {}", error_entry.message);
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    #[test]
+    fn test_log_parser_filtering() {
+        let parser = LogParser::new(LogLevel::WARN);
+        let test_time = Utc.with_ymd_and_hms(2024, 6, 15, 12, 0, 0).unwrap();
+        
+        let test_entries = vec![
+            LogEntry {
+                timestamp: test_time,
+                level: LogLevel::INFO,
+                message: "Test info".to_string(),
+                fields: HashMap::new(),
+            },
+            LogEntry {
+                timestamp: test_time,
+                level: LogLevel::ERROR,
+                message: "Test error".to_string(),
+                fields: HashMap::new(),
+            },
+        ];
+
+        let counts = parser.count_by_level(&test_entries);
+        assert_eq!(counts.get(&LogLevel::ERROR), Some(&1));
+        assert_eq!(counts.get(&LogLevel::INFO), None);
+    }
 }

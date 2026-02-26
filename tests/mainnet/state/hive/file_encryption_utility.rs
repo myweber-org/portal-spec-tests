@@ -180,3 +180,124 @@ mod tests {
         assert_eq!(original_content.to_vec(), decrypted_content);
     }
 }
+use std::fs;
+use std::io::{self, Read, Write};
+use std::path::Path;
+
+const DEFAULT_KEY: u8 = 0xAA;
+
+pub struct FileEncryptor {
+    key: u8,
+}
+
+impl FileEncryptor {
+    pub fn new(key: Option<u8>) -> Self {
+        FileEncryptor {
+            key: key.unwrap_or(DEFAULT_KEY),
+        }
+    }
+
+    pub fn encrypt_file(&self, source_path: &Path, dest_path: &Path) -> io::Result<()> {
+        let mut source_file = fs::File::open(source_path)?;
+        let mut dest_file = fs::File::create(dest_path)?;
+
+        let mut buffer = [0u8; 1024];
+        loop {
+            let bytes_read = source_file.read(&mut buffer)?;
+            if bytes_read == 0 {
+                break;
+            }
+
+            let encrypted_chunk: Vec<u8> = buffer[..bytes_read]
+                .iter()
+                .map(|&byte| byte ^ self.key)
+                .collect();
+
+            dest_file.write_all(&encrypted_chunk)?;
+        }
+
+        Ok(())
+    }
+
+    pub fn decrypt_file(&self, source_path: &Path, dest_path: &Path) -> io::Result<()> {
+        self.encrypt_file(source_path, dest_path)
+    }
+}
+
+pub fn process_files(
+    encryptor: &FileEncryptor,
+    input_dir: &Path,
+    output_dir: &Path,
+    operation: OperationType,
+) -> io::Result<Vec<String>> {
+    let mut processed_files = Vec::new();
+
+    if input_dir.is_dir() {
+        for entry in fs::read_dir(input_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+
+            if path.is_file() {
+                let file_name = path.file_name().unwrap().to_string_lossy();
+                let output_path = output_dir.join(format!(
+                    "{}_{}",
+                    file_name,
+                    match operation {
+                        OperationType::Encrypt => "encrypted",
+                        OperationType::Decrypt => "decrypted",
+                    }
+                ));
+
+                match operation {
+                    OperationType::Encrypt => encryptor.encrypt_file(&path, &output_path)?,
+                    OperationType::Decrypt => encryptor.decrypt_file(&path, &output_path)?,
+                }
+
+                processed_files.push(output_path.to_string_lossy().into_owned());
+            }
+        }
+    }
+
+    Ok(processed_files)
+}
+
+pub enum OperationType {
+    Encrypt,
+    Decrypt,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_xor_encryption() {
+        let encryptor = FileEncryptor::new(Some(0x55));
+        let test_data = b"Hello, World!";
+        let encrypted: Vec<u8> = test_data.iter().map(|&b| b ^ 0x55).collect();
+        let decrypted: Vec<u8> = encrypted.iter().map(|&b| b ^ 0x55).collect();
+
+        assert_eq!(test_data.to_vec(), decrypted);
+    }
+
+    #[test]
+    fn test_file_encryption_roundtrip() -> io::Result<()> {
+        let temp_dir = tempdir()?;
+        let original_path = temp_dir.path().join("original.txt");
+        let encrypted_path = temp_dir.path().join("encrypted.bin");
+        let decrypted_path = temp_dir.path().join("decrypted.txt");
+
+        fs::write(&original_path, "Test data for encryption")?;
+
+        let encryptor = FileEncryptor::new(None);
+        encryptor.encrypt_file(&original_path, &encrypted_path)?;
+        encryptor.decrypt_file(&encrypted_path, &decrypted_path)?;
+
+        let original_content = fs::read(&original_path)?;
+        let decrypted_content = fs::read(&decrypted_path)?;
+
+        assert_eq!(original_content, decrypted_content);
+        Ok(())
+    }
+}

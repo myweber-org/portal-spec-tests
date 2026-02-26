@@ -322,4 +322,82 @@ pub fn parse_toml_simple(content: &str) -> HashMap<String, String> {
     }
     
     result
+}use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::Path;
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AppConfig {
+    pub server_port: u16,
+    pub database_url: String,
+    pub log_level: String,
+    pub cache_size: usize,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        AppConfig {
+            server_port: 8080,
+            database_url: String::from("postgresql://localhost:5432/app_db"),
+            log_level: String::from("info"),
+            cache_size: 100,
+        }
+    }
+}
+
+impl AppConfig {
+    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
+        let content = fs::read_to_string(path)?;
+        let config: AppConfig = toml::from_str(&content)?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.server_port == 0 {
+            return Err("Server port cannot be zero".to_string());
+        }
+        if self.database_url.is_empty() {
+            return Err("Database URL cannot be empty".to_string());
+        }
+        if !["debug", "info", "warn", "error"].contains(&self.log_level.as_str()) {
+            return Err("Invalid log level".to_string());
+        }
+        Ok(())
+    }
+
+    pub fn to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn std::error::Error>> {
+        let content = toml::to_string_pretty(self)?;
+        fs::write(path, content)?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_default_config() {
+        let config = AppConfig::default();
+        assert_eq!(config.server_port, 8080);
+        assert_eq!(config.log_level, "info");
+    }
+
+    #[test]
+    fn test_config_validation() {
+        let mut config = AppConfig::default();
+        config.server_port = 0;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_serialize_deserialize() {
+        let original = AppConfig::default();
+        let temp_file = NamedTempFile::new().unwrap();
+        original.to_file(temp_file.path()).unwrap();
+        let loaded = AppConfig::from_file(temp_file.path()).unwrap();
+        assert_eq!(original.server_port, loaded.server_port);
+    }
 }

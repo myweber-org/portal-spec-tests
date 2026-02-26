@@ -62,4 +62,86 @@ mod tests {
 
         Ok(())
     }
+}use std::collections::HashMap;
+use std::fs::{self, File};
+use std::io::{BufReader, Read, Write};
+use std::path::Path;
+
+type JsonValue = serde_json::Value;
+
+pub fn merge_json_files<P: AsRef<Path>>(paths: &[P], output_path: P) -> Result<(), Box<dyn std::error::Error>> {
+    let mut merged_array = Vec::new();
+
+    for path in paths {
+        let file = File::open(path)?;
+        let mut reader = BufReader::new(file);
+        let mut content = String::new();
+        reader.read_to_string(&mut content)?;
+
+        let json_value: JsonValue = serde_json::from_str(&content)?;
+        merged_array.push(json_value);
+    }
+
+    let output_json = JsonValue::Array(merged_array);
+    let serialized = serde_json::to_string_pretty(&output_json)?;
+
+    let mut output_file = File::create(output_path)?;
+    output_file.write_all(serialized.as_bytes())?;
+
+    Ok(())
+}
+
+pub fn deduplicate_json_array_by_key(array: &mut Vec<JsonValue>, key: &str) {
+    let mut seen = HashMap::new();
+    array.retain(|item| {
+        if let Some(obj) = item.as_object() {
+            if let Some(value) = obj.get(key) {
+                let key_string = value.to_string();
+                if seen.contains_key(&key_string) {
+                    return false;
+                }
+                seen.insert(key_string, true);
+                return true;
+            }
+        }
+        true
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_merge_and_deduplicate() {
+        let json1 = r#"{"id": 1, "name": "Alice"}"#;
+        let json2 = r#"{"id": 2, "name": "Bob"}"#;
+        let json3 = r#"{"id": 1, "name": "Alice Duplicate"}"#;
+
+        let files = [json1, json2, json3];
+        let temp_files: Vec<NamedTempFile> = files
+            .iter()
+            .map(|content| {
+                let mut file = NamedTempFile::new().unwrap();
+                file.write_all(content.as_bytes()).unwrap();
+                file
+            })
+            .collect();
+
+        let paths: Vec<&Path> = temp_files.iter().map(|f| f.path()).collect();
+        let output = NamedTempFile::new().unwrap();
+
+        merge_json_files(&paths, output.path()).unwrap();
+
+        let output_content = fs::read_to_string(output.path()).unwrap();
+        let mut parsed: JsonValue = serde_json::from_str(&output_content).unwrap();
+
+        if let JsonValue::Array(ref mut arr) = parsed {
+            deduplicate_json_array_by_key(arr, "id");
+            assert_eq!(arr.len(), 2);
+        } else {
+            panic!("Expected JSON array");
+        }
+    }
 }

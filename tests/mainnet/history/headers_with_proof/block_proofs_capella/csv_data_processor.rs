@@ -239,4 +239,113 @@ mod tests {
         let avg_salary = processor.aggregate_numeric_column("salary").unwrap();
         assert!((avg_salary - 50000.0).abs() < 0.01);
     }
+}use csv::{Reader, Writer};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Transaction {
+    id: u32,
+    customer: String,
+    amount: f64,
+    category: String,
+    status: String,
+}
+
+struct TransactionProcessor {
+    transactions: Vec<Transaction>,
+}
+
+impl TransactionProcessor {
+    fn new() -> Self {
+        TransactionProcessor {
+            transactions: Vec::new(),
+        }
+    }
+
+    fn load_from_file(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let mut rdr = Reader::from_reader(file);
+        
+        for result in rdr.deserialize() {
+            let transaction: Transaction = result?;
+            self.transactions.push(transaction);
+        }
+        
+        Ok(())
+    }
+
+    fn filter_by_category(&self, category: &str) -> Vec<&Transaction> {
+        self.transactions
+            .iter()
+            .filter(|t| t.category == category)
+            .collect()
+    }
+
+    fn filter_by_status(&self, status: &str) -> Vec<&Transaction> {
+        self.transactions
+            .iter()
+            .filter(|t| t.status == status)
+            .collect()
+    }
+
+    fn calculate_total_amount(&self) -> f64 {
+        self.transactions.iter().map(|t| t.amount).sum()
+    }
+
+    fn calculate_average_amount(&self) -> f64 {
+        if self.transactions.is_empty() {
+            return 0.0;
+        }
+        self.calculate_total_amount() / self.transactions.len() as f64
+    }
+
+    fn get_customer_summary(&self) -> Vec<(String, f64)> {
+        let mut summary = std::collections::HashMap::new();
+        
+        for transaction in &self.transactions {
+            let entry = summary.entry(transaction.customer.clone()).or_insert(0.0);
+            *entry += transaction.amount;
+        }
+        
+        summary.into_iter().collect()
+    }
+
+    fn save_filtered_transactions(&self, file_path: &str, category: &str) -> Result<(), Box<dyn Error>> {
+        let filtered = self.filter_by_category(category);
+        let file = File::create(file_path)?;
+        let mut wtr = Writer::from_writer(file);
+        
+        for transaction in filtered {
+            wtr.serialize(transaction)?;
+        }
+        
+        wtr.flush()?;
+        Ok(())
+    }
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let mut processor = TransactionProcessor::new();
+    
+    processor.load_from_file("transactions.csv")?;
+    
+    println!("Total transactions: {}", processor.transactions.len());
+    println!("Total amount: ${:.2}", processor.calculate_total_amount());
+    println!("Average transaction: ${:.2}", processor.calculate_average_amount());
+    
+    let completed = processor.filter_by_status("completed");
+    println!("Completed transactions: {}", completed.len());
+    
+    let customer_summary = processor.get_customer_summary();
+    println!("Customer summary:");
+    for (customer, total) in customer_summary {
+        println!("  {}: ${:.2}", customer, total);
+    }
+    
+    processor.save_filtered_transactions("electronics.csv", "electronics")?;
+    println!("Filtered transactions saved to electronics.csv");
+    
+    Ok(())
 }

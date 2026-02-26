@@ -230,4 +230,161 @@ mod tests {
         assert_eq!(valid, 2);
         assert_eq!(invalid, 2);
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufReader, BufWriter};
+use csv::{ReaderBuilder, WriterBuilder};
+
+#[derive(Debug, Clone)]
+pub struct DataPoint {
+    timestamp: String,
+    value: f64,
+    category: String,
+}
+
+impl DataPoint {
+    pub fn new(timestamp: String, value: f64, category: String) -> Self {
+        DataPoint {
+            timestamp,
+            value,
+            category,
+        }
+    }
+
+    pub fn value(&self) -> f64 {
+        self.value
+    }
+
+    pub fn category(&self) -> &str {
+        &self.category
+    }
+}
+
+pub struct DataProcessor {
+    data_points: Vec<DataPoint>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            data_points: Vec::new(),
+        }
+    }
+
+    pub fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        let mut csv_reader = ReaderBuilder::new()
+            .has_headers(true)
+            .from_reader(reader);
+
+        for result in csv_reader.records() {
+            let record = result?;
+            if record.len() >= 3 {
+                let timestamp = record[0].to_string();
+                let value: f64 = record[1].parse()?;
+                let category = record[2].to_string();
+                self.data_points.push(DataPoint::new(timestamp, value, category));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn calculate_statistics(&self) -> (f64, f64, f64) {
+        if self.data_points.is_empty() {
+            return (0.0, 0.0, 0.0);
+        }
+
+        let sum: f64 = self.data_points.iter().map(|dp| dp.value).sum();
+        let count = self.data_points.len() as f64;
+        let mean = sum / count;
+
+        let variance: f64 = self.data_points
+            .iter()
+            .map(|dp| (dp.value - mean).powi(2))
+            .sum::<f64>() / count;
+
+        let std_dev = variance.sqrt();
+
+        (mean, variance, std_dev)
+    }
+
+    pub fn filter_by_category(&self, category: &str) -> Vec<&DataPoint> {
+        self.data_points
+            .iter()
+            .filter(|dp| dp.category == category)
+            .collect()
+    }
+
+    pub fn export_to_csv(&self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::create(file_path)?;
+        let writer = BufWriter::new(file);
+        let mut csv_writer = WriterBuilder::new()
+            .has_headers(true)
+            .from_writer(writer);
+
+        csv_writer.write_record(&["timestamp", "value", "category"])?;
+
+        for data_point in &self.data_points {
+            csv_writer.write_record(&[
+                &data_point.timestamp,
+                &data_point.value.to_string(),
+                &data_point.category,
+            ])?;
+        }
+
+        csv_writer.flush()?;
+        Ok(())
+    }
+
+    pub fn add_data_point(&mut self, data_point: DataPoint) {
+        self.data_points.push(data_point);
+    }
+
+    pub fn data_count(&self) -> usize {
+        self.data_points.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_data_processor() {
+        let mut processor = DataProcessor::new();
+        
+        let dp1 = DataPoint::new("2024-01-01 10:00:00".to_string(), 42.5, "A".to_string());
+        let dp2 = DataPoint::new("2024-01-01 11:00:00".to_string(), 38.2, "B".to_string());
+        
+        processor.add_data_point(dp1);
+        processor.add_data_point(dp2);
+        
+        assert_eq!(processor.data_count(), 2);
+        
+        let (mean, variance, std_dev) = processor.calculate_statistics();
+        assert!((mean - 40.35).abs() < 0.01);
+        assert!(variance > 0.0);
+        assert!(std_dev > 0.0);
+    }
+
+    #[test]
+    fn test_csv_export_import() -> Result<(), Box<dyn Error>> {
+        let mut processor = DataProcessor::new();
+        processor.add_data_point(DataPoint::new("2024-01-01 10:00:00".to_string(), 42.5, "A".to_string()));
+        
+        let mut temp_file = NamedTempFile::new()?;
+        let temp_path = temp_file.path().to_str().unwrap();
+        
+        processor.export_to_csv(temp_path)?;
+        
+        let mut new_processor = DataProcessor::new();
+        new_processor.load_from_csv(temp_path)?;
+        
+        assert_eq!(new_processor.data_count(), 1);
+        Ok(())
+    }
 }

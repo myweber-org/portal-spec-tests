@@ -153,4 +153,81 @@ mod tests {
 
         Ok(())
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+
+pub struct DataProcessor {
+    pub valid_records: Vec<Vec<String>>,
+    pub invalid_records: Vec<Vec<String>>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            valid_records: Vec::new(),
+            invalid_records: Vec::new(),
+        }
+    }
+
+    pub fn process_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+
+        for (line_num, line) in reader.lines().enumerate() {
+            let line = line?;
+            let record: Vec<String> = line.split(',').map(|s| s.trim().to_string()).collect();
+
+            if self.validate_record(&record) {
+                self.valid_records.push(record);
+            } else {
+                self.invalid_records.push(record);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn validate_record(&self, record: &[String]) -> bool {
+        if record.len() != 3 {
+            return false;
+        }
+
+        if record[0].is_empty() || record[1].is_empty() || record[2].is_empty() {
+            return false;
+        }
+
+        if !record[2].chars().all(|c| c.is_numeric()) {
+            return false;
+        }
+
+        true
+    }
+
+    pub fn get_stats(&self) -> (usize, usize) {
+        (self.valid_records.len(), self.invalid_records.len())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_data_processor() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "John,Doe,25").unwrap();
+        writeln!(file, "Jane,Smith,30").unwrap();
+        writeln!(file, "Invalid,Record,").unwrap();
+        writeln!(file, "Another,Bad,ABC").unwrap();
+
+        let mut processor = DataProcessor::new();
+        processor.process_csv(file.path().to_str().unwrap()).unwrap();
+
+        let (valid, invalid) = processor.get_stats();
+        assert_eq!(valid, 2);
+        assert_eq!(invalid, 2);
+    }
 }

@@ -125,3 +125,103 @@ mod tests {
         assert_eq!(result, vec![6]);
     }
 }
+use csv::{ReaderBuilder, WriterBuilder};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+use std::path::Path;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    id: u32,
+    name: String,
+    age: u8,
+    active: bool,
+}
+
+fn validate_record(record: &Record) -> Result<(), String> {
+    if record.name.trim().is_empty() {
+        return Err("Name cannot be empty".to_string());
+    }
+    if record.age > 120 {
+        return Err("Age must be reasonable".to_string());
+    }
+    Ok(())
+}
+
+pub fn clean_csv_data(input_path: &Path, output_path: &Path) -> Result<(), Box<dyn Error>> {
+    let file = File::open(input_path)?;
+    let mut rdr = ReaderBuilder::new()
+        .has_headers(true)
+        .from_reader(file);
+
+    let output_file = File::create(output_path)?;
+    let mut wtr = WriterBuilder::new()
+        .has_headers(true)
+        .from_writer(output_file);
+
+    let mut valid_count = 0;
+    let mut invalid_count = 0;
+
+    for result in rdr.deserialize() {
+        let record: Record = result?;
+        
+        match validate_record(&record) {
+            Ok(_) => {
+                wtr.serialize(&record)?;
+                valid_count += 1;
+            }
+            Err(err) => {
+                eprintln!("Invalid record {}: {}", record.id, err);
+                invalid_count += 1;
+            }
+        }
+    }
+
+    wtr.flush()?;
+    println!("Cleaning complete. Valid: {}, Invalid: {}", valid_count, invalid_count);
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_validate_record() {
+        let valid_record = Record {
+            id: 1,
+            name: "John".to_string(),
+            age: 30,
+            active: true,
+        };
+        assert!(validate_record(&valid_record).is_ok());
+
+        let invalid_record = Record {
+            id: 2,
+            name: "   ".to_string(),
+            age: 30,
+            active: true,
+        };
+        assert!(validate_record(&invalid_record).is_err());
+    }
+
+    #[test]
+    fn test_clean_csv_data() -> Result<(), Box<dyn Error>> {
+        let input_data = "id,name,age,active\n1,Alice,25,true\n2,,30,false\n3,Bob,150,true";
+        
+        let input_file = NamedTempFile::new()?;
+        std::fs::write(&input_file, input_data)?;
+        
+        let output_file = NamedTempFile::new()?;
+        
+        clean_csv_data(input_file.path(), output_file.path())?;
+        
+        let output_content = std::fs::read_to_string(output_file.path())?;
+        assert!(output_content.contains("Alice"));
+        assert!(!output_content.contains("Bob"));
+        
+        Ok(())
+    }
+}

@@ -329,4 +329,137 @@ mod tests {
         let alpha_records = processor.filter_by_category("alpha");
         assert_eq!(alpha_records.len(), 2);
     }
+}use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataRecord {
+    pub id: u64,
+    pub value: f64,
+    pub timestamp: i64,
+}
+
+#[derive(Debug)]
+pub enum ProcessingError {
+    InvalidValue,
+    InvalidTimestamp,
+    ValidationFailed(String),
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProcessingError::InvalidValue => write!(f, "Value must be positive"),
+            ProcessingError::InvalidTimestamp => write!(f, "Timestamp cannot be negative"),
+            ProcessingError::ValidationFailed(msg) => write!(f, "Validation failed: {}", msg),
+        }
+    }
+}
+
+impl Error for ProcessingError {}
+
+pub struct DataProcessor {
+    threshold: f64,
+}
+
+impl DataProcessor {
+    pub fn new(threshold: f64) -> Self {
+        DataProcessor { threshold }
+    }
+
+    pub fn validate_record(&self, record: &DataRecord) -> Result<(), ProcessingError> {
+        if record.value <= 0.0 {
+            return Err(ProcessingError::InvalidValue);
+        }
+        
+        if record.timestamp < 0 {
+            return Err(ProcessingError::InvalidTimestamp);
+        }
+        
+        Ok(())
+    }
+
+    pub fn process_records(&self, records: Vec<DataRecord>) -> Result<Vec<DataRecord>, ProcessingError> {
+        let mut processed = Vec::with_capacity(records.len());
+        
+        for record in records {
+            self.validate_record(&record)?;
+            
+            let processed_record = DataRecord {
+                id: record.id,
+                value: if record.value > self.threshold {
+                    record.value * 0.9
+                } else {
+                    record.value * 1.1
+                },
+                timestamp: record.timestamp,
+            };
+            
+            processed.push(processed_record);
+        }
+        
+        Ok(processed)
+    }
+
+    pub fn filter_by_threshold(&self, records: Vec<DataRecord>) -> Vec<DataRecord> {
+        records
+            .into_iter()
+            .filter(|r| r.value >= self.threshold)
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validation_success() {
+        let processor = DataProcessor::new(100.0);
+        let record = DataRecord {
+            id: 1,
+            value: 50.0,
+            timestamp: 1625097600,
+        };
+        
+        assert!(processor.validate_record(&record).is_ok());
+    }
+
+    #[test]
+    fn test_validation_invalid_value() {
+        let processor = DataProcessor::new(100.0);
+        let record = DataRecord {
+            id: 1,
+            value: -10.0,
+            timestamp: 1625097600,
+        };
+        
+        assert!(matches!(
+            processor.validate_record(&record),
+            Err(ProcessingError::InvalidValue)
+        ));
+    }
+
+    #[test]
+    fn test_process_records() {
+        let processor = DataProcessor::new(50.0);
+        let records = vec![
+            DataRecord {
+                id: 1,
+                value: 30.0,
+                timestamp: 1625097600,
+            },
+            DataRecord {
+                id: 2,
+                value: 60.0,
+                timestamp: 1625097601,
+            },
+        ];
+        
+        let processed = processor.process_records(records).unwrap();
+        assert_eq!(processed.len(), 2);
+        assert!(processed[0].value > 30.0);
+        assert!(processed[1].value < 60.0);
+    }
 }

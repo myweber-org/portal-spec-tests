@@ -141,3 +141,84 @@ mod tests {
         assert_eq!(parsed["d"], 4);
     }
 }
+use serde_json::{Value, Map};
+use std::fs;
+use std::path::Path;
+
+pub fn merge_json_files<P: AsRef<Path>>(paths: &[P]) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut result = Map::new();
+
+    for path in paths {
+        let content = fs::read_to_string(path)?;
+        let json_value: Value = serde_json::from_str(&content)?;
+
+        if let Value::Object(obj) = json_value {
+            merge_objects(&mut result, obj);
+        } else {
+            return Err("Top-level JSON must be an object".into());
+        }
+    }
+
+    Ok(Value::Object(result))
+}
+
+fn merge_objects(target: &mut Map<String, Value>, source: Map<String, Value>) {
+    for (key, source_value) in source {
+        match target.get_mut(&key) {
+            Some(target_value) => {
+                if let (Value::Object(mut target_obj), Value::Object(source_obj)) = (target_value.clone(), source_value) {
+                    merge_objects(&mut target_obj, source_obj);
+                    target.insert(key, Value::Object(target_obj));
+                } else if target_value != &source_value {
+                    let merged_array = Value::Array(vec![target_value.clone(), source_value]);
+                    target.insert(key, merged_array);
+                }
+            }
+            None => {
+                target.insert(key, source_value);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_basic_merge() {
+        let file1 = NamedTempFile::new().unwrap();
+        let file2 = NamedTempFile::new().unwrap();
+
+        fs::write(&file1, r#"{"a": 1, "b": 2}"#).unwrap();
+        fs::write(&file2, r#"{"c": 3, "d": 4}"#).unwrap();
+
+        let result = merge_json_files(&[file1.path(), file2.path()]).unwrap();
+        let expected = json!({
+            "a": 1,
+            "b": 2,
+            "c": 3,
+            "d": 4
+        });
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_conflict_resolution() {
+        let file1 = NamedTempFile::new().unwrap();
+        let file2 = NamedTempFile::new().unwrap();
+
+        fs::write(&file1, r#"{"common": "first"}"#).unwrap();
+        fs::write(&file2, r#"{"common": "second"}"#).unwrap();
+
+        let result = merge_json_files(&[file1.path(), file2.path()]).unwrap();
+        let expected = json!({
+            "common": ["first", "second"]
+        });
+
+        assert_eq!(result, expected);
+    }
+}

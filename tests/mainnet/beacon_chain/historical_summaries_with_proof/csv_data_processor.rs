@@ -785,4 +785,99 @@ mod tests {
         let avg = calculate_average(&records).unwrap();
         assert_eq!(avg, 15.0);
     }
+}use std::error::Error;
+use std::fs::File;
+use csv::{Reader, Writer};
+
+#[derive(Debug, Clone)]
+struct Record {
+    id: u32,
+    category: String,
+    value: f64,
+    active: bool,
+}
+
+impl Record {
+    fn new(id: u32, category: &str, value: f64, active: bool) -> Self {
+        Record {
+            id,
+            category: category.to_string(),
+            value,
+            active,
+        }
+    }
+}
+
+fn load_records_from_csv(file_path: &str) -> Result<Vec<Record>, Box<dyn Error>> {
+    let file = File::open(file_path)?;
+    let mut rdr = Reader::from_reader(file);
+    let mut records = Vec::new();
+
+    for result in rdr.deserialize() {
+        let record: Record = result?;
+        records.push(record);
+    }
+
+    Ok(records)
+}
+
+fn filter_active_records(records: &[Record]) -> Vec<Record> {
+    records
+        .iter()
+        .filter(|r| r.active)
+        .cloned()
+        .collect()
+}
+
+fn calculate_category_totals(records: &[Record]) -> std::collections::HashMap<String, f64> {
+    let mut totals = std::collections::HashMap::new();
+    
+    for record in records {
+        *totals.entry(record.category.clone()).or_insert(0.0) += record.value;
+    }
+    
+    totals
+}
+
+fn save_records_to_csv(records: &[Record], file_path: &str) -> Result<(), Box<dyn Error>> {
+    let file = File::create(file_path)?;
+    let mut wtr = Writer::from_writer(file);
+
+    for record in records {
+        wtr.serialize(record)?;
+    }
+
+    wtr.flush()?;
+    Ok(())
+}
+
+fn process_data_pipeline(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
+    let all_records = load_records_from_csv(input_path)?;
+    let active_records = filter_active_records(&all_records);
+    let category_totals = calculate_category_totals(&active_records);
+
+    println!("Processing complete:");
+    println!("Total records loaded: {}", all_records.len());
+    println!("Active records: {}", active_records.len());
+    
+    for (category, total) in category_totals {
+        println!("Category '{}' total: {:.2}", category, total);
+    }
+
+    save_records_to_csv(&active_records, output_path)?;
+    println!("Active records saved to: {}", output_path);
+
+    Ok(())
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let input_file = "data/input.csv";
+    let output_file = "data/output.csv";
+
+    match process_data_pipeline(input_file, output_file) {
+        Ok(()) => println!("Data processing completed successfully"),
+        Err(e) => eprintln!("Error processing data: {}", e),
+    }
+
+    Ok(())
 }

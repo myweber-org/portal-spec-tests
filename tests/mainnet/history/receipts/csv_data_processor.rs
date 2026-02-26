@@ -104,3 +104,104 @@ mod tests {
         assert_eq!(record.value, 10.12);
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{self, BufRead, BufReader, Write};
+
+#[derive(Debug, Clone)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
+}
+
+impl Record {
+    fn new(id: u32, name: String, value: f64, active: bool) -> Self {
+        Record {
+            id,
+            name,
+            value,
+            active,
+        }
+    }
+
+    fn to_csv_string(&self) -> String {
+        format!("{},{},{},{}", self.id, self.name, self.value, self.active)
+    }
+
+    fn from_csv_line(line: &str) -> Result<Self, Box<dyn Error>> {
+        let parts: Vec<&str> = line.split(',').collect();
+        if parts.len() != 4 {
+            return Err("Invalid CSV line format".into());
+        }
+
+        let id = parts[0].parse::<u32>()?;
+        let name = parts[1].to_string();
+        let value = parts[2].parse::<f64>()?;
+        let active = parts[3].parse::<bool>()?;
+
+        Ok(Record::new(id, name, value, active))
+    }
+}
+
+fn read_records_from_file(filename: &str) -> Result<Vec<Record>, Box<dyn Error>> {
+    let file = File::open(filename)?;
+    let reader = BufReader::new(file);
+    let mut records = Vec::new();
+
+    for line in reader.lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let record = Record::from_csv_line(&line)?;
+        records.push(record);
+    }
+
+    Ok(records)
+}
+
+fn filter_records_by_value(records: Vec<Record>, threshold: f64) -> Vec<Record> {
+    records
+        .into_iter()
+        .filter(|r| r.value >= threshold && r.active)
+        .collect()
+}
+
+fn write_records_to_file(records: &[Record], filename: &str) -> Result<(), Box<dyn Error>> {
+    let mut file = File::create(filename)?;
+    writeln!(file, "id,name,value,active")?;
+
+    for record in records {
+        writeln!(file, "{}", record.to_csv_string())?;
+    }
+
+    Ok(())
+}
+
+fn process_csv_data(input_file: &str, output_file: &str, threshold: f64) -> Result<(), Box<dyn Error>> {
+    let records = read_records_from_file(input_file)?;
+    println!("Read {} records from {}", records.len(), input_file);
+
+    let filtered_records = filter_records_by_value(records, threshold);
+    println!("Filtered to {} records with value >= {}", filtered_records.len(), threshold);
+
+    write_records_to_file(&filtered_records, output_file)?;
+    println!("Written filtered records to {}", output_file);
+
+    Ok(())
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let input_filename = "data/input.csv";
+    let output_filename = "data/output.csv";
+    let threshold = 50.0;
+
+    match process_csv_data(input_filename, output_filename, threshold) {
+        Ok(_) => println!("Processing completed successfully"),
+        Err(e) => eprintln!("Error processing CSV data: {}", e),
+    }
+
+    Ok(())
+}

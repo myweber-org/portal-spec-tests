@@ -153,4 +153,124 @@ mod tests {
         assert_eq!(processor.max_value(), None);
         assert_eq!(processor.min_value(), None);
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+
+#[derive(Debug)]
+pub struct Record {
+    id: u32,
+    category: String,
+    value: f64,
+    active: bool,
+}
+
+pub fn load_csv(file_path: &str) -> Result<Vec<Record>, Box<dyn Error>> {
+    let file = File::open(file_path)?;
+    let reader = BufReader::new(file);
+    let mut records = Vec::new();
+
+    for (index, line) in reader.lines().enumerate() {
+        let line = line?;
+        if index == 0 {
+            continue;
+        }
+
+        let parts: Vec<&str> = line.split(',').collect();
+        if parts.len() != 4 {
+            continue;
+        }
+
+        let record = Record {
+            id: parts[0].parse()?,
+            category: parts[1].to_string(),
+            value: parts[2].parse()?,
+            active: parts[3].parse()?,
+        };
+        records.push(record);
+    }
+
+    Ok(records)
+}
+
+pub fn filter_by_category(records: &[Record], category: &str) -> Vec<&Record> {
+    records
+        .iter()
+        .filter(|record| record.category == category)
+        .collect()
+}
+
+pub fn calculate_average(records: &[Record]) -> Option<f64> {
+    if records.is_empty() {
+        return None;
+    }
+
+    let sum: f64 = records.iter().map(|record| record.value).sum();
+    Some(sum / records.len() as f64)
+}
+
+pub fn find_max_value(records: &[Record]) -> Option<&Record> {
+    records.iter().max_by(|a, b| a.value.partial_cmp(&b.value).unwrap())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_load_csv() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,category,value,active").unwrap();
+        writeln!(temp_file, "1,electronics,299.99,true").unwrap();
+        writeln!(temp_file, "2,books,19.99,false").unwrap();
+
+        let records = load_csv(temp_file.path().to_str().unwrap()).unwrap();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].category, "electronics");
+    }
+
+    #[test]
+    fn test_filter_by_category() {
+        let records = vec![
+            Record {
+                id: 1,
+                category: "electronics".to_string(),
+                value: 299.99,
+                active: true,
+            },
+            Record {
+                id: 2,
+                category: "books".to_string(),
+                value: 19.99,
+                active: false,
+            },
+        ];
+
+        let filtered = filter_by_category(&records, "electronics");
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].id, 1);
+    }
+
+    #[test]
+    fn test_calculate_average() {
+        let records = vec![
+            Record {
+                id: 1,
+                category: "test".to_string(),
+                value: 10.0,
+                active: true,
+            },
+            Record {
+                id: 2,
+                category: "test".to_string(),
+                value: 20.0,
+                active: false,
+            },
+        ];
+
+        let avg = calculate_average(&records).unwrap();
+        assert_eq!(avg, 15.0);
+    }
 }

@@ -457,4 +457,156 @@ mod tests {
         processor.transform_values(|x| x * 1.1);
         assert!((processor.records[0].value - 110.0).abs() < 0.001);
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+
+#[derive(Debug)]
+pub struct CsvRecord {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub category: String,
+}
+
+pub fn read_csv_file(file_path: &str) -> Result<Vec<CsvRecord>, Box<dyn Error>> {
+    let file = File::open(file_path)?;
+    let reader = BufReader::new(file);
+    let mut records = Vec::new();
+    let mut line_number = 0;
+
+    for line in reader.lines() {
+        line_number += 1;
+        let line = line?;
+        
+        if line_number == 1 {
+            continue;
+        }
+
+        let parts: Vec<&str> = line.split(',').collect();
+        if parts.len() != 4 {
+            continue;
+        }
+
+        let id = parts[0].parse::<u32>()?;
+        let name = parts[1].to_string();
+        let value = parts[2].parse::<f64>()?;
+        let category = parts[3].to_string();
+
+        records.push(CsvRecord {
+            id,
+            name,
+            value,
+            category,
+        });
+    }
+
+    Ok(records)
+}
+
+pub fn filter_by_category(records: &[CsvRecord], category: &str) -> Vec<&CsvRecord> {
+    records
+        .iter()
+        .filter(|record| record.category == category)
+        .collect()
+}
+
+pub fn calculate_average_value(records: &[CsvRecord]) -> f64 {
+    if records.is_empty() {
+        return 0.0;
+    }
+    
+    let sum: f64 = records.iter().map(|r| r.value).sum();
+    sum / records.len() as f64
+}
+
+pub fn find_max_value_record(records: &[CsvRecord]) -> Option<&CsvRecord> {
+    records.iter().max_by(|a, b| a.value.partial_cmp(&b.value).unwrap())
+}
+
+pub fn aggregate_by_category(records: &[CsvRecord]) -> Vec<(String, f64)> {
+    use std::collections::HashMap;
+    
+    let mut category_totals: HashMap<String, f64> = HashMap::new();
+    
+    for record in records {
+        *category_totals.entry(record.category.clone()).or_insert(0.0) += record.value;
+    }
+    
+    let mut result: Vec<(String, f64)> = category_totals.into_iter().collect();
+    result.sort_by(|a, b| a.0.cmp(&b.0));
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_read_csv_file() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,name,value,category").unwrap();
+        writeln!(temp_file, "1,ItemA,10.5,Category1").unwrap();
+        writeln!(temp_file, "2,ItemB,20.3,Category2").unwrap();
+        
+        let records = read_csv_file(temp_file.path().to_str().unwrap()).unwrap();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].name, "ItemA");
+        assert_eq!(records[1].value, 20.3);
+    }
+
+    #[test]
+    fn test_filter_by_category() {
+        let records = vec![
+            CsvRecord { id: 1, name: "A".to_string(), value: 10.0, category: "Cat1".to_string() },
+            CsvRecord { id: 2, name: "B".to_string(), value: 20.0, category: "Cat2".to_string() },
+            CsvRecord { id: 3, name: "C".to_string(), value: 30.0, category: "Cat1".to_string() },
+        ];
+        
+        let filtered = filter_by_category(&records, "Cat1");
+        assert_eq!(filtered.len(), 2);
+        assert_eq!(filtered[0].id, 1);
+        assert_eq!(filtered[1].id, 3);
+    }
+
+    #[test]
+    fn test_calculate_average_value() {
+        let records = vec![
+            CsvRecord { id: 1, name: "A".to_string(), value: 10.0, category: "Cat1".to_string() },
+            CsvRecord { id: 2, name: "B".to_string(), value: 20.0, category: "Cat2".to_string() },
+            CsvRecord { id: 3, name: "C".to_string(), value: 30.0, category: "Cat1".to_string() },
+        ];
+        
+        let avg = calculate_average_value(&records);
+        assert_eq!(avg, 20.0);
+    }
+
+    #[test]
+    fn test_find_max_value_record() {
+        let records = vec![
+            CsvRecord { id: 1, name: "A".to_string(), value: 10.0, category: "Cat1".to_string() },
+            CsvRecord { id: 2, name: "B".to_string(), value: 30.0, category: "Cat2".to_string() },
+            CsvRecord { id: 3, name: "C".to_string(), value: 20.0, category: "Cat1".to_string() },
+        ];
+        
+        let max_record = find_max_value_record(&records).unwrap();
+        assert_eq!(max_record.id, 2);
+        assert_eq!(max_record.value, 30.0);
+    }
+
+    #[test]
+    fn test_aggregate_by_category() {
+        let records = vec![
+            CsvRecord { id: 1, name: "A".to_string(), value: 10.0, category: "Cat1".to_string() },
+            CsvRecord { id: 2, name: "B".to_string(), value: 20.0, category: "Cat2".to_string() },
+            CsvRecord { id: 3, name: "C".to_string(), value: 30.0, category: "Cat1".to_string() },
+        ];
+        
+        let aggregated = aggregate_by_category(&records);
+        assert_eq!(aggregated.len(), 2);
+        assert_eq!(aggregated[0], ("Cat1".to_string(), 40.0));
+        assert_eq!(aggregated[1], ("Cat2".to_string(), 20.0));
+    }
 }

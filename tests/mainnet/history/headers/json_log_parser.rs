@@ -569,3 +569,184 @@ mod tests {
         assert_eq!(counts.get(&LogLevel::INFO), None);
     }
 }
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct LogEntry {
+    timestamp: String,
+    level: String,
+    service: String,
+    message: String,
+    metadata: HashMap<String, String>,
+}
+
+#[derive(Debug)]
+struct LogSummary {
+    total_entries: usize,
+    error_count: usize,
+    warning_count: usize,
+    services: HashMap<String, usize>,
+    level_distribution: HashMap<String, usize>,
+}
+
+impl LogSummary {
+    fn new() -> Self {
+        LogSummary {
+            total_entries: 0,
+            error_count: 0,
+            warning_count: 0,
+            services: HashMap::new(),
+            level_distribution: HashMap::new(),
+        }
+    }
+
+    fn update(&mut self, entry: &LogEntry) {
+        self.total_entries += 1;
+        
+        *self.level_distribution.entry(entry.level.clone()).or_insert(0) += 1;
+        *self.services.entry(entry.service.clone()).or_insert(0) += 1;
+        
+        match entry.level.as_str() {
+            "ERROR" => self.error_count += 1,
+            "WARN" => self.warning_count += 1,
+            _ => (),
+        }
+    }
+}
+
+struct LogParser {
+    min_level: Option<String>,
+    service_filter: Option<String>,
+}
+
+impl LogParser {
+    fn new() -> Self {
+        LogParser {
+            min_level: None,
+            service_filter: None,
+        }
+    }
+
+    fn with_min_level(mut self, level: &str) -> Self {
+        self.min_level = Some(level.to_string());
+        self
+    }
+
+    fn with_service_filter(mut self, service: &str) -> Self {
+        self.service_filter = Some(service.to_string());
+        self
+    }
+
+    fn should_include(&self, entry: &LogEntry) -> bool {
+        if let Some(ref min_level) = self.min_level {
+            let level_order = vec!["DEBUG", "INFO", "WARN", "ERROR"];
+            let entry_level_idx = level_order.iter().position(|&l| l == entry.level).unwrap_or(0);
+            let min_level_idx = level_order.iter().position(|&l| l == min_level).unwrap_or(0);
+            
+            if entry_level_idx < min_level_idx {
+                return false;
+            }
+        }
+
+        if let Some(ref service_filter) = self.service_filter {
+            if &entry.service != service_filter {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    fn parse_file<P: AsRef<Path>>(&self, path: P) -> Result<(Vec<LogEntry>, LogSummary), Box<dyn std::error::Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut entries = Vec::new();
+        let mut summary = LogSummary::new();
+
+        for line in reader.lines() {
+            let line = line?;
+            if line.trim().is_empty() {
+                continue;
+            }
+
+            match serde_json::from_str::<LogEntry>(&line) {
+                Ok(mut entry) => {
+                    if self.should_include(&entry) {
+                        entry.metadata.retain(|_, v| !v.is_empty());
+                        summary.update(&entry);
+                        entries.push(entry);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Failed to parse line: {}. Error: {}", line, e);
+                }
+            }
+        }
+
+        Ok((entries, summary))
+    }
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let parser = LogParser::new()
+        .with_min_level("WARN")
+        .with_service_filter("api-service");
+
+    let (entries, summary) = parser.parse_file("logs/app.log")?;
+
+    println!("Parsed {} log entries", entries.len());
+    println!("Summary: {:?}", summary);
+
+    if !entries.is_empty() {
+        println!("\nFirst filtered entry:");
+        println!("{:#?}", entries[0]);
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_parser_filters_by_level() {
+        let log_data = r#"
+{"timestamp": "2024-01-15T10:30:00Z", "level": "INFO", "service": "api-service", "message": "Request received", "metadata": {}}
+{"timestamp": "2024-01-15T10:31:00Z", "level": "WARN", "service": "api-service", "message": "Slow response", "metadata": {"duration": "2.5s"}}
+{"timestamp": "2024-01-15T10:32:00Z", "level": "ERROR", "service": "db-service", "message": "Connection failed", "metadata": {"retry": "3"}}
+"#;
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+        write!(temp_file, "{}", log_data).unwrap();
+
+        let parser = LogParser::new().with_min_level("WARN");
+        let (entries, _) = parser.parse_file(temp_file.path()).unwrap();
+
+        assert_eq!(entries.len(), 2);
+        assert!(entries.iter().all(|e| e.level == "WARN" || e.level == "ERROR"));
+    }
+
+    #[test]
+    fn test_parser_filters_by_service() {
+        let log_data = r#"
+{"timestamp": "2024-01-15T10:30:00Z", "level": "INFO", "service": "api-service", "message": "Request received", "metadata": {}}
+{"timestamp": "2024-01-15T10:31:00Z", "level": "WARN", "service": "db-service", "message": "Slow query", "metadata": {}}
+"#;
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+        write!(temp_file, "{}", log_data).unwrap();
+
+        let parser = LogParser::new().with_service_filter("api-service");
+        let (entries, _) = parser.parse_file(temp_file.path()).unwrap();
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].service, "api-service");
+    }
+}

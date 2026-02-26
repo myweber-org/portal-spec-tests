@@ -338,4 +338,125 @@ mod tests {
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0], vec!["Carol", "35"]);
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufReader, BufWriter};
+use csv::{ReaderBuilder, WriterBuilder};
+
+pub struct CsvProcessor {
+    input_path: String,
+    output_path: String,
+}
+
+impl CsvProcessor {
+    pub fn new(input_path: &str, output_path: &str) -> Self {
+        CsvProcessor {
+            input_path: input_path.to_string(),
+            output_path: output_path.to_string(),
+        }
+    }
+
+    pub fn filter_by_column_value(&self, column_name: &str, target_value: &str) -> Result<(), Box<dyn Error>> {
+        let input_file = File::open(&self.input_path)?;
+        let reader = BufReader::new(input_file);
+        let mut csv_reader = ReaderBuilder::new().has_headers(true).from_reader(reader);
+        
+        let output_file = File::create(&self.output_path)?;
+        let writer = BufWriter::new(output_file);
+        let mut csv_writer = WriterBuilder::new().from_writer(writer);
+        
+        let headers = csv_reader.headers()?.clone();
+        csv_writer.write_record(&headers)?;
+        
+        let column_index = headers.iter()
+            .position(|h| h == column_name)
+            .ok_or_else(|| format!("Column '{}' not found", column_name))?;
+        
+        for result in csv_reader.records() {
+            let record = result?;
+            if record.get(column_index).map(|v| v == target_value).unwrap_or(false) {
+                csv_writer.write_record(&record)?;
+            }
+        }
+        
+        csv_writer.flush()?;
+        Ok(())
+    }
+    
+    pub fn transform_column(&self, column_name: &str, transform_fn: fn(&str) -> String) -> Result<(), Box<dyn Error>> {
+        let input_file = File::open(&self.input_path)?;
+        let reader = BufReader::new(input_file);
+        let mut csv_reader = ReaderBuilder::new().has_headers(true).from_reader(reader);
+        
+        let output_file = File::create(&self.output_path)?;
+        let writer = BufWriter::new(output_file);
+        let mut csv_writer = WriterBuilder::new().from_writer(writer);
+        
+        let headers = csv_reader.headers()?.clone();
+        csv_writer.write_record(&headers)?;
+        
+        let column_index = headers.iter()
+            .position(|h| h == column_name)
+            .ok_or_else(|| format!("Column '{}' not found", column_name))?;
+        
+        for result in csv_reader.records() {
+            let mut record = result?.into_iter().map(String::from).collect::<Vec<String>>();
+            if let Some(value) = record.get_mut(column_index) {
+                *value = transform_fn(value);
+            }
+            csv_writer.write_record(&record)?;
+        }
+        
+        csv_writer.flush()?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::NamedTempFile;
+    
+    fn uppercase_transform(s: &str) -> String {
+        s.to_uppercase()
+    }
+    
+    #[test]
+    fn test_filter_by_column_value() {
+        let input_content = "name,age,city\nAlice,30,London\nBob,25,Paris\nCharlie,35,London";
+        let input_file = NamedTempFile::new().unwrap();
+        fs::write(input_file.path(), input_content).unwrap();
+        
+        let output_file = NamedTempFile::new().unwrap();
+        let processor = CsvProcessor::new(
+            input_file.path().to_str().unwrap(),
+            output_file.path().to_str().unwrap()
+        );
+        
+        processor.filter_by_column_value("city", "London").unwrap();
+        
+        let output_content = fs::read_to_string(output_file.path()).unwrap();
+        let expected = "name,age,city\nAlice,30,London\nCharlie,35,London\n";
+        assert_eq!(output_content, expected);
+    }
+    
+    #[test]
+    fn test_transform_column() {
+        let input_content = "name,age,city\nalice,30,london\nbob,25,paris";
+        let input_file = NamedTempFile::new().unwrap();
+        fs::write(input_file.path(), input_content).unwrap();
+        
+        let output_file = NamedTempFile::new().unwrap();
+        let processor = CsvProcessor::new(
+            input_file.path().to_str().unwrap(),
+            output_file.path().to_str().unwrap()
+        );
+        
+        processor.transform_column("name", uppercase_transform).unwrap();
+        
+        let output_content = fs::read_to_string(output_file.path()).unwrap();
+        let expected = "name,age,city\nALICE,30,london\nBOB,25,paris\n";
+        assert_eq!(output_content, expected);
+    }
 }

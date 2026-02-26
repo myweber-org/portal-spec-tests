@@ -1,99 +1,74 @@
-use csv::{ReaderBuilder, WriterBuilder};
-use std::collections::HashSet;
-use std::error::Error;
-use std::fs::File;
-use std::io::{BufReader, BufWriter};
 
-pub fn remove_duplicates(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
-    let input_file = File::open(input_path)?;
-    let reader = BufReader::new(input_file);
-    let mut csv_reader = ReaderBuilder::new().has_headers(true).from_reader(reader);
+use std::collections::HashMap;
 
-    let output_file = File::create(output_path)?;
-    let writer = BufWriter::new(output_file);
-    let mut csv_writer = WriterBuilder::new().has_headers(true).from_writer(writer);
-
-    let headers = csv_reader.headers()?.clone();
-    csv_writer.write_record(&headers)?;
-
-    let mut seen = HashSet::new();
-    for result in csv_reader.records() {
-        let record = result?;
-        let row_string = record.iter().collect::<String>();
-        
-        if seen.insert(row_string) {
-            csv_writer.write_record(&record)?;
-        }
-    }
-
-    csv_writer.flush()?;
-    Ok(())
-}use csv::{ReaderBuilder, WriterBuilder};
-use std::error::Error;
-use std::fs::File;
-
-pub struct DataCleaner {
-    missing_value_replacement: String,
-}
+pub struct DataCleaner;
 
 impl DataCleaner {
-    pub fn new(replacement: &str) -> Self {
-        DataCleaner {
-            missing_value_replacement: replacement.to_string(),
-        }
+    pub fn clean_string_vector(data: Vec<Option<String>>) -> Vec<String> {
+        data.into_iter()
+            .filter_map(|item| item)
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
     }
 
-    pub fn clean_csv(&self, input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
-        let input_file = File::open(input_path)?;
-        let mut reader = ReaderBuilder::new()
-            .has_headers(true)
-            .from_reader(input_file);
-
-        let output_file = File::create(output_path)?;
-        let mut writer = WriterBuilder::new()
-            .has_headers(true)
-            .from_writer(output_file);
-
-        let headers = reader.headers()?.clone();
-        writer.write_record(&headers)?;
-
-        for result in reader.records() {
-            let record = result?;
-            let cleaned_record: Vec<String> = record
-                .iter()
-                .map(|field| {
-                    if field.trim().is_empty() || field == "NULL" || field == "null" {
-                        self.missing_value_replacement.clone()
-                    } else {
-                        field.to_string()
-                    }
-                })
-                .collect();
-
-            writer.write_record(&cleaned_record)?;
-        }
-
-        writer.flush()?;
-        Ok(())
+    pub fn clean_hashmap(data: HashMap<String, Option<f64>>) -> HashMap<String, f64> {
+        data.into_iter()
+            .filter_map(|(key, value)| value.map(|v| (key, v)))
+            .filter(|(_, value)| value.is_finite())
+            .collect()
     }
 
-    pub fn count_missing_values(&self, path: &str) -> Result<usize, Box<dyn Error>> {
-        let file = File::open(path)?;
-        let mut reader = ReaderBuilder::new()
-            .has_headers(true)
-            .from_reader(file);
-
-        let mut missing_count = 0;
-
-        for result in reader.records() {
-            let record = result?;
-            for field in record.iter() {
-                if field.trim().is_empty() || field == "NULL" || field == "null" {
-                    missing_count += 1;
-                }
-            }
+    pub fn remove_outliers(data: &[f64], threshold: f64) -> Vec<f64> {
+        if data.is_empty() {
+            return Vec::new();
         }
 
-        Ok(missing_count)
+        let mean: f64 = data.iter().sum::<f64>() / data.len() as f64;
+        let variance: f64 = data.iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>() / data.len() as f64;
+        let std_dev = variance.sqrt();
+
+        data.iter()
+            .filter(|&&x| (x - mean).abs() <= threshold * std_dev)
+            .copied()
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_clean_string_vector() {
+        let input = vec![
+            Some("  hello  ".to_string()),
+            None,
+            Some("".to_string()),
+            Some("world".to_string()),
+        ];
+        let result = DataCleaner::clean_string_vector(input);
+        assert_eq!(result, vec!["hello", "world"]);
+    }
+
+    #[test]
+    fn test_clean_hashmap() {
+        let mut input = HashMap::new();
+        input.insert("a".to_string(), Some(1.5));
+        input.insert("b".to_string(), None);
+        input.insert("c".to_string(), Some(f64::NAN));
+
+        let result = DataCleaner::clean_hashmap(input);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result.get("a"), Some(&1.5));
+    }
+
+    #[test]
+    fn test_remove_outliers() {
+        let data = vec![1.0, 2.0, 3.0, 100.0];
+        let result = DataCleaner::remove_outliers(&data, 2.0);
+        assert_eq!(result, vec![1.0, 2.0, 3.0]);
     }
 }

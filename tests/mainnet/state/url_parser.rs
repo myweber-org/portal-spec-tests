@@ -277,4 +277,61 @@ mod tests {
         let parsed = parse_url("not-a-valid-url");
         assert!(parsed.is_none());
     }
+}use std::collections::HashMap;
+use url::Url;
+
+pub struct UrlParser {
+    url: Url,
+}
+
+impl UrlParser {
+    pub fn new(url_str: &str) -> Result<Self, url::ParseError> {
+        let url = Url::parse(url_str)?;
+        Ok(Self { url })
+    }
+
+    pub fn domain(&self) -> Option<&str> {
+        self.url.host_str()
+    }
+
+    pub fn query_params(&self) -> HashMap<String, String> {
+        self.url.query_pairs()
+            .into_owned()
+            .collect()
+    }
+
+    pub fn path_segments(&self) -> Vec<String> {
+        self.url.path_segments()
+            .map(|segments| segments.map(|s| s.to_string()).collect())
+            .unwrap_or_default()
+    }
+
+    pub fn scheme(&self) -> &str {
+        self.url.scheme()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_url_parsing() {
+        let parser = UrlParser::new("https://example.com/api/v1/users?id=123&name=test").unwrap();
+        assert_eq!(parser.domain(), Some("example.com"));
+        assert_eq!(parser.scheme(), "https");
+        
+        let params = parser.query_params();
+        assert_eq!(params.get("id"), Some(&"123".to_string()));
+        assert_eq!(params.get("name"), Some(&"test".to_string()));
+        
+        let path = parser.path_segments();
+        assert_eq!(path, vec!["api", "v1", "users"]);
+    }
+
+    #[test]
+    fn test_invalid_url() {
+        let result = UrlParser::new("not-a-valid-url");
+        assert!(result.is_err());
+    }
 }

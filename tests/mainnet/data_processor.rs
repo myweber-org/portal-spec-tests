@@ -263,3 +263,138 @@ mod tests {
         assert!(filtered.iter().all(|r| r.value >= 50.0));
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::collections::HashMap;
+
+pub struct DataProcessor {
+    records: Vec<HashMap<String, f64>>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        let mut lines = reader.lines();
+        
+        if let Some(header_result) = lines.next() {
+            let header_line = header_result?;
+            let headers: Vec<String> = header_line.split(',').map(|s| s.trim().to_string()).collect();
+            
+            for line_result in lines {
+                let line = line_result?;
+                let values: Vec<&str> = line.split(',').map(|s| s.trim()).collect();
+                
+                if values.len() == headers.len() {
+                    let mut record = HashMap::new();
+                    for (i, header) in headers.iter().enumerate() {
+                        if let Ok(num) = values[i].parse::<f64>() {
+                            record.insert(header.clone(), num);
+                        }
+                    }
+                    self.records.push(record);
+                }
+            }
+        }
+        
+        Ok(())
+    }
+
+    pub fn calculate_statistics(&self, column_name: &str) -> Option<(f64, f64, f64)> {
+        let values: Vec<f64> = self.records
+            .iter()
+            .filter_map(|record| record.get(column_name).copied())
+            .collect();
+        
+        if values.is_empty() {
+            return None;
+        }
+        
+        let sum: f64 = values.iter().sum();
+        let count = values.len() as f64;
+        let mean = sum / count;
+        
+        let variance: f64 = values.iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>() / count;
+        
+        let std_dev = variance.sqrt();
+        
+        Some((mean, variance, std_dev))
+    }
+
+    pub fn filter_records<F>(&self, predicate: F) -> Vec<HashMap<String, f64>>
+    where
+        F: Fn(&HashMap<String, f64>) -> bool,
+    {
+        self.records
+            .iter()
+            .filter(|record| predicate(record))
+            .cloned()
+            .collect()
+    }
+
+    pub fn get_column_summary(&self) -> HashMap<String, (usize, f64, f64)> {
+        let mut summary = HashMap::new();
+        
+        if let Some(first_record) = self.records.first() {
+            for key in first_record.keys() {
+                let values: Vec<f64> = self.records
+                    .iter()
+                    .filter_map(|record| record.get(key).copied())
+                    .collect();
+                
+                if !values.is_empty() {
+                    let count = values.len();
+                    let min = values.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+                    let max = values.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+                    summary.insert(key.clone(), (count, min, max));
+                }
+            }
+        }
+        
+        summary
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_data_processor() {
+        let mut processor = DataProcessor::new();
+        
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,value,temperature").unwrap();
+        writeln!(temp_file, "1,45.6,22.5").unwrap();
+        writeln!(temp_file, "2,78.9,25.3").unwrap();
+        writeln!(temp_file, "3,12.3,19.8").unwrap();
+        
+        let result = processor.load_csv(temp_file.path().to_str().unwrap());
+        assert!(result.is_ok());
+        
+        let stats = processor.calculate_statistics("value");
+        assert!(stats.is_some());
+        
+        let (mean, variance, std_dev) = stats.unwrap();
+        assert!((mean - 45.6).abs() < 0.1);
+        
+        let filtered = processor.filter_records(|record| {
+            record.get("temperature").map_or(false, |&t| t > 20.0)
+        });
+        assert_eq!(filtered.len(), 2);
+        
+        let summary = processor.get_column_summary();
+        assert_eq!(summary.len(), 3);
+    }
+}

@@ -183,3 +183,181 @@ mod tests {
         Ok(())
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+
+#[derive(Debug, Clone)]
+pub struct Record {
+    pub id: u32,
+    pub name: String,
+    pub category: String,
+    pub value: f64,
+    pub active: bool,
+}
+
+pub struct CsvProcessor {
+    records: Vec<Record>,
+}
+
+impl CsvProcessor {
+    pub fn new() -> Self {
+        CsvProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_file(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        
+        for (index, line) in reader.lines().enumerate() {
+            let line = line?;
+            
+            if index == 0 {
+                continue;
+            }
+            
+            let parts: Vec<&str> = line.split(',').collect();
+            if parts.len() >= 5 {
+                let record = Record {
+                    id: parts[0].parse()?,
+                    name: parts[1].to_string(),
+                    category: parts[2].to_string(),
+                    value: parts[3].parse()?,
+                    active: parts[4].parse().unwrap_or(false),
+                };
+                self.records.push(record);
+            }
+        }
+        
+        Ok(())
+    }
+
+    pub fn filter_by_category(&self, category: &str) -> Vec<Record> {
+        self.records
+            .iter()
+            .filter(|r| r.category == category)
+            .cloned()
+            .collect()
+    }
+
+    pub fn filter_active(&self) -> Vec<Record> {
+        self.records
+            .iter()
+            .filter(|r| r.active)
+            .cloned()
+            .collect()
+    }
+
+    pub fn calculate_total_value(&self) -> f64 {
+        self.records.iter().map(|r| r.value).sum()
+    }
+
+    pub fn calculate_average_value(&self) -> f64 {
+        if self.records.is_empty() {
+            return 0.0;
+        }
+        self.calculate_total_value() / self.records.len() as f64
+    }
+
+    pub fn get_category_summary(&self) -> Vec<(String, f64, usize)> {
+        use std::collections::HashMap;
+        
+        let mut category_map: HashMap<String, (f64, usize)> = HashMap::new();
+        
+        for record in &self.records {
+            let entry = category_map
+                .entry(record.category.clone())
+                .or_insert((0.0, 0));
+            entry.0 += record.value;
+            entry.1 += 1;
+        }
+        
+        category_map
+            .into_iter()
+            .map(|(category, (total, count))| (category, total, count))
+            .collect()
+    }
+
+    pub fn find_max_value_record(&self) -> Option<&Record> {
+        self.records.iter().max_by(|a, b| {
+            a.value.partial_cmp(&b.value).unwrap()
+        })
+    }
+
+    pub fn find_min_value_record(&self) -> Option<&Record> {
+        self.records.iter().min_by(|a, b| {
+            a.value.partial_cmp(&b.value).unwrap()
+        })
+    }
+
+    pub fn count_records(&self) -> usize {
+        self.records.len()
+    }
+
+    pub fn get_all_records(&self) -> &Vec<Record> {
+        &self.records
+    }
+}
+
+pub fn process_csv_data(file_path: &str) -> Result<(), Box<dyn Error>> {
+    let mut processor = CsvProcessor::new();
+    processor.load_from_file(file_path)?;
+    
+    println!("Total records loaded: {}", processor.count_records());
+    println!("Total value: {:.2}", processor.calculate_total_value());
+    println!("Average value: {:.2}", processor.calculate_average_value());
+    
+    if let Some(max_record) = processor.find_max_value_record() {
+        println!("Maximum value record: {:?}", max_record);
+    }
+    
+    if let Some(min_record) = processor.find_min_value_record() {
+        println!("Minimum value record: {:?}", min_record);
+    }
+    
+    let summary = processor.get_category_summary();
+    println!("Category summary:");
+    for (category, total, count) in summary {
+        println!("  {}: {} items, total value: {:.2}", category, count, total);
+    }
+    
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_csv_processor() {
+        let csv_data = "id,name,category,value,active\n\
+                        1,ItemA,Electronics,100.50,true\n\
+                        2,ItemB,Furniture,75.25,false\n\
+                        3,ItemC,Electronics,150.75,true\n\
+                        4,ItemD,Furniture,50.00,true";
+        
+        let mut temp_file = NamedTempFile::new().unwrap();
+        write!(temp_file, "{}", csv_data).unwrap();
+        
+        let mut processor = CsvProcessor::new();
+        let result = processor.load_from_file(temp_file.path().to_str().unwrap());
+        assert!(result.is_ok());
+        assert_eq!(processor.count_records(), 4);
+        
+        let electronics = processor.filter_by_category("Electronics");
+        assert_eq!(electronics.len(), 2);
+        
+        let active_items = processor.filter_active();
+        assert_eq!(active_items.len(), 3);
+        
+        let total_value = processor.calculate_total_value();
+        assert!((total_value - 376.50).abs() < 0.01);
+        
+        let avg_value = processor.calculate_average_value();
+        assert!((avg_value - 94.125).abs() < 0.01);
+    }
+}

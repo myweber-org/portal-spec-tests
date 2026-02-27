@@ -438,4 +438,114 @@ impl ConfigParser {
         
         env_vars
     }
+}use std::collections::HashMap;
+use std::env;
+use std::fs;
+
+#[derive(Debug, Clone)]
+pub struct Config {
+    pub database_url: String,
+    pub port: u16,
+    pub log_level: String,
+    pub cache_size: usize,
+    pub features: Vec<String>,
+}
+
+impl Config {
+    pub fn from_file(path: &str) -> Result<Self, String> {
+        let content = fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read config file: {}", e))?;
+
+        let mut config_map = HashMap::new();
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+            
+            let parts: Vec<&str> = trimmed.splitn(2, '=').collect();
+            if parts.len() == 2 {
+                config_map.insert(parts[0].trim().to_string(), parts[1].trim().to_string());
+            }
+        }
+
+        Self::from_map(config_map)
+    }
+
+    pub fn from_env() -> Result<Self, String> {
+        let mut config_map = HashMap::new();
+        
+        for (key, value) in env::vars() {
+            if key.starts_with("APP_") {
+                let config_key = key.trim_start_matches("APP_").to_lowercase();
+                config_map.insert(config_key, value);
+            }
+        }
+
+        Self::from_map(config_map)
+    }
+
+    fn from_map(map: HashMap<String, String>) -> Result<Self, String> {
+        let database_url = map.get("database_url")
+            .cloned()
+            .or_else(|| env::var("DATABASE_URL").ok())
+            .ok_or("Missing required field: database_url")?;
+
+        let port = map.get("port")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(8080);
+
+        let log_level = map.get("log_level")
+            .cloned()
+            .unwrap_or_else(|| "info".to_string());
+
+        let cache_size = map.get("cache_size")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(100);
+
+        let features = map.get("features")
+            .map(|s| s.split(',').map(|f| f.trim().to_string()).collect())
+            .unwrap_or_else(Vec::new);
+
+        Ok(Config {
+            database_url,
+            port,
+            log_level,
+            cache_size,
+            features,
+        })
+    }
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.database_url.is_empty() {
+            errors.push("database_url cannot be empty".to_string());
+        }
+
+        if self.port == 0 {
+            errors.push("port must be greater than 0".to_string());
+        }
+
+        let valid_log_levels = ["error", "warn", "info", "debug", "trace"];
+        if !valid_log_levels.contains(&self.log_level.as_str()) {
+            errors.push(format!("log_level must be one of: {}", valid_log_levels.join(", ")));
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+pub fn load_config() -> Result<Config, String> {
+    let config = Config::from_file("config/app.conf")
+        .or_else(|_| Config::from_env())?;
+
+    config.validate()
+        .map_err(|errors| errors.join("; "))?;
+
+    Ok(config)
 }

@@ -1368,3 +1368,77 @@ mod tests {
         Ok(())
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+pub struct DataProcessor {
+    delimiter: char,
+    has_header: bool,
+}
+
+impl DataProcessor {
+    pub fn new(delimiter: char, has_header: bool) -> Self {
+        DataProcessor {
+            delimiter,
+            has_header,
+        }
+    }
+
+    pub fn process_file<P: AsRef<Path>>(&self, file_path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        let mut records = Vec::new();
+        let mut lines = reader.lines().enumerate();
+
+        if self.has_header {
+            lines.next();
+        }
+
+        for (line_number, line) in lines {
+            let line_content = line?;
+            let fields: Vec<String> = line_content
+                .split(self.delimiter)
+                .map(|s| s.trim().to_string())
+                .collect();
+
+            if fields.iter().any(|f| f.is_empty()) {
+                return Err(format!("Empty field detected at line {}", line_number + 1).into());
+            }
+
+            records.push(fields);
+        }
+
+        if records.is_empty() {
+            return Err("No valid data records found".into());
+        }
+
+        Ok(records)
+    }
+
+    pub fn validate_records(&self, records: &[Vec<String>]) -> Result<(), Box<dyn Error>> {
+        let expected_len = records.first().map(|r| r.len()).unwrap_or(0);
+        
+        for (idx, record) in records.iter().enumerate() {
+            if record.len() != expected_len {
+                return Err(format!("Record {} has {} fields, expected {}", 
+                    idx + 1, record.len(), expected_len).into());
+            }
+            
+            for field in record {
+                if field.chars().any(|c| c.is_control()) {
+                    return Err(format!("Control character found in record {} field: {}", 
+                        idx + 1, field).into());
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+pub fn calculate_statistics(records: &[Vec<String>]) -> (usize, usize) {
+    let total_records = records.len();
+    let total_fields = records.iter().map(|r| r.len()).sum();
+    (total_records, total_fields)
+}

@@ -1334,3 +1334,125 @@ pub fn decrypt_file(input_path: &Path, output_path: &Path) -> io::Result<()> {
     
     Ok(())
 }
+use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
+use rand::RngCore;
+use std::fs;
+use std::io::{Read, Write};
+use std::path::Path;
+
+type Aes256CbcEnc = cbc::Encryptor<aes::Aes256>;
+type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
+
+const KEY_SIZE: usize = 32;
+const IV_SIZE: usize = 16;
+
+pub fn generate_key() -> Vec<u8> {
+    let mut key = vec![0u8; KEY_SIZE];
+    rand::thread_rng().fill_bytes(&mut key);
+    key
+}
+
+pub fn encrypt_file(input_path: &Path, output_path: &Path, key: &[u8]) -> Result<(), String> {
+    if key.len() != KEY_SIZE {
+        return Err(format!("Key must be {} bytes", KEY_SIZE));
+    }
+
+    let mut iv = [0u8; IV_SIZE];
+    rand::thread_rng().fill_bytes(&mut iv);
+
+    let mut input_file = fs::File::open(input_path)
+        .map_err(|e| format!("Failed to open input file: {}", e))?;
+    let mut plaintext = Vec::new();
+    input_file
+        .read_to_end(&mut plaintext)
+        .map_err(|e| format!("Failed to read input file: {}", e))?;
+
+    let ciphertext = Aes256CbcEnc::new(key.into(), &iv.into())
+        .encrypt_padded_vec_mut::<Pkcs7>(&plaintext);
+
+    let mut output_file = fs::File::create(output_path)
+        .map_err(|e| format!("Failed to create output file: {}", e))?;
+
+    output_file
+        .write_all(&iv)
+        .map_err(|e| format!("Failed to write IV: {}", e))?;
+    output_file
+        .write_all(&ciphertext)
+        .map_err(|e| format!("Failed to write ciphertext: {}", e))?;
+
+    Ok(())
+}
+
+pub fn decrypt_file(input_path: &Path, output_path: &Path, key: &[u8]) -> Result<(), String> {
+    if key.len() != KEY_SIZE {
+        return Err(format!("Key must be {} bytes", KEY_SIZE));
+    }
+
+    let mut input_file = fs::File::open(input_path)
+        .map_err(|e| format!("Failed to open input file: {}", e))?;
+
+    let mut iv = [0u8; IV_SIZE];
+    input_file
+        .read_exact(&mut iv)
+        .map_err(|e| format!("Failed to read IV: {}", e))?;
+
+    let mut ciphertext = Vec::new();
+    input_file
+        .read_to_end(&mut ciphertext)
+        .map_err(|e| format!("Failed to read ciphertext: {}", e))?;
+
+    let plaintext = Aes256CbcDec::new(key.into(), &iv.into())
+        .decrypt_padded_vec_mut::<Pkcs7>(&ciphertext)
+        .map_err(|e| format!("Decryption failed: {}", e))?;
+
+    let mut output_file = fs::File::create(output_path)
+        .map_err(|e| format!("Failed to create output file: {}", e))?;
+    output_file
+        .write_all(&plaintext)
+        .map_err(|e| format!("Failed to write plaintext: {}", e))?;
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_encryption_decryption() {
+        let key = generate_key();
+        let original_content = b"Secret data that needs protection";
+
+        let input_file = NamedTempFile::new().unwrap();
+        let encrypted_file = NamedTempFile::new().unwrap();
+        let decrypted_file = NamedTempFile::new().unwrap();
+
+        fs::write(input_file.path(), original_content).unwrap();
+
+        encrypt_file(input_file.path(), encrypted_file.path(), &key).unwrap();
+        decrypt_file(encrypted_file.path(), decrypted_file.path(), &key).unwrap();
+
+        let decrypted_content = fs::read(decrypted_file.path()).unwrap();
+        assert_eq!(original_content.to_vec(), decrypted_content);
+    }
+
+    #[test]
+    fn test_wrong_key_fails() {
+        let key1 = generate_key();
+        let key2 = generate_key();
+        let content = b"Test data";
+
+        let input_file = NamedTempFile::new().unwrap();
+        let encrypted_file = NamedTempFile::new().unwrap();
+        let decrypted_file = NamedTempFile::new().unwrap();
+
+        fs::write(input_file.path(), content).unwrap();
+
+        encrypt_file(input_file.path(), encrypted_file.path(), &key1).unwrap();
+        let result = decrypt_file(encrypted_file.path(), decrypted_file.path(), &key2);
+
+        assert!(result.is_err());
+    }
+}

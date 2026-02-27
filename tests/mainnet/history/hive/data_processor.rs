@@ -694,3 +694,171 @@ mod tests {
         assert!(result.is_err());
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::collections::HashMap;
+
+pub struct DataProcessor {
+    data: Vec<f64>,
+    metadata: HashMap<String, String>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            data: Vec::new(),
+            metadata: HashMap::new(),
+        }
+    }
+
+    pub fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        
+        self.data.clear();
+        
+        for (index, line) in reader.lines().enumerate() {
+            let line = line?;
+            
+            if index == 0 {
+                continue;
+            }
+            
+            let parts: Vec<&str> = line.split(',').collect();
+            if parts.len() >= 2 {
+                if let Ok(value) = parts[1].parse::<f64>() {
+                    self.data.push(value);
+                }
+            }
+        }
+        
+        self.metadata.insert("source".to_string(), file_path.to_string());
+        self.metadata.insert("loaded_at".to_string(), chrono::Local::now().to_rfc3339());
+        
+        Ok(())
+    }
+
+    pub fn calculate_statistics(&self) -> Statistics {
+        if self.data.is_empty() {
+            return Statistics::default();
+        }
+        
+        let sum: f64 = self.data.iter().sum();
+        let count = self.data.len() as f64;
+        let mean = sum / count;
+        
+        let variance: f64 = self.data.iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>() / count;
+        
+        let std_dev = variance.sqrt();
+        
+        let min = self.data.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+        let max = self.data.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+        
+        Statistics {
+            mean,
+            std_dev,
+            min,
+            max,
+            count: self.data.len(),
+        }
+    }
+
+    pub fn filter_by_threshold(&self, threshold: f64) -> Vec<f64> {
+        self.data.iter()
+            .filter(|&&x| x > threshold)
+            .cloned()
+            .collect()
+    }
+
+    pub fn get_metadata(&self) -> &HashMap<String, String> {
+        &self.metadata
+    }
+
+    pub fn add_custom_metadata(&mut self, key: String, value: String) {
+        self.metadata.insert(key, value);
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Statistics {
+    pub mean: f64,
+    pub std_dev: f64,
+    pub min: f64,
+    pub max: f64,
+    pub count: usize,
+}
+
+impl Default for Statistics {
+    fn default() -> Self {
+        Statistics {
+            mean: 0.0,
+            std_dev: 0.0,
+            min: 0.0,
+            max: 0.0,
+            count: 0,
+        }
+    }
+}
+
+pub fn process_numeric_data(values: &[f64]) -> Statistics {
+    let processor = DataProcessor {
+        data: values.to_vec(),
+        metadata: HashMap::new(),
+    };
+    
+    processor.calculate_statistics()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_statistics_calculation() {
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let stats = process_numeric_data(&data);
+        
+        assert_eq!(stats.mean, 3.0);
+        assert_eq!(stats.min, 1.0);
+        assert_eq!(stats.max, 5.0);
+        assert_eq!(stats.count, 5);
+    }
+
+    #[test]
+    fn test_csv_loading() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,value").unwrap();
+        writeln!(temp_file, "1,10.5").unwrap();
+        writeln!(temp_file, "2,20.3").unwrap();
+        writeln!(temp_file, "3,15.7").unwrap();
+        
+        let mut processor = DataProcessor::new();
+        let result = processor.load_from_csv(temp_file.path().to_str().unwrap());
+        
+        assert!(result.is_ok());
+        assert_eq!(processor.data.len(), 3);
+        
+        let stats = processor.calculate_statistics();
+        assert_eq!(stats.count, 3);
+    }
+
+    #[test]
+    fn test_filter_by_threshold() {
+        let data = vec![5.0, 10.0, 15.0, 20.0, 25.0];
+        let processor = DataProcessor {
+            data,
+            metadata: HashMap::new(),
+        };
+        
+        let filtered = processor.filter_by_threshold(12.0);
+        assert_eq!(filtered.len(), 3);
+        assert!(filtered.contains(&15.0));
+        assert!(filtered.contains(&20.0));
+        assert!(filtered.contains(&25.0));
+    }
+}

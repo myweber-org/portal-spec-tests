@@ -574,3 +574,122 @@ mod tests {
         assert_eq!(config.get_or_default("MISSING", "default"), "default");
     }
 }
+use std::collections::HashMap;
+use std::env;
+use std::fs;
+
+#[derive(Debug, Clone)]
+pub struct Config {
+    pub database_url: String,
+    pub port: u16,
+    pub debug_mode: bool,
+    pub api_keys: HashMap<String, String>,
+}
+
+impl Config {
+    pub fn from_file(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let content = fs::read_to_string(path)?;
+        let mut config_map = HashMap::new();
+
+        for line in content.lines() {
+            if line.trim().is_empty() || line.starts_with('#') {
+                continue;
+            }
+
+            if let Some((key, value)) = line.split_once('=') {
+                let key = key.trim().to_string();
+                let processed_value = Self::process_value(value.trim());
+                config_map.insert(key, processed_value);
+            }
+        }
+
+        let database_url = config_map
+            .get("DATABASE_URL")
+            .ok_or("Missing DATABASE_URL")?
+            .clone();
+
+        let port = config_map
+            .get("PORT")
+            .ok_or("Missing PORT")?
+            .parse::<u16>()?;
+
+        let debug_mode = config_map
+            .get("DEBUG")
+            .map(|v| v == "true")
+            .unwrap_or(false);
+
+        let mut api_keys = HashMap::new();
+        for (key, value) in config_map {
+            if key.starts_with("API_KEY_") {
+                api_keys.insert(key, value);
+            }
+        }
+
+        Ok(Config {
+            database_url,
+            port,
+            debug_mode,
+            api_keys,
+        })
+    }
+
+    fn process_value(value: &str) -> String {
+        if value.starts_with("${") && value.ends_with('}') {
+            let var_name = &value[2..value.len() - 1];
+            env::var(var_name).unwrap_or_else(|_| value.to_string())
+        } else {
+            value.to_string()
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.database_url.is_empty() {
+            errors.push("DATABASE_URL cannot be empty".to_string());
+        }
+
+        if self.port == 0 {
+            errors.push("PORT must be greater than 0".to_string());
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_config_parsing() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "DATABASE_URL=postgres://localhost/db").unwrap();
+        writeln!(temp_file, "PORT=8080").unwrap();
+        writeln!(temp_file, "DEBUG=true").unwrap();
+        writeln!(temp_file, "API_KEY_SERVICE=abc123").unwrap();
+
+        let config = Config::from_file(temp_file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.database_url, "postgres://localhost/db");
+        assert_eq!(config.port, 8080);
+        assert!(config.debug_mode);
+        assert_eq!(config.api_keys.get("API_KEY_SERVICE"), Some(&"abc123".to_string()));
+    }
+
+    #[test]
+    fn test_env_var_interpolation() {
+        env::set_var("SECRET_KEY", "mysecret");
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "DATABASE_URL=${SECRET_KEY}").unwrap();
+        writeln!(temp_file, "PORT=3000").unwrap();
+
+        let config = Config::from_file(temp_file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.database_url, "mysecret");
+    }
+}

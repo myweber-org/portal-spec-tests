@@ -146,3 +146,76 @@ mod tests {
         assert_eq!(avg, Some(20.0));
     }
 }
+use std::collections::HashMap;
+
+pub struct DataProcessor {
+    filters: Vec<Box<dyn Fn(&str) -> bool>>,
+    transformers: HashMap<String, Box<dyn Fn(String) -> String>>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            filters: Vec::new(),
+            transformers: HashMap::new(),
+        }
+    }
+
+    pub fn add_filter<F>(&mut self, filter: F)
+    where
+        F: Fn(&str) -> bool + 'static,
+    {
+        self.filters.push(Box::new(filter));
+    }
+
+    pub fn add_transformer<N, T>(&mut self, name: N, transformer: T)
+    where
+        N: Into<String>,
+        T: Fn(String) -> String + 'static,
+    {
+        self.transformers.insert(name.into(), Box::new(transformer));
+    }
+
+    pub fn process_data(&self, input: &str) -> Option<String> {
+        if !self.filters.iter().all(|f| f(input)) {
+            return None;
+        }
+
+        let mut result = input.to_string();
+        for transformer in self.transformers.values() {
+            result = transformer(result);
+        }
+
+        Some(result)
+    }
+
+    pub fn batch_process(&self, inputs: Vec<&str>) -> Vec<String> {
+        inputs
+            .iter()
+            .filter_map(|&input| self.process_data(input))
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_data_processor() {
+        let mut processor = DataProcessor::new();
+        
+        processor.add_filter(|s| s.len() > 3);
+        processor.add_transformer("uppercase", |s| s.to_uppercase());
+        processor.add_transformer("trim", |s| s.trim().to_string());
+
+        let result = processor.process_data("  test data  ");
+        assert_eq!(result, Some("TEST DATA".to_string()));
+
+        let filtered = processor.process_data("abc");
+        assert_eq!(filtered, None);
+
+        let batch = processor.batch_process(vec!["  one  ", "two", "  three  "]);
+        assert_eq!(batch, vec!["ONE", "THREE"]);
+    }
+}

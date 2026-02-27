@@ -1442,3 +1442,164 @@ pub fn calculate_statistics(records: &[Vec<String>]) -> (usize, usize) {
     let total_fields = records.iter().map(|r| r.len()).sum();
     (total_records, total_fields)
 }
+use std::collections::HashMap;
+
+pub struct DataProcessor {
+    data: HashMap<String, Vec<f64>>,
+    validation_rules: Vec<ValidationRule>,
+}
+
+pub struct ValidationRule {
+    field_name: String,
+    min_value: f64,
+    max_value: f64,
+    required: bool,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            data: HashMap::new(),
+            validation_rules: Vec::new(),
+        }
+    }
+
+    pub fn add_dataset(&mut self, name: &str, values: Vec<f64>) -> Result<(), String> {
+        if name.is_empty() {
+            return Err("Dataset name cannot be empty".to_string());
+        }
+        
+        if self.data.contains_key(name) {
+            return Err(format!("Dataset '{}' already exists", name));
+        }
+        
+        self.data.insert(name.to_string(), values);
+        Ok(())
+    }
+
+    pub fn add_validation_rule(&mut self, rule: ValidationRule) {
+        self.validation_rules.push(rule);
+    }
+
+    pub fn validate_data(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+        
+        for rule in &self.validation_rules {
+            if let Some(data_values) = self.data.get(&rule.field_name) {
+                if rule.required && data_values.is_empty() {
+                    errors.push(format!("Field '{}' is required but empty", rule.field_name));
+                    continue;
+                }
+                
+                for (index, &value) in data_values.iter().enumerate() {
+                    if value < rule.min_value || value > rule.max_value {
+                        errors.push(format!(
+                            "Value {} at index {} in field '{}' is outside valid range [{}, {}]",
+                            value, index, rule.field_name, rule.min_value, rule.max_value
+                        ));
+                    }
+                }
+            } else if rule.required {
+                errors.push(format!("Required field '{}' not found in dataset", rule.field_name));
+            }
+        }
+        
+        errors
+    }
+
+    pub fn calculate_statistics(&self, field_name: &str) -> Option<Statistics> {
+        self.data.get(field_name).map(|values| {
+            let count = values.len();
+            let sum: f64 = values.iter().sum();
+            let mean = if count > 0 { sum / count as f64 } else { 0.0 };
+            
+            let variance: f64 = if count > 1 {
+                values.iter()
+                    .map(|&x| (x - mean).powi(2))
+                    .sum::<f64>() / (count - 1) as f64
+            } else {
+                0.0
+            };
+            
+            Statistics {
+                count,
+                sum,
+                mean,
+                variance,
+                std_dev: variance.sqrt(),
+            }
+        })
+    }
+
+    pub fn normalize_data(&mut self, field_name: &str) -> Result<(), String> {
+        if let Some(values) = self.data.get_mut(field_name) {
+            if values.is_empty() {
+                return Ok(());
+            }
+            
+            let stats = self.calculate_statistics(field_name).unwrap();
+            
+            if stats.std_dev > 0.0 {
+                for value in values.iter_mut() {
+                    *value = (*value - stats.mean) / stats.std_dev;
+                }
+            }
+            Ok(())
+        } else {
+            Err(format!("Field '{}' not found in dataset", field_name))
+        }
+    }
+
+    pub fn get_data_summary(&self) -> DataSummary {
+        let mut summary = DataSummary::new();
+        
+        for (name, values) in &self.data {
+            summary.add_dataset(name, values.len());
+        }
+        
+        summary
+    }
+}
+
+pub struct Statistics {
+    pub count: usize,
+    pub sum: f64,
+    pub mean: f64,
+    pub variance: f64,
+    pub std_dev: f64,
+}
+
+pub struct DataSummary {
+    datasets: HashMap<String, usize>,
+}
+
+impl DataSummary {
+    fn new() -> Self {
+        DataSummary {
+            datasets: HashMap::new(),
+        }
+    }
+    
+    fn add_dataset(&mut self, name: &str, count: usize) {
+        self.datasets.insert(name.to_string(), count);
+    }
+    
+    pub fn total_datasets(&self) -> usize {
+        self.datasets.len()
+    }
+    
+    pub fn total_data_points(&self) -> usize {
+        self.datasets.values().sum()
+    }
+}
+
+impl ValidationRule {
+    pub fn new(field_name: &str, min_value: f64, max_value: f64, required: bool) -> Self {
+        ValidationRule {
+            field_name: field_name.to_string(),
+            min_value,
+            max_value,
+            required,
+        }
+    }
+}

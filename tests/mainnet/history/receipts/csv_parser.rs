@@ -274,3 +274,235 @@ mod tests {
         assert_eq!(avg_none, None);
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::str::FromStr;
+
+#[derive(Debug, Clone)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
+}
+
+impl Record {
+    fn new(id: u32, name: String, value: f64, active: bool) -> Self {
+        Record {
+            id,
+            name,
+            value,
+            active,
+        }
+    }
+}
+
+#[derive(Debug)]
+enum ParseError {
+    IoError(String),
+    ParseIntError(String),
+    ParseFloatError(String),
+    ParseBoolError(String),
+    InvalidColumnCount(usize, usize),
+    EmptyFile,
+}
+
+impl std::fmt::Display for ParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ParseError::IoError(msg) => write!(f, "IO error: {}", msg),
+            ParseError::ParseIntError(msg) => write!(f, "Parse integer error: {}", msg),
+            ParseError::ParseFloatError(msg) => write!(f, "Parse float error: {}", msg),
+            ParseError::ParseBoolError(msg) => write!(f, "Parse boolean error: {}", msg),
+            ParseError::InvalidColumnCount(expected, found) => {
+                write!(f, "Expected {} columns, found {}", expected, found)
+            }
+            ParseError::EmptyFile => write!(f, "File is empty"),
+        }
+    }
+}
+
+impl Error for ParseError {}
+
+fn parse_csv(file_path: &str) -> Result<Vec<Record>, ParseError> {
+    let file = File::open(file_path)
+        .map_err(|e| ParseError::IoError(e.to_string()))?;
+    
+    let reader = BufReader::new(file);
+    let mut records = Vec::new();
+    let mut line_count = 0;
+
+    for line in reader.lines() {
+        line_count += 1;
+        let line = line.map_err(|e| ParseError::IoError(e.to_string()))?;
+        
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let columns: Vec<&str> = line.split(',').map(|s| s.trim()).collect();
+        
+        if columns.len() != 4 {
+            return Err(ParseError::InvalidColumnCount(4, columns.len()));
+        }
+
+        let id = u32::from_str(columns[0])
+            .map_err(|_| ParseError::ParseIntError(format!("Line {}: '{}'", line_count, columns[0])))?;
+        
+        let name = columns[1].to_string();
+        
+        let value = f64::from_str(columns[2])
+            .map_err(|_| ParseError::ParseFloatError(format!("Line {}: '{}'", line_count, columns[2])))?;
+        
+        let active = match columns[3].to_lowercase().as_str() {
+            "true" | "1" | "yes" => true,
+            "false" | "0" | "no" => false,
+            _ => return Err(ParseError::ParseBoolError(format!("Line {}: '{}'", line_count, columns[3]))),
+        };
+
+        records.push(Record::new(id, name, value, active));
+    }
+
+    if records.is_empty() {
+        return Err(ParseError::EmptyFile);
+    }
+
+    Ok(records)
+}
+
+fn validate_records(records: &[Record]) -> Vec<String> {
+    let mut warnings = Vec::new();
+    
+    for record in records {
+        if record.name.is_empty() {
+            warnings.push(format!("Record ID {} has empty name", record.id));
+        }
+        
+        if record.value < 0.0 {
+            warnings.push(format!("Record ID {} has negative value: {}", record.id, record.value));
+        }
+        
+        if record.value > 1000.0 {
+            warnings.push(format!("Record ID {} has unusually high value: {}", record.id, record.value));
+        }
+    }
+    
+    warnings
+}
+
+fn calculate_statistics(records: &[Record]) -> (f64, f64, f64) {
+    if records.is_empty() {
+        return (0.0, 0.0, 0.0);
+    }
+    
+    let sum: f64 = records.iter().map(|r| r.value).sum();
+    let count = records.len() as f64;
+    let mean = sum / count;
+    
+    let variance: f64 = records.iter()
+        .map(|r| (r.value - mean).powi(2))
+        .sum::<f64>() / count;
+    
+    let std_dev = variance.sqrt();
+    
+    (mean, variance, std_dev)
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let file_path = "data.csv";
+    
+    match parse_csv(file_path) {
+        Ok(records) => {
+            println!("Successfully parsed {} records", records.len());
+            
+            let warnings = validate_records(&records);
+            if !warnings.is_empty() {
+                println!("Validation warnings:");
+                for warning in warnings {
+                    println!("  - {}", warning);
+                }
+            }
+            
+            let active_records: Vec<&Record> = records.iter()
+                .filter(|r| r.active)
+                .collect();
+            println!("Active records: {}", active_records.len());
+            
+            let (mean, variance, std_dev) = calculate_statistics(&records);
+            println!("Statistics:");
+            println!("  Mean: {:.2}", mean);
+            println!("  Variance: {:.2}", variance);
+            println!("  Standard Deviation: {:.2}", std_dev);
+            
+            let max_record = records.iter()
+                .max_by(|a, b| a.value.partial_cmp(&b.value).unwrap());
+            
+            if let Some(record) = max_record {
+                println!("Record with maximum value:");
+                println!("  ID: {}, Name: {}, Value: {}", record.id, record.name, record.value);
+            }
+            
+            Ok(())
+        }
+        Err(e) => {
+            eprintln!("Error parsing CSV: {}", e);
+            Err(Box::new(e))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_parse_valid_csv() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "1,Alice,100.5,true").unwrap();
+        writeln!(temp_file, "2,Bob,200.0,false").unwrap();
+        
+        let records = parse_csv(temp_file.path().to_str().unwrap()).unwrap();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].id, 1);
+        assert_eq!(records[0].name, "Alice");
+        assert_eq!(records[0].value, 100.5);
+        assert_eq!(records[0].active, true);
+    }
+
+    #[test]
+    fn test_parse_invalid_column_count() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "1,Alice,100.5").unwrap();
+        
+        let result = parse_csv(temp_file.path().to_str().unwrap());
+        assert!(matches!(result, Err(ParseError::InvalidColumnCount(4, 3))));
+    }
+
+    #[test]
+    fn test_validate_records() {
+        let records = vec![
+            Record::new(1, String::new(), -10.0, true),
+            Record::new(2, "Bob".to_string(), 1500.0, false),
+        ];
+        
+        let warnings = validate_records(&records);
+        assert_eq!(warnings.len(), 3);
+    }
+
+    #[test]
+    fn test_calculate_statistics() {
+        let records = vec![
+            Record::new(1, "A".to_string(), 10.0, true),
+            Record::new(2, "B".to_string(), 20.0, true),
+            Record::new(3, "C".to_string(), 30.0, true),
+        ];
+        
+        let (mean, variance, std_dev) = calculate_statistics(&records);
+        assert_eq!(mean, 20.0);
+        assert_eq!(variance, 66.66666666666667);
+        assert_eq!(std_dev, 8.16496580927726);
+    }
+}

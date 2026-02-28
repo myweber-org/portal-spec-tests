@@ -862,3 +862,112 @@ mod tests {
         assert!(filtered.contains(&25.0));
     }
 }
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    id: u32,
+    value: f64,
+    timestamp: u64,
+}
+
+#[derive(Debug)]
+pub enum ProcessingError {
+    InvalidValue,
+    MissingField,
+    TimestampError,
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProcessingError::InvalidValue => write!(f, "Invalid data value"),
+            ProcessingError::MissingField => write!(f, "Required field is missing"),
+            ProcessingError::TimestampError => write!(f, "Invalid timestamp format"),
+        }
+    }
+}
+
+impl Error for ProcessingError {}
+
+impl DataRecord {
+    pub fn new(id: u32, value: f64, timestamp: u64) -> Result<Self, ProcessingError> {
+        if value < 0.0 || value > 1000.0 {
+            return Err(ProcessingError::InvalidValue);
+        }
+        
+        if timestamp == 0 {
+            return Err(ProcessingError::TimestampError);
+        }
+        
+        Ok(Self {
+            id,
+            value,
+            timestamp,
+        })
+    }
+    
+    pub fn transform(&self, multiplier: f64) -> Result<f64, ProcessingError> {
+        if multiplier <= 0.0 {
+            return Err(ProcessingError::InvalidValue);
+        }
+        
+        let transformed = self.value * multiplier;
+        
+        if transformed.is_nan() || transformed.is_infinite() {
+            return Err(ProcessingError::InvalidValue);
+        }
+        
+        Ok(transformed)
+    }
+    
+    pub fn validate(&self) -> Result<(), ProcessingError> {
+        if self.id == 0 {
+            return Err(ProcessingError::MissingField);
+        }
+        
+        if self.value.is_nan() || self.value.is_infinite() {
+            return Err(ProcessingError::InvalidValue);
+        }
+        
+        Ok(())
+    }
+}
+
+pub fn process_records(records: &[DataRecord]) -> Result<Vec<f64>, ProcessingError> {
+    let mut results = Vec::with_capacity(records.len());
+    
+    for record in records {
+        record.validate()?;
+        
+        let transformed = record.transform(1.5)?;
+        results.push(transformed);
+    }
+    
+    Ok(results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_valid_record_creation() {
+        let record = DataRecord::new(1, 100.0, 1234567890);
+        assert!(record.is_ok());
+    }
+    
+    #[test]
+    fn test_invalid_value() {
+        let record = DataRecord::new(1, -10.0, 1234567890);
+        assert!(matches!(record, Err(ProcessingError::InvalidValue)));
+    }
+    
+    #[test]
+    fn test_transform_calculation() {
+        let record = DataRecord::new(1, 100.0, 1234567890).unwrap();
+        let result = record.transform(2.0);
+        assert_eq!(result.unwrap(), 200.0);
+    }
+}

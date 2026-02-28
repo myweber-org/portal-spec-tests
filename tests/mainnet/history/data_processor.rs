@@ -582,3 +582,105 @@ mod tests {
         assert!((std_dev - 2.054).abs() < 0.001);
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::path::Path;
+
+#[derive(Debug)]
+pub struct DataRecord {
+    pub id: u32,
+    pub value: f64,
+    pub category: String,
+    pub valid: bool,
+}
+
+pub struct DataProcessor {
+    records: Vec<DataRecord>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_csv(&mut self, file_path: &str) -> Result<usize, Box<dyn Error>> {
+        let path = Path::new(file_path);
+        let file = File::open(path)?;
+        let mut rdr = csv::Reader::from_reader(file);
+        
+        let mut count = 0;
+        for result in rdr.records() {
+            let record = result?;
+            if record.len() >= 3 {
+                let data_record = DataRecord {
+                    id: record[0].parse().unwrap_or(0),
+                    value: record[1].parse().unwrap_or(0.0),
+                    category: record[2].to_string(),
+                    valid: true,
+                };
+                self.records.push(data_record);
+                count += 1;
+            }
+        }
+        Ok(count)
+    }
+
+    pub fn validate_records(&mut self) {
+        for record in &mut self.records {
+            record.valid = record.value >= 0.0 && !record.category.is_empty();
+        }
+    }
+
+    pub fn filter_valid(&self) -> Vec<&DataRecord> {
+        self.records.iter().filter(|r| r.valid).collect()
+    }
+
+    pub fn calculate_average(&self) -> Option<f64> {
+        let valid_records: Vec<&DataRecord> = self.filter_valid();
+        if valid_records.is_empty() {
+            return None;
+        }
+        
+        let sum: f64 = valid_records.iter().map(|r| r.value).sum();
+        Some(sum / valid_records.len() as f64)
+    }
+
+    pub fn get_statistics(&self) -> (usize, usize) {
+        let total = self.records.len();
+        let valid_count = self.filter_valid().len();
+        (total, valid_count)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_data_processing() {
+        let mut processor = DataProcessor::new();
+        
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,value,category").unwrap();
+        writeln!(temp_file, "1,25.5,TypeA").unwrap();
+        writeln!(temp_file, "2,30.0,TypeB").unwrap();
+        writeln!(temp_file, "3,-5.0,TypeC").unwrap();
+        
+        let result = processor.load_from_csv(temp_file.path().to_str().unwrap());
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 3);
+        
+        processor.validate_records();
+        let (total, valid) = processor.get_statistics();
+        assert_eq!(total, 3);
+        assert_eq!(valid, 2);
+        
+        let avg = processor.calculate_average();
+        assert!(avg.is_some());
+        assert_eq!(avg.unwrap(), 27.75);
+    }
+}

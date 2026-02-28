@@ -472,3 +472,43 @@ mod tests {
         assert_eq!(arr.len(), 3);
     }
 }
+use serde_json::{Value, Map};
+use std::fs;
+use std::env;
+use std::process;
+
+fn main() {
+    let args: Vec<String> = env::args().collect();
+    if args.len() < 3 {
+        eprintln!("Usage: {} <output_file.json> <input1.json> [input2.json ...]", args[0]);
+        process::exit(1);
+    }
+
+    let output_path = &args[1];
+    let input_paths = &args[2..];
+
+    let mut merged_map = Map::new();
+
+    for path in input_paths {
+        match fs::read_to_string(path) {
+            Ok(content) => {
+                match serde_json::from_str::<Value>(&content) {
+                    Ok(Value::Object(map)) => {
+                        for (key, value) in map {
+                            merged_map.insert(key, value);
+                        }
+                    }
+                    Ok(_) => eprintln!("Warning: {} does not contain a JSON object, skipping.", path),
+                    Err(e) => eprintln!("Error parsing {}: {}", path, e),
+                }
+            }
+            Err(e) => eprintln!("Error reading {}: {}", path, e),
+        }
+    }
+
+    let merged_value = Value::Object(merged_map);
+    match fs::write(output_path, merged_value.to_string()) {
+        Ok(_) => println!("Successfully merged JSON files into {}", output_path),
+        Err(e) => eprintln!("Error writing output file: {}", e),
+    }
+}

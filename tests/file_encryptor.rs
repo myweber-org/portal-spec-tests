@@ -116,3 +116,49 @@ mod tests {
         assert_eq!(original_key, exported_key);
     }
 }
+use std::fs;
+use std::io::{self, Read, Write};
+use std::path::Path;
+
+pub fn xor_encrypt_file(input_path: &str, output_path: &str, key: &[u8]) -> io::Result<()> {
+    let input_data = fs::read(input_path)?;
+    let encrypted_data: Vec<u8> = input_data
+        .iter()
+        .enumerate()
+        .map(|(i, &byte)| byte ^ key[i % key.len()])
+        .collect();
+    
+    fs::write(output_path, encrypted_data)?;
+    Ok(())
+}
+
+pub fn xor_decrypt_file(input_path: &str, output_path: &str, key: &[u8]) -> io::Result<()> {
+    xor_encrypt_file(input_path, output_path, key)
+}
+
+fn main() -> io::Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() != 5 {
+        eprintln!("Usage: {} <encrypt|decrypt> <input> <output> <key>", args[0]);
+        std::process::exit(1);
+    }
+
+    let operation = &args[1];
+    let input_path = &args[2];
+    let output_path = &args[3];
+    let key = args[4].as_bytes();
+
+    if !Path::new(input_path).exists() {
+        eprintln!("Error: Input file does not exist");
+        std::process::exit(1);
+    }
+
+    match operation.as_str() {
+        "encrypt" => xor_encrypt_file(input_path, output_path, key),
+        "decrypt" => xor_decrypt_file(input_path, output_path, key),
+        _ => {
+            eprintln!("Error: Operation must be 'encrypt' or 'decrypt'");
+            std::process::exit(1);
+        }
+    }
+}

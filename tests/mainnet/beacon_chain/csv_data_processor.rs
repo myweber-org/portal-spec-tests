@@ -433,4 +433,103 @@ mod tests {
         assert!((dept_avg_salary["Engineering"] - 77500.0).abs() < 0.001);
         assert!((dept_avg_salary["Marketing"] - 67500.0).abs() < 0.001);
     }
+}use csv::{ReaderBuilder, WriterBuilder};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+use std::path::Path;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    id: u32,
+    name: String,
+    category: String,
+    value: f64,
+    active: bool,
+}
+
+struct DataProcessor {
+    records: Vec<Record>,
+}
+
+impl DataProcessor {
+    fn new() -> Self {
+        DataProcessor { records: Vec::new() }
+    }
+
+    fn load_from_file<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn Error>> {
+        let file = File::open(path)?;
+        let mut rdr = ReaderBuilder::new().has_headers(true).from_reader(file);
+        
+        for result in rdr.deserialize() {
+            let record: Record = result?;
+            self.records.push(record);
+        }
+        
+        Ok(())
+    }
+
+    fn filter_by_category(&self, category: &str) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|record| record.category == category)
+            .collect()
+    }
+
+    fn filter_active(&self) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|record| record.active)
+            .collect()
+    }
+
+    fn calculate_total_value(&self) -> f64 {
+        self.records.iter().map(|record| record.value).sum()
+    }
+
+    fn calculate_average_value(&self) -> f64 {
+        if self.records.is_empty() {
+            0.0
+        } else {
+            self.calculate_total_value() / self.records.len() as f64
+        }
+    }
+
+    fn get_top_records(&self, limit: usize) -> Vec<&Record> {
+        let mut sorted_records: Vec<&Record> = self.records.iter().collect();
+        sorted_records.sort_by(|a, b| b.value.partial_cmp(&a.value).unwrap());
+        sorted_records.into_iter().take(limit).collect()
+    }
+
+    fn save_filtered_results<P: AsRef<Path>>(&self, path: P, records: Vec<&Record>) -> Result<(), Box<dyn Error>> {
+        let file = File::create(path)?;
+        let mut wtr = WriterBuilder::new().has_headers(true).from_writer(file);
+        
+        for record in records {
+            wtr.serialize(record)?;
+        }
+        
+        wtr.flush()?;
+        Ok(())
+    }
+}
+
+fn process_data_sample() -> Result<(), Box<dyn Error>> {
+    let mut processor = DataProcessor::new();
+    
+    processor.load_from_file("input_data.csv")?;
+    
+    let electronics = processor.filter_by_category("Electronics");
+    let active_items = processor.filter_active();
+    
+    println!("Total records: {}", processor.records.len());
+    println!("Electronics items: {}", electronics.len());
+    println!("Active items: {}", active_items.len());
+    println!("Total value: {:.2}", processor.calculate_total_value());
+    println!("Average value: {:.2}", processor.calculate_average_value());
+    
+    let top_items = processor.get_top_records(5);
+    processor.save_filtered_results("top_items.csv", top_items)?;
+    
+    Ok(())
 }

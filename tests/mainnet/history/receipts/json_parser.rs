@@ -918,4 +918,226 @@ mod tests {
         expected.insert("key".to_string(), JsonValue::String("value".to_string()));
         assert_eq!(parser.parse(), Ok(JsonValue::Object(expected)));
     }
+}use std::collections::HashMap;
+use std::error::Error;
+
+#[derive(Debug, PartialEq)]
+enum JsonValue {
+    Null,
+    Bool(bool),
+    Number(f64),
+    String(String),
+    Array(Vec<JsonValue>),
+    Object(HashMap<String, JsonValue>),
+}
+
+struct JsonParser {
+    input: String,
+    pos: usize,
+}
+
+impl JsonParser {
+    fn new(input: &str) -> Self {
+        JsonParser {
+            input: input.to_string(),
+            pos: 0,
+        }
+    }
+
+    fn skip_whitespace(&mut self) {
+        while self.pos < self.input.len() {
+            let c = self.input.chars().nth(self.pos).unwrap();
+            if c.is_whitespace() {
+                self.pos += 1;
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn parse_value(&mut self) -> Result<JsonValue, Box<dyn Error>> {
+        self.skip_whitespace();
+        if self.pos >= self.input.len() {
+            return Err("Unexpected end of input".into());
+        }
+
+        let c = self.input.chars().nth(self.pos).unwrap();
+        match c {
+            'n' => self.parse_null(),
+            't' | 'f' => self.parse_bool(),
+            '"' => self.parse_string(),
+            '[' => self.parse_array(),
+            '{' => self.parse_object(),
+            '0'..='9' | '-' => self.parse_number(),
+            _ => Err(format!("Unexpected character: {}", c).into()),
+        }
+    }
+
+    fn parse_null(&mut self) -> Result<JsonValue, Box<dyn Error>> {
+        if self.input[self.pos..].starts_with("null") {
+            self.pos += 4;
+            Ok(JsonValue::Null)
+        } else {
+            Err("Expected 'null'".into())
+        }
+    }
+
+    fn parse_bool(&mut self) -> Result<JsonValue, Box<dyn Error>> {
+        if self.input[self.pos..].starts_with("true") {
+            self.pos += 4;
+            Ok(JsonValue::Bool(true))
+        } else if self.input[self.pos..].starts_with("false") {
+            self.pos += 5;
+            Ok(JsonValue::Bool(false))
+        } else {
+            Err("Expected 'true' or 'false'".into())
+        }
+    }
+
+    fn parse_string(&mut self) -> Result<JsonValue, Box<dyn Error>> {
+        self.pos += 1; // Skip opening quote
+        let start = self.pos;
+        while self.pos < self.input.len() {
+            let c = self.input.chars().nth(self.pos).unwrap();
+            if c == '"' {
+                let s = self.input[start..self.pos].to_string();
+                self.pos += 1; // Skip closing quote
+                return Ok(JsonValue::String(s));
+            }
+            self.pos += 1;
+        }
+        Err("Unterminated string".into())
+    }
+
+    fn parse_number(&mut self) -> Result<JsonValue, Box<dyn Error>> {
+        let start = self.pos;
+        while self.pos < self.input.len() {
+            let c = self.input.chars().nth(self.pos).unwrap();
+            if c.is_digit(10) || c == '.' || c == '-' || c == 'e' || c == 'E' || c == '+' {
+                self.pos += 1;
+            } else {
+                break;
+            }
+        }
+        let num_str = &self.input[start..self.pos];
+        match num_str.parse::<f64>() {
+            Ok(n) => Ok(JsonValue::Number(n)),
+            Err(_) => Err("Invalid number".into()),
+        }
+    }
+
+    fn parse_array(&mut self) -> Result<JsonValue, Box<dyn Error>> {
+        self.pos += 1; // Skip '['
+        let mut arr = Vec::new();
+
+        self.skip_whitespace();
+        if self.pos < self.input.len() && self.input.chars().nth(self.pos).unwrap() == ']' {
+            self.pos += 1;
+            return Ok(JsonValue::Array(arr));
+        }
+
+        loop {
+            let val = self.parse_value()?;
+            arr.push(val);
+
+            self.skip_whitespace();
+            if self.pos >= self.input.len() {
+                return Err("Unterminated array".into());
+            }
+
+            let c = self.input.chars().nth(self.pos).unwrap();
+            if c == ']' {
+                self.pos += 1;
+                break;
+            } else if c == ',' {
+                self.pos += 1;
+                self.skip_whitespace();
+            } else {
+                return Err("Expected ',' or ']'".into());
+            }
+        }
+
+        Ok(JsonValue::Array(arr))
+    }
+
+    fn parse_object(&mut self) -> Result<JsonValue, Box<dyn Error>> {
+        self.pos += 1; // Skip '{'
+        let mut obj = HashMap::new();
+
+        self.skip_whitespace();
+        if self.pos < self.input.len() && self.input.chars().nth(self.pos).unwrap() == '}' {
+            self.pos += 1;
+            return Ok(JsonValue::Object(obj));
+        }
+
+        loop {
+            self.skip_whitespace();
+            if self.input.chars().nth(self.pos).unwrap() != '"' {
+                return Err("Expected string key".into());
+            }
+
+            let key_val = self.parse_string()?;
+            let key = match key_val {
+                JsonValue::String(s) => s,
+                _ => return Err("Key must be a string".into()),
+            };
+
+            self.skip_whitespace();
+            if self.pos >= self.input.len() || self.input.chars().nth(self.pos).unwrap() != ':' {
+                return Err("Expected ':'".into());
+            }
+            self.pos += 1; // Skip ':'
+
+            let value = self.parse_value()?;
+            obj.insert(key, value);
+
+            self.skip_whitespace();
+            if self.pos >= self.input.len() {
+                return Err("Unterminated object".into());
+            }
+
+            let c = self.input.chars().nth(self.pos).unwrap();
+            if c == '}' {
+                self.pos += 1;
+                break;
+            } else if c == ',' {
+                self.pos += 1;
+                self.skip_whitespace();
+            } else {
+                return Err("Expected ',' or '}'".into());
+            }
+        }
+
+        Ok(JsonValue::Object(obj))
+    }
+
+    fn extract_value_by_key(&mut self, key: &str) -> Result<Option<JsonValue>, Box<dyn Error>> {
+        let parsed = self.parse_value()?;
+        if let JsonValue::Object(map) = parsed {
+            Ok(map.get(key).cloned())
+        } else {
+            Err("Top-level value is not an object".into())
+        }
+    }
+}
+
+fn main() {
+    let json_str = r#"{
+        "name": "John Doe",
+        "age": 30,
+        "is_student": false,
+        "courses": ["math", "physics"],
+        "address": {
+            "street": "123 Main St",
+            "city": "Anytown"
+        }
+    }"#;
+
+    let mut parser = JsonParser::new(json_str);
+    match parser.extract_value_by_key("name") {
+        Ok(Some(JsonValue::String(name))) => println!("Name: {}", name),
+        Ok(Some(_)) => println!("Name is not a string"),
+        Ok(None) => println!("Key 'name' not found"),
+        Err(e) => println!("Error: {}", e),
+    }
 }

@@ -54,4 +54,53 @@ mod tests {
         cleaner.clear();
         assert_eq!(cleaner.count(), 0);
     }
+}use std::collections::HashSet;
+use std::io::{self, BufRead};
+
+pub fn remove_duplicates(input: &str) -> String {
+    let mut seen = HashSet::new();
+    let mut result = Vec::new();
+    
+    for line in input.lines() {
+        let trimmed = line.trim();
+        if !trimmed.is_empty() && seen.insert(trimmed) {
+            result.push(trimmed);
+        }
+    }
+    
+    result.join("\n")
+}
+
+pub fn process_stdin() -> io::Result<()> {
+    let stdin = io::stdin();
+    let mut lines = Vec::new();
+    
+    for line in stdin.lock().lines() {
+        lines.push(line?);
+    }
+    
+    let input = lines.join("\n");
+    let cleaned = remove_duplicates(&input);
+    println!("{}", cleaned);
+    
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_remove_duplicates() {
+        let input = "apple\nbanana\napple\ncherry\nbanana\n";
+        let expected = "apple\nbanana\ncherry";
+        assert_eq!(remove_duplicates(input), expected);
+    }
+
+    #[test]
+    fn test_remove_duplicates_with_empty_lines() {
+        let input = "apple\n\nbanana\n\napple\ncherry\n";
+        let expected = "apple\nbanana\ncherry";
+        assert_eq!(remove_duplicates(input), expected);
+    }
 }

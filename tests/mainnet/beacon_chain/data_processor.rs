@@ -1603,3 +1603,121 @@ impl ValidationRule {
         }
     }
 }
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub value: f64,
+    pub category: String,
+}
+
+#[derive(Debug)]
+pub enum DataError {
+    InvalidValue(f64),
+    InvalidCategory(String),
+    MissingField,
+}
+
+impl fmt::Display for DataError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DataError::InvalidValue(v) => write!(f, "Invalid value: {}", v),
+            DataError::InvalidCategory(c) => write!(f, "Invalid category: {}", c),
+            DataError::MissingField => write!(f, "Missing required field"),
+        }
+    }
+}
+
+impl Error for DataError {}
+
+pub struct DataProcessor {
+    valid_categories: Vec<String>,
+    value_range: (f64, f64),
+}
+
+impl DataProcessor {
+    pub fn new(valid_categories: Vec<String>, min_value: f64, max_value: f64) -> Self {
+        DataProcessor {
+            valid_categories,
+            value_range: (min_value, max_value),
+        }
+    }
+
+    pub fn validate_record(&self, record: &DataRecord) -> Result<(), DataError> {
+        if !self.valid_categories.contains(&record.category) {
+            return Err(DataError::InvalidCategory(record.category.clone()));
+        }
+
+        if record.value < self.value_range.0 || record.value > self.value_range.1 {
+            return Err(DataError::InvalidValue(record.value));
+        }
+
+        Ok(())
+    }
+
+    pub fn transform_value(&self, record: &DataRecord, multiplier: f64) -> f64 {
+        record.value * multiplier
+    }
+
+    pub fn process_records(
+        &self,
+        records: Vec<DataRecord>,
+        multiplier: f64,
+    ) -> Result<Vec<f64>, DataError> {
+        let mut results = Vec::with_capacity(records.len());
+
+        for record in records {
+            self.validate_record(&record)?;
+            let transformed = self.transform_value(&record, multiplier);
+            results.push(transformed);
+        }
+
+        Ok(results)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validation_success() {
+        let processor = DataProcessor::new(vec!["A".to_string(), "B".to_string()], 0.0, 100.0);
+        let record = DataRecord {
+            id: 1,
+            value: 50.0,
+            category: "A".to_string(),
+        };
+
+        assert!(processor.validate_record(&record).is_ok());
+    }
+
+    #[test]
+    fn test_validation_invalid_category() {
+        let processor = DataProcessor::new(vec!["A".to_string(), "B".to_string()], 0.0, 100.0);
+        let record = DataRecord {
+            id: 1,
+            value: 50.0,
+            category: "C".to_string(),
+        };
+
+        assert!(matches!(
+            processor.validate_record(&record),
+            Err(DataError::InvalidCategory(_))
+        ));
+    }
+
+    #[test]
+    fn test_transform_value() {
+        let processor = DataProcessor::new(vec!["A".to_string()], 0.0, 100.0);
+        let record = DataRecord {
+            id: 1,
+            value: 25.0,
+            category: "A".to_string(),
+        };
+
+        assert_eq!(processor.transform_value(&record, 2.0), 50.0);
+    }
+}

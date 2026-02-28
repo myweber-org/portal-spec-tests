@@ -192,3 +192,135 @@ mod tests {
         assert_eq!(original_content.to_vec(), decrypted_content);
     }
 }
+use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce
+};
+use pbkdf2::{
+    password_hash::{
+        rand_core::RngCore,
+        PasswordHasher, SaltString
+    },
+    Pbkdf2
+};
+use std::fs;
+use std::io::{self, Write};
+use std::path::Path;
+
+const SALT_LENGTH: usize = 16;
+const NONCE_LENGTH: usize = 12;
+const PBKDF2_ITERATIONS: u32 = 100_000;
+
+pub struct EncryptionResult {
+    pub ciphertext: Vec<u8>,
+    pub salt: [u8; SALT_LENGTH],
+    pub nonce: [u8; NONCE_LENGTH],
+}
+
+pub fn derive_key(password: &str, salt: &[u8]) -> Result<Key<Aes256Gcm>, String> {
+    let salt_string = SaltString::encode_b64(salt)
+        .map_err(|e| format!("Failed to encode salt: {}", e))?;
+    
+    let password_hash = Pbkdf2
+        .hash_password(password.as_bytes(), &salt_string)
+        .map_err(|e| format!("PBKDF2 failed: {}", e))?;
+    
+    let hash_bytes = password_hash.hash.ok_or("No hash generated")?;
+    let key_bytes: [u8; 32] = hash_bytes.as_bytes()[..32]
+        .try_into()
+        .map_err(|_| "Hash too short for key")?;
+    
+    Ok(Key::<Aes256Gcm>::from_slice(&key_bytes).clone())
+}
+
+pub fn encrypt_file(
+    input_path: &Path,
+    output_path: &Path,
+    password: &str
+) -> Result<EncryptionResult, String> {
+    let plaintext = fs::read(input_path)
+        .map_err(|e| format!("Failed to read input file: {}", e))?;
+    
+    let mut salt = [0u8; SALT_LENGTH];
+    OsRng.fill_bytes(&mut salt);
+    
+    let mut nonce_bytes = [0u8; NONCE_LENGTH];
+    OsRng.fill_bytes(&mut nonce_bytes);
+    
+    let key = derive_key(password, &salt)?;
+    let cipher = Aes256Gcm::new(&key);
+    let nonce = Nonce::from_slice(&nonce_bytes);
+    
+    let ciphertext = cipher
+        .encrypt(nonce, plaintext.as_ref())
+        .map_err(|e| format!("Encryption failed: {}", e))?;
+    
+    fs::write(output_path, &ciphertext)
+        .map_err(|e| format!("Failed to write output file: {}", e))?;
+    
+    Ok(EncryptionResult {
+        ciphertext,
+        salt,
+        nonce: nonce_bytes,
+    })
+}
+
+pub fn decrypt_file(
+    input_path: &Path,
+    output_path: &Path,
+    password: &str,
+    salt: &[u8],
+    nonce: &[u8]
+) -> Result<Vec<u8>, String> {
+    let ciphertext = fs::read(input_path)
+        .map_err(|e| format!("Failed to read encrypted file: {}", e))?;
+    
+    let key = derive_key(password, salt)?;
+    let cipher = Aes256Gcm::new(&key);
+    let nonce = Nonce::from_slice(nonce);
+    
+    let plaintext = cipher
+        .decrypt(nonce, ciphertext.as_ref())
+        .map_err(|e| format!("Decryption failed: {}", e))?;
+    
+    fs::write(output_path, &plaintext)
+        .map_err(|e| format!("Failed to write decrypted file: {}", e))?;
+    
+    Ok(plaintext)
+}
+
+pub fn save_metadata(metadata_path: &Path, salt: &[u8], nonce: &[u8]) -> io::Result<()> {
+    let mut file = fs::File::create(metadata_path)?;
+    file.write_all(b"SALT:")?;
+    file.write_all(salt)?;
+    file.write_all(b"\nNONCE:")?;
+    file.write_all(nonce)?;
+    Ok(())
+}
+
+pub fn load_metadata(metadata_path: &Path) -> Result<(Vec<u8>, Vec<u8>), String> {
+    let content = fs::read_to_string(metadata_path)
+        .map_err(|e| format!("Failed to read metadata: {}", e))?;
+    
+    let lines: Vec<&str> = content.lines().collect();
+    if lines.len() < 2 {
+        return Err("Invalid metadata format".to_string());
+    }
+    
+    let salt_line = lines[0];
+    let nonce_line = lines[1];
+    
+    if !salt_line.starts_with("SALT:") || !nonce_line.starts_with("NONCE:") {
+        return Err("Metadata missing required headers".to_string());
+    }
+    
+    let salt_hex = &salt_line[5..];
+    let nonce_hex = &nonce_line[6..];
+    
+    let salt = hex::decode(salt_hex)
+        .map_err(|e| format!("Invalid salt hex: {}", e))?;
+    let nonce = hex::decode(nonce_hex)
+        .map_err(|e| format!("Invalid nonce hex: {}", e))?;
+    
+    Ok((salt, nonce))
+}

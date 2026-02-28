@@ -392,4 +392,116 @@ mod tests {
         assert!(report.contains("Total Lines: 4"));
         assert!(report.contains("Errors: 1"));
     }
+}use std::collections::HashMap;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug)]
+pub struct LogSummary {
+    total_lines: usize,
+    error_count: usize,
+    warning_count: usize,
+    info_count: usize,
+    ip_addresses: HashMap<String, usize>,
+}
+
+impl LogSummary {
+    pub fn new() -> Self {
+        LogSummary {
+            total_lines: 0,
+            error_count: 0,
+            warning_count: 0,
+            info_count: 0,
+            ip_addresses: HashMap::new(),
+        }
+    }
+
+    pub fn analyze_file<P: AsRef<Path>>(path: P) -> std::io::Result<Self> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut summary = LogSummary::new();
+
+        for line in reader.lines() {
+            let line = line?;
+            summary.process_line(&line);
+        }
+
+        Ok(summary)
+    }
+
+    fn process_line(&mut self, line: &str) {
+        self.total_lines += 1;
+
+        if line.contains("ERROR") {
+            self.error_count += 1;
+        } else if line.contains("WARNING") {
+            self.warning_count += 1;
+        } else if line.contains("INFO") {
+            self.info_count += 1;
+        }
+
+        if let Some(ip) = extract_ip_address(line) {
+            *self.ip_addresses.entry(ip).or_insert(0) += 1;
+        }
+    }
+
+    pub fn print_summary(&self) {
+        println!("Log Analysis Summary:");
+        println!("Total lines: {}", self.total_lines);
+        println!("Errors: {}", self.error_count);
+        println!("Warnings: {}", self.warning_count);
+        println!("Info messages: {}", self.info_count);
+        println!("\nTop IP addresses:");
+
+        let mut ip_list: Vec<(&String, &usize)> = self.ip_addresses.iter().collect();
+        ip_list.sort_by(|a, b| b.1.cmp(a.1));
+
+        for (ip, count) in ip_list.iter().take(5) {
+            println!("  {}: {} occurrences", ip, count);
+        }
+    }
+}
+
+fn extract_ip_address(line: &str) -> Option<String> {
+    let words: Vec<&str> = line.split_whitespace().collect();
+    
+    for word in words {
+        if word.contains('.') && word.chars().all(|c| c.is_ascii_digit() || c == '.') {
+            let parts: Vec<&str> = word.split('.').collect();
+            if parts.len() == 4 && parts.iter().all(|p| p.parse::<u8>().is_ok()) {
+                return Some(word.to_string());
+            }
+        }
+    }
+    
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ip_extraction() {
+        let line = "2024-01-15 ERROR 192.168.1.1 Connection failed";
+        assert_eq!(extract_ip_address(line), Some("192.168.1.1".to_string()));
+
+        let line_no_ip = "2024-01-15 INFO Application started";
+        assert_eq!(extract_ip_address(line_no_ip), None);
+    }
+
+    #[test]
+    fn test_log_processing() {
+        let mut summary = LogSummary::new();
+        
+        summary.process_line("2024-01-15 INFO Server started on port 8080");
+        summary.process_line("2024-01-15 ERROR 10.0.0.5 Database connection failed");
+        summary.process_line("2024-01-15 WARNING High memory usage detected");
+        
+        assert_eq!(summary.total_lines, 3);
+        assert_eq!(summary.info_count, 1);
+        assert_eq!(summary.error_count, 1);
+        assert_eq!(summary.warning_count, 1);
+    }
 }

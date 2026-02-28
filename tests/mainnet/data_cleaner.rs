@@ -72,3 +72,81 @@ mod tests {
         assert_eq!(result, vec![1.0, 2.0, 3.0]);
     }
 }
+use std::collections::HashMap;
+
+pub struct DataCleaner {
+    pub null_placeholder: String,
+    pub case_sensitive: bool,
+}
+
+impl DataCleaner {
+    pub fn new() -> Self {
+        DataCleaner {
+            null_placeholder: "N/A".to_string(),
+            case_sensitive: false,
+        }
+    }
+
+    pub fn clean_string(&self, input: Option<&str>) -> String {
+        match input {
+            Some(s) if s.trim().is_empty() => self.null_placeholder.clone(),
+            Some(s) => {
+                let trimmed = s.trim();
+                if self.case_sensitive {
+                    trimmed.to_string()
+                } else {
+                    trimmed.to_lowercase()
+                }
+            }
+            None => self.null_placeholder.clone(),
+        }
+    }
+
+    pub fn clean_vector(&self, data: Vec<Option<&str>>) -> Vec<String> {
+        data.into_iter()
+            .map(|item| self.clean_string(item))
+            .collect()
+    }
+
+    pub fn frequency_analysis(&self, data: &[String]) -> HashMap<String, usize> {
+        let mut freq_map = HashMap::new();
+        for item in data {
+            *freq_map.entry(item.clone()).or_insert(0) += 1;
+        }
+        freq_map
+    }
+
+    pub fn replace_pattern(&self, input: &str, pattern: &str, replacement: &str) -> String {
+        input.replace(pattern, replacement)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_clean_string() {
+        let cleaner = DataCleaner::new();
+        assert_eq!(cleaner.clean_string(Some("  TEST  ")), "test");
+        assert_eq!(cleaner.clean_string(Some("")), "N/A");
+        assert_eq!(cleaner.clean_string(None), "N/A");
+    }
+
+    #[test]
+    fn test_clean_vector() {
+        let cleaner = DataCleaner::new();
+        let data = vec![Some("A"), Some(""), None, Some("  B  ")];
+        let cleaned = cleaner.clean_vector(data);
+        assert_eq!(cleaned, vec!["a", "N/A", "N/A", "b"]);
+    }
+
+    #[test]
+    fn test_frequency_analysis() {
+        let cleaner = DataCleaner::new();
+        let data = vec!["a".to_string(), "b".to_string(), "a".to_string()];
+        let freq = cleaner.frequency_analysis(&data);
+        assert_eq!(freq.get("a"), Some(&2));
+        assert_eq!(freq.get("b"), Some(&1));
+    }
+}

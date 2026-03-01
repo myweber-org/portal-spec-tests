@@ -225,3 +225,145 @@ mod tests {
         assert_eq!(unique_cities.len(), 3);
     }
 }
+use std::error::Error;
+use std::fs::File;
+use csv::{ReaderBuilder, WriterBuilder};
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    id: u32,
+    category: String,
+    value: f64,
+    active: bool,
+}
+
+impl DataRecord {
+    pub fn new(id: u32, category: String, value: f64, active: bool) -> Self {
+        Self {
+            id,
+            category,
+            value,
+            active,
+        }
+    }
+}
+
+pub struct DataProcessor {
+    records: Vec<DataRecord>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        Self {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let mut rdr = ReaderBuilder::new()
+            .has_headers(true)
+            .from_reader(file);
+
+        for result in rdr.deserialize() {
+            let record: DataRecord = result?;
+            self.records.push(record);
+        }
+
+        Ok(())
+    }
+
+    pub fn filter_by_category(&self, category: &str) -> Vec<DataRecord> {
+        self.records
+            .iter()
+            .filter(|r| r.category == category)
+            .cloned()
+            .collect()
+    }
+
+    pub fn filter_active(&self) -> Vec<DataRecord> {
+        self.records
+            .iter()
+            .filter(|r| r.active)
+            .cloned()
+            .collect()
+    }
+
+    pub fn calculate_average(&self) -> f64 {
+        if self.records.is_empty() {
+            return 0.0;
+        }
+
+        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        sum / self.records.len() as f64
+    }
+
+    pub fn get_max_value(&self) -> Option<f64> {
+        self.records.iter().map(|r| r.value).max_by(|a, b| a.partial_cmp(b).unwrap())
+    }
+
+    pub fn save_filtered_to_csv(&self, file_path: &str, category: &str) -> Result<(), Box<dyn Error>> {
+        let filtered = self.filter_by_category(category);
+        
+        let file = File::create(file_path)?;
+        let mut wtr = WriterBuilder::new()
+            .has_headers(true)
+            .from_writer(file);
+
+        for record in filtered {
+            wtr.serialize(record)?;
+        }
+
+        wtr.flush()?;
+        Ok(())
+    }
+
+    pub fn count_records(&self) -> usize {
+        self.records.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_data_processor() {
+        let mut processor = DataProcessor::new();
+        
+        let test_records = vec![
+            DataRecord::new(1, "A".to_string(), 10.5, true),
+            DataRecord::new(2, "B".to_string(), 20.3, false),
+            DataRecord::new(3, "A".to_string(), 15.7, true),
+        ];
+
+        processor.records = test_records;
+
+        assert_eq!(processor.count_records(), 3);
+        assert_eq!(processor.filter_by_category("A").len(), 2);
+        assert_eq!(processor.filter_active().len(), 2);
+        assert!((processor.calculate_average() - 15.5).abs() < 0.001);
+        assert_eq!(processor.get_max_value(), Some(20.3));
+    }
+
+    #[test]
+    fn test_csv_operations() -> Result<(), Box<dyn Error>> {
+        let temp_file = NamedTempFile::new()?;
+        let temp_path = temp_file.path().to_str().unwrap();
+
+        let mut processor = DataProcessor::new();
+        processor.records = vec![
+            DataRecord::new(1, "Test".to_string(), 100.0, true),
+            DataRecord::new(2, "Test".to_string(), 200.0, false),
+        ];
+
+        processor.save_filtered_to_csv(temp_path, "Test")?;
+        
+        let mut new_processor = DataProcessor::new();
+        new_processor.load_from_csv(temp_path)?;
+        
+        assert_eq!(new_processor.count_records(), 2);
+        Ok(())
+    }
+}

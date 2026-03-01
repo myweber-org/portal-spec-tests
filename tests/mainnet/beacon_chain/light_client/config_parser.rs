@@ -77,4 +77,101 @@ mod tests {
         assert_eq!(config.get("DATABASE"), Some(&"localhost".to_string()));
         assert_eq!(config.get("STATIC_VALUE"), Some(&"production".to_string()));
     }
+}use std::collections::HashMap;
+use std::env;
+use std::fs;
+
+pub struct Config {
+    values: HashMap<String, String>,
+}
+
+impl Config {
+    pub fn from_file(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let content = fs::read_to_string(path)?;
+        let mut values = HashMap::new();
+
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+
+            if let Some((key, value)) = trimmed.split_once('=') {
+                let processed_value = Self::interpolate_env_vars(value.trim());
+                values.insert(key.trim().to_string(), processed_value);
+            }
+        }
+
+        Ok(Config { values })
+    }
+
+    fn interpolate_env_vars(input: &str) -> String {
+        let mut result = String::new();
+        let mut chars = input.chars().peekable();
+        
+        while let Some(ch) = chars.next() {
+            if ch == '$' && chars.peek() == Some(&'{') {
+                chars.next(); // Skip '{'
+                let mut var_name = String::new();
+                
+                while let Some(&ch) = chars.peek() {
+                    if ch == '}' {
+                        chars.next(); // Skip '}'
+                        break;
+                    }
+                    var_name.push(ch);
+                    chars.next();
+                }
+                
+                if !var_name.is_empty() {
+                    result.push_str(&env::var(&var_name).unwrap_or_default());
+                }
+            } else {
+                result.push(ch);
+            }
+        }
+        
+        result
+    }
+
+    pub fn get(&self, key: &str) -> Option<&String> {
+        self.values.get(key)
+    }
+
+    pub fn get_or_default(&self, key: &str, default: &str) -> String {
+        self.values.get(key).map(|s| s.as_str()).unwrap_or(default).to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_config_parsing() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "APP_NAME=MyApp").unwrap();
+        writeln!(file, "# This is a comment").unwrap();
+        writeln!(file, "VERSION=1.0.0").unwrap();
+        writeln!(file, "").unwrap();
+        writeln!(file, "DEBUG=true").unwrap();
+
+        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.get("APP_NAME"), Some(&"MyApp".to_string()));
+        assert_eq!(config.get("VERSION"), Some(&"1.0.0".to_string()));
+        assert_eq!(config.get("DEBUG"), Some(&"true".to_string()));
+        assert_eq!(config.get("MISSING"), None);
+    }
+
+    #[test]
+    fn test_env_interpolation() {
+        env::set_var("HOME_DIR", "/home/user");
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "PATH=${HOME_DIR}/data").unwrap();
+
+        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.get("PATH"), Some(&"/home/user/data".to_string()));
+    }
 }

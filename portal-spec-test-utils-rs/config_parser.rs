@@ -199,4 +199,129 @@ mod tests {
         assert_eq!(config.get_or_default("EXISTING", "default"), "value");
         assert_eq!(config.get_or_default("MISSING", "default"), "default");
     }
+}use std::collections::HashMap;
+use std::env;
+use serde_json::Value;
+
+pub struct ConfigParser {
+    values: HashMap<String, Value>,
+}
+
+impl ConfigParser {
+    pub fn new() -> Self {
+        ConfigParser {
+            values: HashMap::new(),
+        }
+    }
+
+    pub fn load_from_file(&mut self, path: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let content = std::fs::read_to_string(path)?;
+        let parsed: Value = serde_json::from_str(&content)?;
+        
+        if let Value::Object(map) = parsed {
+            for (key, value) in map {
+                self.values.insert(key, self.process_value(value));
+            }
+        }
+        Ok(())
+    }
+
+    fn process_value(&self, value: Value) -> Value {
+        match value {
+            Value::String(s) => {
+                if s.starts_with("${") && s.ends_with('}') {
+                    let env_var = &s[2..s.len()-1];
+                    match env::var(env_var) {
+                        Ok(val) => Value::String(val),
+                        Err(_) => Value::String(s),
+                    }
+                } else {
+                    Value::String(s)
+                }
+            }
+            Value::Object(map) => {
+                let mut processed = serde_json::Map::new();
+                for (k, v) in map {
+                    processed.insert(k, self.process_value(v));
+                }
+                Value::Object(processed)
+            }
+            Value::Array(arr) => {
+                let processed: Vec<Value> = arr.into_iter()
+                    .map(|v| self.process_value(v))
+                    .collect();
+                Value::Array(processed)
+            }
+            other => other,
+        }
+    }
+
+    pub fn get(&self, key: &str) -> Option<&Value> {
+        self.values.get(key)
+    }
+
+    pub fn get_string(&self, key: &str) -> Option<String> {
+        self.get(key).and_then(|v| match v {
+            Value::String(s) => Some(s.clone()),
+            _ => None,
+        })
+    }
+
+    pub fn get_number(&self, key: &str) -> Option<f64> {
+        self.get(key).and_then(|v| match v {
+            Value::Number(n) => n.as_f64(),
+            _ => None,
+        })
+    }
+
+    pub fn get_bool(&self, key: &str) -> Option<bool> {
+        self.get(key).and_then(|v| match v {
+            Value::Bool(b) => Some(*b),
+            _ => None,
+        })
+    }
+
+    pub fn get_array(&self, key: &str) -> Option<Vec<Value>> {
+        self.get(key).and_then(|v| match v {
+            Value::Array(arr) => Some(arr.clone()),
+            _ => None,
+        })
+    }
+
+    pub fn merge(&mut self, other: ConfigParser) {
+        for (key, value) in other.values {
+            self.values.insert(key, value);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_env_var_substitution() {
+        env::set_var("TEST_PORT", "8080");
+        
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, r#"{{"port": "${TEST_PORT}"}}"#).unwrap();
+        
+        let mut parser = ConfigParser::new();
+        parser.load_from_file(file.path().to_str().unwrap()).unwrap();
+        
+        assert_eq!(parser.get_string("port"), Some("8080".to_string()));
+    }
+
+    #[test]
+    fn test_nested_config() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, r#"{{"database": {{"host": "localhost", "port": 5432}}}}"#).unwrap();
+        
+        let mut parser = ConfigParser::new();
+        parser.load_from_file(file.path().to_str().unwrap()).unwrap();
+        
+        let db_config = parser.get("database").unwrap();
+        assert!(db_config.is_object());
+    }
 }

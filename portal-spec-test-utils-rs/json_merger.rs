@@ -213,3 +213,126 @@ pub fn merge_json_files(input_paths: &[&str], output_path: &str) -> Result<(), B
     println!("Successfully merged JSON files into {}", output_path);
     Ok(())
 }
+use serde_json::{Value, Map};
+use std::fs;
+use std::path::Path;
+use std::collections::HashSet;
+
+pub fn merge_json_files<P: AsRef<Path>>(paths: &[P]) -> Result<Value, String> {
+    if paths.is_empty() {
+        return Err("No input files provided".to_string());
+    }
+
+    let mut merged = Map::new();
+    let mut key_sources = Map::new();
+
+    for (idx, path) in paths.iter().enumerate() {
+        let content = fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read {}: {}", path.as_ref().display(), e))?;
+        
+        let json: Value = serde_json::from_str(&content)
+            .map_err(|e| format!("Invalid JSON in {}: {}", path.as_ref().display(), e))?;
+
+        if let Value::Object(obj) = json {
+            for (key, value) in obj {
+                if merged.contains_key(&key) {
+                    let existing_source = key_sources.get(&key).unwrap();
+                    return Err(format!(
+                        "Conflict: key '{}' exists in both file {} and file {}",
+                        key, existing_source, idx + 1
+                    ));
+                }
+                merged.insert(key.clone(), value);
+                key_sources.insert(key, (idx + 1).to_string());
+            }
+        } else {
+            return Err(format!("File {} does not contain a JSON object", path.as_ref().display()));
+        }
+    }
+
+    Ok(Value::Object(merged))
+}
+
+pub fn merge_json_with_strategy<P: AsRef<Path>>(
+    paths: &[P],
+    conflict_strategy: ConflictStrategy
+) -> Result<Value, String> {
+    let mut merged = Map::new();
+    let mut key_counts = Map::new();
+
+    for path in paths {
+        let content = fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read {}: {}", path.as_ref().display(), e))?;
+        
+        let json: Value = serde_json::from_str(&content)
+            .map_err(|e| format!("Invalid JSON in {}: {}", path.as_ref().display(), e))?;
+
+        if let Value::Object(obj) = json {
+            for (key, value) in obj {
+                let count = key_counts.entry(key.clone()).or_insert(0);
+                *count += 1;
+
+                match conflict_strategy {
+                    ConflictStrategy::FirstWins => {
+                        if !merged.contains_key(&key) {
+                            merged.insert(key, value);
+                        }
+                    }
+                    ConflictStrategy::LastWins => {
+                        merged.insert(key, value);
+                    }
+                    ConflictStrategy::MergeObjects => {
+                        if let Some(Value::Object(existing)) = merged.get(&key) {
+                            if let Value::Object(new_obj) = value {
+                                let mut combined = existing.clone();
+                                for (k, v) in new_obj {
+                                    combined.insert(k, v);
+                                }
+                                merged.insert(key, Value::Object(combined));
+                            } else {
+                                merged.insert(key, value);
+                            }
+                        } else {
+                            merged.insert(key, value);
+                        }
+                    }
+                }
+            }
+        } else {
+            return Err(format!("File {} does not contain a JSON object", path.as_ref().display()));
+        }
+    }
+
+    Ok(Value::Object(merged))
+}
+
+pub enum ConflictStrategy {
+    FirstWins,
+    LastWins,
+    MergeObjects,
+}
+
+pub fn find_common_keys<P: AsRef<Path>>(paths: &[P]) -> Result<HashSet<String>, String> {
+    let mut common_keys: Option<HashSet<String>> = None;
+
+    for path in paths {
+        let content = fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read {}: {}", path.as_ref().display(), e))?;
+        
+        let json: Value = serde_json::from_str(&content)
+            .map_err(|e| format!("Invalid JSON in {}: {}", path.as_ref().display(), e))?;
+
+        if let Value::Object(obj) = json {
+            let current_keys: HashSet<String> = obj.keys().cloned().collect();
+            
+            common_keys = match common_keys {
+                Some(existing) => Some(existing.intersection(&current_keys).cloned().collect()),
+                None => Some(current_keys),
+            };
+        } else {
+            return Err(format!("File {} does not contain a JSON object", path.as_ref().display()));
+        }
+    }
+
+    Ok(common_keys.unwrap_or_default())
+}

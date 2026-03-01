@@ -90,4 +90,111 @@ mod tests {
         
         env::remove_var("DATABASE_URL");
     }
+}use std::collections::HashMap;
+use std::env;
+use std::fs;
+
+#[derive(Debug)]
+pub struct Config {
+    pub database_url: String,
+    pub port: u16,
+    pub debug_mode: bool,
+    pub feature_flags: HashMap<String, bool>,
+}
+
+impl Config {
+    pub fn from_file(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let contents = fs::read_to_string(path)?;
+        let mut config_map = HashMap::new();
+
+        for line in contents.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+
+            if let Some((key, value)) = trimmed.split_once('=') {
+                config_map.insert(key.trim().to_string(), value.trim().to_string());
+            }
+        }
+
+        Self::from_map(&config_map)
+    }
+
+    fn from_map(map: &HashMap<String, String>) -> Result<Self, Box<dyn std::error::Error>> {
+        let database_url = Self::get_value(map, "DATABASE_URL")?;
+        let port_str = Self::get_value(map, "PORT")?;
+        let port = port_str.parse::<u16>()?;
+        let debug_str = Self::get_value(map, "DEBUG")?;
+        let debug_mode = debug_str.parse::<bool>()?;
+
+        let mut feature_flags = HashMap::new();
+        for (key, value) in map {
+            if key.starts_with("FEATURE_") {
+                if let Ok(bool_val) = value.parse::<bool>() {
+                    feature_flags.insert(key.clone(), bool_val);
+                }
+            }
+        }
+
+        Ok(Config {
+            database_url,
+            port,
+            debug_mode,
+            feature_flags,
+        })
+    }
+
+    fn get_value(map: &HashMap<String, String>, key: &str) -> Result<String, Box<dyn std::error::Error>> {
+        if let Some(env_value) = env::var(key).ok() {
+            return Ok(env_value);
+        }
+
+        map.get(key)
+            .cloned()
+            .ok_or_else(|| format!("Missing configuration key: {}", key).into())
+    }
+
+    pub fn get_feature(&self, name: &str) -> bool {
+        self.feature_flags.get(name).copied().unwrap_or(false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_config_loading() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "DATABASE_URL=postgres://localhost/test").unwrap();
+        writeln!(temp_file, "PORT=8080").unwrap();
+        writeln!(temp_file, "DEBUG=true").unwrap();
+        writeln!(temp_file, "FEATURE_AUTH=true").unwrap();
+        writeln!(temp_file, "FEATURE_CACHE=false").unwrap();
+
+        let config = Config::from_file(temp_file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.database_url, "postgres://localhost/test");
+        assert_eq!(config.port, 8080);
+        assert!(config.debug_mode);
+        assert!(config.get_feature("FEATURE_AUTH"));
+        assert!(!config.get_feature("FEATURE_CACHE"));
+    }
+
+    #[test]
+    fn test_env_override() {
+        env::set_var("PORT", "9000");
+        
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "DATABASE_URL=postgres://localhost/test").unwrap();
+        writeln!(temp_file, "PORT=8080").unwrap();
+        writeln!(temp_file, "DEBUG=false").unwrap();
+
+        let config = Config::from_file(temp_file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.port, 9000);
+        
+        env::remove_var("PORT");
+    }
 }

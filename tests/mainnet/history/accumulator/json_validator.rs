@@ -60,4 +60,64 @@ mod tests {
         let invalid_data = r#"{"age": 30}"#;
         assert!(validate_json(schema, invalid_data).is_err());
     }
+}use serde_json::Value;
+use jsonschema::JSONSchema;
+
+pub fn validate_json(schema_str: &str, data_str: &str) -> Result<(), Vec<String>> {
+    let schema: Value = serde_json::from_str(schema_str)
+        .map_err(|e| vec![format!("Invalid schema: {}", e)])?;
+    
+    let data: Value = serde_json::from_str(data_str)
+        .map_err(|e| vec![format!("Invalid JSON data: {}", e)])?;
+
+    let compiled = JSONSchema::compile(&schema)
+        .map_err(|e| vec![format!("Schema compilation failed: {}", e)])?;
+
+    match compiled.validate(&data) {
+        Ok(_) => Ok(()),
+        Err(errors) => {
+            let error_messages: Vec<String> = errors
+                .map(|e| format!("Validation error: {}", e))
+                .collect();
+            Err(error_messages)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_json() {
+        let schema = r#"
+            {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "age": {"type": "integer", "minimum": 0}
+                },
+                "required": ["name"]
+            }
+        "#;
+
+        let valid_data = r#"{"name": "Alice", "age": 30}"#;
+        assert!(validate_json(schema, valid_data).is_ok());
+    }
+
+    #[test]
+    fn test_invalid_json() {
+        let schema = r#"
+            {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"}
+                },
+                "required": ["name"]
+            }
+        "#;
+
+        let invalid_data = r#"{"age": 30}"#;
+        assert!(validate_json(schema, invalid_data).is_err());
+    }
 }

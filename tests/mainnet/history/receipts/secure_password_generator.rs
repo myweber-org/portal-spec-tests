@@ -239,4 +239,133 @@ mod tests {
         let result = generator.generate();
         assert!(result.is_err());
     }
+}use rand::Rng;
+use std::io;
+
+const UPPERCASE: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+const LOWERCASE: &str = "abcdefghijklmnopqrstuvwxyz";
+const DIGITS: &str = "0123456789";
+const SYMBOLS: &str = "!@#$%^&*()_+-=[]{}|;:,.<>?";
+
+struct PasswordConfig {
+    length: usize,
+    include_uppercase: bool,
+    include_lowercase: bool,
+    include_digits: bool,
+    include_symbols: bool,
+}
+
+impl PasswordConfig {
+    fn new() -> Self {
+        PasswordConfig {
+            length: 16,
+            include_uppercase: true,
+            include_lowercase: true,
+            include_digits: true,
+            include_symbols: true,
+        }
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if self.length < 8 {
+            return Err("Password length must be at least 8 characters".to_string());
+        }
+        
+        if !self.include_uppercase && !self.include_lowercase && 
+           !self.include_digits && !self.include_symbols {
+            return Err("At least one character set must be selected".to_string());
+        }
+        
+        Ok(())
+    }
+
+    fn build_character_pool(&self) -> String {
+        let mut pool = String::new();
+        
+        if self.include_uppercase {
+            pool.push_str(UPPERCASE);
+        }
+        if self.include_lowercase {
+            pool.push_str(LOWERCASE);
+        }
+        if self.include_digits {
+            pool.push_str(DIGITS);
+        }
+        if self.include_symbols {
+            pool.push_str(SYMBOLS);
+        }
+        
+        pool
+    }
+}
+
+fn generate_password(config: &PasswordConfig) -> String {
+    let pool = config.build_character_pool();
+    let pool_chars: Vec<char> = pool.chars().collect();
+    let pool_size = pool_chars.len();
+    
+    let mut rng = rand::thread_rng();
+    let mut password = String::with_capacity(config.length);
+    
+    for _ in 0..config.length {
+        let index = rng.gen_range(0..pool_size);
+        password.push(pool_chars[index]);
+    }
+    
+    password
+}
+
+fn get_user_input(prompt: &str) -> String {
+    println!("{}", prompt);
+    let mut input = String::new();
+    io::stdin().read_line(&mut input).expect("Failed to read line");
+    input.trim().to_string()
+}
+
+fn parse_bool_input(input: &str) -> bool {
+    match input.to_lowercase().as_str() {
+        "y" | "yes" | "true" | "1" => true,
+        _ => false,
+    }
+}
+
+fn main() {
+    println!("=== Secure Password Generator ===");
+    
+    let mut config = PasswordConfig::new();
+    
+    let length_input = get_user_input("Enter password length (default: 16):");
+    if !length_input.is_empty() {
+        if let Ok(length) = length_input.parse::<usize>() {
+            config.length = length;
+        }
+    }
+    
+    let uppercase_input = get_user_input("Include uppercase letters? (Y/n):");
+    config.include_uppercase = parse_bool_input(&uppercase_input);
+    
+    let lowercase_input = get_user_input("Include lowercase letters? (Y/n):");
+    config.include_lowercase = parse_bool_input(&lowercase_input);
+    
+    let digits_input = get_user_input("Include digits? (Y/n):");
+    config.include_digits = parse_bool_input(&digits_input);
+    
+    let symbols_input = get_user_input("Include symbols? (Y/n):");
+    config.include_symbols = parse_bool_input(&symbols_input);
+    
+    match config.validate() {
+        Ok(_) => {
+            let password = generate_password(&config);
+            println!("\nGenerated Password: {}", password);
+            println!("Password Length: {}", password.len());
+            println!("Character Sets Used:");
+            println!("  - Uppercase: {}", config.include_uppercase);
+            println!("  - Lowercase: {}", config.include_lowercase);
+            println!("  - Digits: {}", config.include_digits);
+            println!("  - Symbols: {}", config.include_symbols);
+        }
+        Err(e) => {
+            eprintln!("Error: {}", e);
+        }
+    }
 }

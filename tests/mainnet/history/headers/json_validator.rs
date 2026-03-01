@@ -7,18 +7,20 @@ pub fn validate_json(schema: &str, data: &str) -> Result<(), Vec<String>> {
     
     let data_value: Value = serde_json::from_str(data)
         .map_err(|e| vec![format!("Invalid JSON data: {}", e)])?;
-
+    
     let compiled_schema = JSONSchema::compile(&schema_value)
         .map_err(|e| vec![format!("Schema compilation failed: {}", e)])?;
-
-    match compiled_schema.validate(&data_value) {
-        Ok(_) => Ok(()),
-        Err(errors) => {
-            let error_messages: Vec<String> = errors
-                .map(|e| format!("Validation error: {}", e))
-                .collect();
-            Err(error_messages)
-        }
+    
+    let validation_result = compiled_schema.validate(&data_value);
+    
+    if validation_result.is_ok() {
+        Ok(())
+    } else {
+        let errors: Vec<String> = validation_result
+            .unwrap_err()
+            .map(|error| format!("Validation error: {}", error))
+            .collect();
+        Err(errors)
     }
 }
 
@@ -28,14 +30,16 @@ mod tests {
 
     #[test]
     fn test_valid_json() {
-        let schema = r#"{
+        let schema = r#"
+        {
             "type": "object",
             "properties": {
                 "name": {"type": "string"},
                 "age": {"type": "number"}
             },
             "required": ["name"]
-        }"#;
+        }
+        "#;
 
         let data = r#"{"name": "Alice", "age": 30}"#;
         
@@ -44,13 +48,15 @@ mod tests {
 
     #[test]
     fn test_invalid_json() {
-        let schema = r#"{
+        let schema = r#"
+        {
             "type": "object",
             "properties": {
                 "name": {"type": "string"}
             },
             "required": ["name"]
-        }"#;
+        }
+        "#;
 
         let data = r#"{"age": 30}"#;
         

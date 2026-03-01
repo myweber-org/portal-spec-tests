@@ -482,4 +482,108 @@ pub fn read_csv_preview<P: AsRef<Path>>(
     }
 
     Ok(result)
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug, PartialEq)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
+}
+
+impl Record {
+    fn validate(&self) -> Result<(), String> {
+        if self.name.is_empty() {
+            return Err("Name cannot be empty".to_string());
+        }
+        if self.value < 0.0 {
+            return Err("Value must be non-negative".to_string());
+        }
+        Ok(())
+    }
+}
+
+fn parse_csv_line(line: &str) -> Result<Record, Box<dyn Error>> {
+    let parts: Vec<&str> = line.split(',').collect();
+    if parts.len() != 4 {
+        return Err("Invalid number of fields".into());
+    }
+
+    let id = parts[0].parse::<u32>()?;
+    let name = parts[1].to_string();
+    let value = parts[2].parse::<f64>()?;
+    let active = parts[3].parse::<bool>()?;
+
+    let record = Record {
+        id,
+        name,
+        value,
+        active,
+    };
+
+    record.validate()?;
+    Ok(record)
+}
+
+pub fn process_csv_file<P: AsRef<Path>>(path: P) -> Result<Vec<Record>, Box<dyn Error>> {
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+    let mut records = Vec::new();
+
+    for (line_num, line) in reader.lines().enumerate() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        match parse_csv_line(&line) {
+            Ok(record) => records.push(record),
+            Err(e) => eprintln!("Error parsing line {}: {}", line_num + 1, e),
+        }
+    }
+
+    Ok(records)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_record() {
+        let record = Record {
+            id: 1,
+            name: "Test".to_string(),
+            value: 42.5,
+            active: true,
+        };
+        assert!(record.validate().is_ok());
+    }
+
+    #[test]
+    fn test_invalid_record() {
+        let record = Record {
+            id: 2,
+            name: "".to_string(),
+            value: -10.0,
+            active: false,
+        };
+        assert!(record.validate().is_err());
+    }
+
+    #[test]
+    fn test_parse_valid_line() {
+        let line = "123,John Doe,99.99,true";
+        let result = parse_csv_line(line);
+        assert!(result.is_ok());
+        let record = result.unwrap();
+        assert_eq!(record.id, 123);
+        assert_eq!(record.name, "John Doe");
+        assert_eq!(record.value, 99.99);
+        assert_eq!(record.active, true);
+    }
 }

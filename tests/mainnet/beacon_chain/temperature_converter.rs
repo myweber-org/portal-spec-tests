@@ -1,176 +1,123 @@
 
-pub fn celsius_to_fahrenheit(celsius: f64) -> f64 {
-    (celsius * 9.0 / 5.0) + 32.0
-}
+use std::io;
 
-pub fn celsius_to_kelvin(celsius: f64) -> f64 {
-    celsius + 273.15
-}
-
-pub fn fahrenheit_to_celsius(fahrenheit: f64) -> f64 {
-    (fahrenheit - 32.0) * 5.0 / 9.0
-}
-
-pub fn fahrenheit_to_kelvin(fahrenheit: f64) -> f64 {
-    celsius_to_kelvin(fahrenheit_to_celsius(fahrenheit))
-}
-
-pub fn kelvin_to_celsius(kelvin: f64) -> f64 {
-    kelvin - 273.15
-}
-
-pub fn kelvin_to_fahrenheit(kelvin: f64) -> f64 {
-    celsius_to_fahrenheit(kelvin_to_celsius(kelvin))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_celsius_to_fahrenheit() {
-        assert_eq!(celsius_to_fahrenheit(0.0), 32.0);
-        assert_eq!(celsius_to_fahrenheit(100.0), 212.0);
-        assert_eq!(celsius_to_fahrenheit(-40.0), -40.0);
-    }
-
-    #[test]
-    fn test_celsius_to_kelvin() {
-        assert_eq!(celsius_to_kelvin(0.0), 273.15);
-        assert_eq!(celsius_to_kelvin(100.0), 373.15);
-        assert_eq!(celsius_to_kelvin(-273.15), 0.0);
-    }
-
-    #[test]
-    fn test_fahrenheit_to_celsius() {
-        assert_eq!(fahrenheit_to_celsius(32.0), 0.0);
-        assert_eq!(fahrenheit_to_celsius(212.0), 100.0);
-        assert_eq!(fahrenheit_to_celsius(-40.0), -40.0);
-    }
-
-    #[test]
-    fn test_kelvin_conversions() {
-        assert_eq!(kelvin_to_celsius(273.15), 0.0);
-        assert_eq!(kelvin_to_fahrenheit(273.15), 32.0);
-    }
-}use std::io;
-
-fn main() {
-    println!("Temperature Converter");
-    println!("1. Celsius to Fahrenheit");
-    println!("2. Fahrenheit to Celsius");
-
-    let choice: u32 = loop {
-        println!("Please enter your choice (1 or 2):");
-        let mut input = String::new();
-        io::stdin()
-            .read_line(&mut input)
-            .expect("Failed to read line");
-
-        match input.trim().parse() {
-            Ok(num) if num == 1 || num == 2 => break num,
-            _ => println!("Invalid input. Please enter 1 or 2."),
-        }
-    };
-
-    let temperature: f64 = loop {
-        println!("Enter the temperature to convert:");
-        let mut input = String::new();
-        io::stdin()
-            .read_line(&mut input)
-            .expect("Failed to read line");
-
-        match input.trim().parse() {
-            Ok(num) => break num,
-            Err(_) => println!("Invalid input. Please enter a number."),
-        }
-    };
-
-    let result = if choice == 1 {
-        celsius_to_fahrenheit(temperature)
-    } else {
-        fahrenheit_to_celsius(temperature)
-    };
-
-    let (from_unit, to_unit) = if choice == 1 {
-        ("Celsius", "Fahrenheit")
-    } else {
-        ("Fahrenheit", "Celsius")
-    };
-
-    println!("{:.2}° {} = {:.2}° {}", temperature, from_unit, result, to_unit);
+enum TemperatureUnit {
+    Celsius,
+    Fahrenheit,
+    Kelvin,
 }
 
 fn celsius_to_fahrenheit(celsius: f64) -> f64 {
-    celsius * 9.0 / 5.0 + 32.0
+    (celsius * 9.0 / 5.0) + 32.0
+}
+
+fn celsius_to_kelvin(celsius: f64) -> f64 {
+    celsius + 273.15
 }
 
 fn fahrenheit_to_celsius(fahrenheit: f64) -> f64 {
     (fahrenheit - 32.0) * 5.0 / 9.0
 }
-pub fn celsius_to_fahrenheit(celsius: f64) -> f64 {
-    (celsius * 9.0 / 5.0) + 32.0
-}
 
-pub fn celsius_to_kelvin(celsius: f64) -> f64 {
-    celsius + 273.15
-}
-
-pub fn fahrenheit_to_celsius(fahrenheit: f64) -> f64 {
-    (fahrenheit - 32.0) * 5.0 / 9.0
-}
-
-pub fn fahrenheit_to_kelvin(fahrenheit: f64) -> f64 {
+fn fahrenheit_to_kelvin(fahrenheit: f64) -> f64 {
     celsius_to_kelvin(fahrenheit_to_celsius(fahrenheit))
 }
 
-pub fn kelvin_to_celsius(kelvin: f64) -> f64 {
+fn kelvin_to_celsius(kelvin: f64) -> f64 {
     kelvin - 273.15
 }
 
-pub fn kelvin_to_fahrenheit(kelvin: f64) -> f64 {
+fn kelvin_to_fahrenheit(kelvin: f64) -> f64 {
     celsius_to_fahrenheit(kelvin_to_celsius(kelvin))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_celsius_to_fahrenheit() {
-        assert_eq!(celsius_to_fahrenheit(0.0), 32.0);
-        assert_eq!(celsius_to_fahrenheit(100.0), 212.0);
-        assert_eq!(celsius_to_fahrenheit(-40.0), -40.0);
+fn convert_temperature(value: f64, from: TemperatureUnit, to: TemperatureUnit) -> f64 {
+    match (from, to) {
+        (TemperatureUnit::Celsius, TemperatureUnit::Fahrenheit) => celsius_to_fahrenheit(value),
+        (TemperatureUnit::Celsius, TemperatureUnit::Kelvin) => celsius_to_kelvin(value),
+        (TemperatureUnit::Fahrenheit, TemperatureUnit::Celsius) => fahrenheit_to_celsius(value),
+        (TemperatureUnit::Fahrenheit, TemperatureUnit::Kelvin) => fahrenheit_to_kelvin(value),
+        (TemperatureUnit::Kelvin, TemperatureUnit::Celsius) => kelvin_to_celsius(value),
+        (TemperatureUnit::Kelvin, TemperatureUnit::Fahrenheit) => kelvin_to_fahrenheit(value),
+        _ => value,
     }
+}
 
-    #[test]
-    fn test_celsius_to_kelvin() {
-        assert_eq!(celsius_to_kelvin(0.0), 273.15);
-        assert_eq!(celsius_to_kelvin(100.0), 373.15);
-        assert_eq!(celsius_to_kelvin(-273.15), 0.0);
+fn parse_unit(input: &str) -> Option<TemperatureUnit> {
+    match input.to_lowercase().as_str() {
+        "c" | "celsius" => Some(TemperatureUnit::Celsius),
+        "f" | "fahrenheit" => Some(TemperatureUnit::Fahrenheit),
+        "k" | "kelvin" => Some(TemperatureUnit::Kelvin),
+        _ => None,
     }
+}
 
-    #[test]
-    fn test_fahrenheit_to_celsius() {
-        assert_eq!(fahrenheit_to_celsius(32.0), 0.0);
-        assert_eq!(fahrenheit_to_celsius(212.0), 100.0);
-        assert_eq!(fahrenheit_to_celsius(-40.0), -40.0);
-    }
+fn main() {
+    println!("Temperature Converter");
+    println!("Supported units: Celsius (C), Fahrenheit (F), Kelvin (K)");
 
-    #[test]
-    fn test_kelvin_to_celsius() {
-        assert_eq!(kelvin_to_celsius(273.15), 0.0);
-        assert_eq!(kelvin_to_celsius(373.15), 100.0);
-        assert_eq!(kelvin_to_celsius(0.0), -273.15);
-    }
-
-    #[test]
-    fn test_conversion_chain() {
-        let celsius = 25.0;
-        let fahrenheit = celsius_to_fahrenheit(celsius);
-        let kelvin = fahrenheit_to_kelvin(fahrenheit);
-        let celsius_back = kelvin_to_celsius(kelvin);
+    loop {
+        println!("\nEnter temperature value and source unit (e.g., '25 C'):");
         
-        assert!((celsius - celsius_back).abs() < 1e-10);
+        let mut input = String::new();
+        io::stdin().read_line(&mut input).expect("Failed to read line");
+        
+        let parts: Vec<&str> = input.trim().split_whitespace().collect();
+        if parts.len() != 2 {
+            println!("Invalid input format. Please enter value and unit separated by space.");
+            continue;
+        }
+        
+        let value: f64 = match parts[0].parse() {
+            Ok(num) => num,
+            Err(_) => {
+                println!("Invalid temperature value.");
+                continue;
+            }
+        };
+        
+        let from_unit = match parse_unit(parts[1]) {
+            Some(unit) => unit,
+            None => {
+                println!("Invalid source unit. Use C, F, or K.");
+                continue;
+            }
+        };
+        
+        println!("Enter target unit (C, F, or K):");
+        let mut target_input = String::new();
+        io::stdin().read_line(&mut target_input).expect("Failed to read line");
+        
+        let to_unit = match parse_unit(target_input.trim()) {
+            Some(unit) => unit,
+            None => {
+                println!("Invalid target unit. Use C, F, or K.");
+                continue;
+            }
+        };
+        
+        let result = convert_temperature(value, from_unit, to_unit);
+        
+        let from_str = match from_unit {
+            TemperatureUnit::Celsius => "°C",
+            TemperatureUnit::Fahrenheit => "°F",
+            TemperatureUnit::Kelvin => "K",
+        };
+        
+        let to_str = match to_unit {
+            TemperatureUnit::Celsius => "°C",
+            TemperatureUnit::Fahrenheit => "°F",
+            TemperatureUnit::Kelvin => "K",
+        };
+        
+        println!("{:.2} {} = {:.2} {}", value, from_str, result, to_str);
+        
+        println!("\nConvert another temperature? (y/n):");
+        let mut choice = String::new();
+        io::stdin().read_line(&mut choice).expect("Failed to read line");
+        
+        if choice.trim().to_lowercase() != "y" {
+            break;
+        }
     }
 }

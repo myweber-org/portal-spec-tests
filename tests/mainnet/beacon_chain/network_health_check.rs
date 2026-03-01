@@ -209,3 +209,114 @@ fn main() {
     
     monitor_service(host, url, interval);
 }
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::time::{Duration, Instant};
+use std::thread;
+use rand::Rng;
+
+const PACKET_COUNT: usize = 10;
+const TIMEOUT_MS: u64 = 1000;
+
+struct NetworkMetrics {
+    latency_ms: f64,
+    packet_loss_percent: f64,
+    jitter_ms: f64,
+}
+
+impl NetworkMetrics {
+    fn new() -> Self {
+        NetworkMetrics {
+            latency_ms: 0.0,
+            packet_loss_percent: 0.0,
+            jitter_ms: 0.0,
+        }
+    }
+
+    fn display(&self) {
+        println!("Network Health Report:");
+        println!("  Latency: {:.2} ms", self.latency_ms);
+        println!("  Packet Loss: {:.1}%", self.packet_loss_percent);
+        println!("  Jitter: {:.2} ms", self.jitter_ms);
+        
+        if self.latency_ms < 50.0 && self.packet_loss_percent < 1.0 {
+            println!("Status: EXCELLENT");
+        } else if self.latency_ms < 100.0 && self.packet_loss_percent < 5.0 {
+            println!("Status: GOOD");
+        } else if self.latency_ms < 200.0 && self.packet_loss_percent < 10.0 {
+            println!("Status: FAIR");
+        } else {
+            println!("Status: POOR");
+        }
+    }
+}
+
+fn simulate_ping(destination: IpAddr) -> Option<Duration> {
+    let mut rng = rand::thread_rng();
+    
+    if rng.gen_bool(0.95) {
+        let latency = rng.gen_range(5..200) as u64;
+        thread::sleep(Duration::from_millis(latency));
+        Some(Duration::from_millis(latency))
+    } else {
+        thread::sleep(Duration::from_millis(TIMEOUT_MS));
+        None
+    }
+}
+
+fn calculate_jitter(latencies: &[Duration]) -> f64 {
+    if latencies.len() < 2 {
+        return 0.0;
+    }
+    
+    let mut diffs = Vec::new();
+    for i in 1..latencies.len() {
+        let diff = (latencies[i].as_millis() as f64 - latencies[i-1].as_millis() as f64).abs();
+        diffs.push(diff);
+    }
+    
+    diffs.iter().sum::<f64>() / diffs.len() as f64
+}
+
+fn perform_health_check(target: IpAddr) -> NetworkMetrics {
+    let mut metrics = NetworkMetrics::new();
+    let mut successful_pings = 0;
+    let mut total_latency = Duration::ZERO;
+    let mut latencies = Vec::new();
+    
+    println!("Testing connection to {}...", target);
+    
+    for i in 0..PACKET_COUNT {
+        print!("Packet {}: ", i + 1);
+        
+        let start = Instant::now();
+        if let Some(latency) = simulate_ping(target) {
+            successful_pings += 1;
+            total_latency += latency;
+            latencies.push(latency);
+            println!("Reply received in {} ms", latency.as_millis());
+        } else {
+            println!("Request timed out");
+        }
+        
+        if i < PACKET_COUNT - 1 {
+            thread::sleep(Duration::from_millis(500));
+        }
+    }
+    
+    if successful_pings > 0 {
+        metrics.latency_ms = total_latency.as_millis() as f64 / successful_pings as f64;
+        metrics.jitter_ms = calculate_jitter(&latencies);
+    }
+    
+    metrics.packet_loss_percent = 
+        ((PACKET_COUNT - successful_pings) as f64 / PACKET_COUNT as f64) * 100.0;
+    
+    metrics
+}
+
+fn main() {
+    let target = IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8));
+    let metrics = perform_health_check(target);
+    println!();
+    metrics.display();
+}

@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 pub struct DataCleaner {
-    pub records: Vec<String>,
+    records: Vec<String>,
 }
 
 impl DataCleaner {
@@ -15,111 +15,42 @@ impl DataCleaner {
         self.records.push(record);
     }
 
-    pub fn remove_duplicates(&mut self) -> usize {
-        let original_len = self.records.len();
+    pub fn deduplicate(&mut self) -> Vec<String> {
         let mut seen = HashSet::new();
-        
-        self.records.retain(|record| {
-            if seen.contains(record) {
-                false
-            } else {
-                seen.insert(record.clone());
-                true
+        let mut unique_records = Vec::new();
+
+        for record in self.records.drain(..) {
+            if seen.insert(record.clone()) {
+                unique_records.push(record);
             }
-        });
-        
-        original_len - self.records.len()
+        }
+
+        self.records = unique_records.clone();
+        unique_records
     }
 
-    pub fn validate_records(&self) -> Vec<bool> {
-        self.records
-            .iter()
-            .map(|record| {
-                !record.trim().is_empty() 
-                && record.len() <= 100 
-                && record.chars().all(|c| c.is_ascii())
-            })
-            .collect()
-    }
-
-    pub fn clean_all(&mut self) -> (usize, Vec<bool>) {
-        let duplicates_removed = self.remove_duplicates();
-        let validation_results = self.validate_records();
-        (duplicates_removed, validation_results)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_remove_duplicates() {
-        let mut cleaner = DataCleaner::new();
-        cleaner.add_record("test".to_string());
-        cleaner.add_record("test".to_string());
-        cleaner.add_record("unique".to_string());
-        
-        let removed = cleaner.remove_duplicates();
-        assert_eq!(removed, 1);
-        assert_eq!(cleaner.records.len(), 2);
-    }
-
-    #[test]
-    fn test_validate_records() {
-        let mut cleaner = DataCleaner::new();
-        cleaner.add_record("valid".to_string());
-        cleaner.add_record("".to_string());
-        cleaner.add_record("a".repeat(101));
-        
-        let results = cleaner.validate_records();
-        assert_eq!(results, vec![true, false, false]);
-    }
-}
-use std::collections::HashSet;
-
-pub struct DataCleaner {
-    dedupe_set: HashSet<String>,
-}
-
-impl DataCleaner {
-    pub fn new() -> Self {
-        DataCleaner {
-            dedupe_set: HashSet::new(),
+    pub fn normalize_whitespace(&mut self) {
+        for record in &mut self.records {
+            let normalized = record
+                .split_whitespace()
+                .collect::<Vec<&str>>()
+                .join(" ");
+            *record = normalized;
         }
     }
 
-    pub fn deduplicate(&mut self, data: &str) -> Option<String> {
-        if self.dedupe_set.contains(data) {
-            None
-        } else {
-            self.dedupe_set.insert(data.to_string());
-            Some(data.to_string())
+    pub fn to_lowercase(&mut self) {
+        for record in &mut self.records {
+            *record = record.to_lowercase();
         }
     }
 
-    pub fn validate_email(email: &str) -> bool {
-        let parts: Vec<&str> = email.split('@').collect();
-        if parts.len() != 2 {
-            return false;
-        }
-        
-        let domain_parts: Vec<&str> = parts[1].split('.').collect();
-        domain_parts.len() >= 2 
-            && !parts[0].is_empty() 
-            && !domain_parts.iter().any(|p| p.is_empty())
+    pub fn get_records(&self) -> &Vec<String> {
+        &self.records
     }
 
-    pub fn normalize_whitespace(text: &str) -> String {
-        text.split_whitespace().collect::<Vec<&str>>().join(" ")
-    }
-
-    pub fn clear_cache(&mut self) {
-        self.dedupe_set.clear();
-    }
-
-    pub fn get_unique_count(&self) -> usize {
-        self.dedupe_set.len()
+    pub fn clear(&mut self) {
+        self.records.clear();
     }
 }
 
@@ -130,316 +61,21 @@ mod tests {
     #[test]
     fn test_deduplication() {
         let mut cleaner = DataCleaner::new();
-        assert_eq!(cleaner.deduplicate("test"), Some("test".to_string()));
-        assert_eq!(cleaner.deduplicate("test"), None);
-        assert_eq!(cleaner.deduplicate("another"), Some("another".to_string()));
-    }
+        cleaner.add_record("test".to_string());
+        cleaner.add_record("test".to_string());
+        cleaner.add_record("another".to_string());
 
-    #[test]
-    fn test_email_validation() {
-        assert!(DataCleaner::validate_email("user@example.com"));
-        assert!(!DataCleaner::validate_email("invalid-email"));
-        assert!(!DataCleaner::validate_email("@domain.com"));
-        assert!(!DataCleaner::validate_email("user@.com"));
-    }
-
-    #[test]
-    fn test_whitespace_normalization() {
-        assert_eq!(
-            DataCleaner::normalize_whitespace("  multiple   spaces   here  "),
-            "multiple spaces here"
-        );
-    }
-}
-use regex::Regex;
-use std::collections::HashSet;
-
-pub fn clean_and_normalize_text(input: &str) -> String {
-    let trimmed = input.trim();
-    
-    let re_multispace = Regex::new(r"\s+").unwrap();
-    let normalized_spaces = re_multispace.replace_all(trimmed, " ");
-    
-    let re_special = Regex::new(r"[^\w\s\-.,!?]").unwrap();
-    let cleaned = re_special.replace_all(&normalized_spaces, "");
-    
-    cleaned.to_string()
-}
-
-pub fn extract_unique_words(text: &str) -> HashSet<String> {
-    let cleaned = clean_and_normalize_text(text);
-    cleaned.split_whitespace()
-        .map(|word| word.to_lowercase())
-        .collect()
-}
-
-pub fn calculate_text_metrics(text: &str) -> (usize, usize, usize) {
-    let words = text.split_whitespace().count();
-    let chars = text.chars().count();
-    let bytes = text.len();
-    
-    (words, chars, bytes)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_clean_text() {
-        let dirty = "  Hello   World!!  @#$%  ";
-        let cleaned = clean_and_normalize_text(dirty);
-        assert_eq!(cleaned, "Hello World!!");
-    }
-
-    #[test]
-    fn test_unique_words() {
-        let text = "hello world hello universe";
-        let unique = extract_unique_words(text);
-        assert_eq!(unique.len(), 3);
-        assert!(unique.contains("hello"));
-        assert!(unique.contains("world"));
-        assert!(unique.contains("universe"));
-    }
-}
-use std::collections::HashSet;
-
-pub struct DataCleaner {
-    deduplication_enabled: bool,
-    normalization_enabled: bool,
-}
-
-impl DataCleaner {
-    pub fn new() -> Self {
-        DataCleaner {
-            deduplication_enabled: true,
-            normalization_enabled: true,
-        }
-    }
-
-    pub fn clean_strings(&self, input: Vec<String>) -> Vec<String> {
-        let mut result = input;
-
-        if self.deduplication_enabled {
-            result = self.deduplicate(result);
-        }
-
-        if self.normalization_enabled {
-            result = self.normalize(result);
-        }
-
-        result
-    }
-
-    fn deduplicate(&self, data: Vec<String>) -> Vec<String> {
-        let mut seen = HashSet::new();
-        data.into_iter()
-            .filter(|item| seen.insert(item.clone()))
-            .collect()
-    }
-
-    fn normalize(&self, data: Vec<String>) -> Vec<String> {
-        data.into_iter()
-            .map(|s| s.trim().to_lowercase())
-            .collect()
-    }
-
-    pub fn with_deduplication(mut self, enabled: bool) -> Self {
-        self.deduplication_enabled = enabled;
-        self
-    }
-
-    pub fn with_normalization(mut self, enabled: bool) -> Self {
-        self.normalization_enabled = enabled;
-        self
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_deduplication() {
-        let cleaner = DataCleaner::new();
-        let input = vec![
-            "apple".to_string(),
-            "banana".to_string(),
-            "apple".to_string(),
-            "cherry".to_string(),
-        ];
-        
-        let result = cleaner.clean_strings(input);
-        assert_eq!(result.len(), 3);
-        assert!(result.contains(&"apple".to_string()));
-        assert!(result.contains(&"banana".to_string()));
-        assert!(result.contains(&"cherry".to_string()));
+        let unique = cleaner.deduplicate();
+        assert_eq!(unique.len(), 2);
+        assert_eq!(cleaner.get_records().len(), 2);
     }
 
     #[test]
     fn test_normalization() {
-        let cleaner = DataCleaner::new();
-        let input = vec![
-            "  Apple  ".to_string(),
-            "BANANA".to_string(),
-            "Cherry".to_string(),
-        ];
-        
-        let result = cleaner.clean_strings(input);
-        assert_eq!(result[0], "apple");
-        assert_eq!(result[1], "banana");
-        assert_eq!(result[2], "cherry");
-    }
-
-    #[test]
-    fn test_disabled_features() {
-        let cleaner = DataCleaner::new()
-            .with_deduplication(false)
-            .with_normalization(false);
-        
-        let input = vec![
-            "  Apple  ".to_string(),
-            "  Apple  ".to_string(),
-        ];
-        
-        let result = cleaner.clean_strings(input);
-        assert_eq!(result.len(), 2);
-        assert_eq!(result[0], "  Apple  ");
-        assert_eq!(result[1], "  Apple  ");
-    }
-}use std::collections::HashSet;
-use std::hash::Hash;
-
-pub fn deduplicate<T: Eq + Hash + Clone>(items: Vec<T>) -> Vec<T> {
-    let mut seen = HashSet::new();
-    let mut result = Vec::new();
-    
-    for item in items {
-        if seen.insert(item.clone()) {
-            result.push(item);
-        }
-    }
-    result
-}
-
-pub fn normalize_strings(strings: Vec<String>) -> Vec<String> {
-    strings
-        .into_iter()
-        .map(|s| s.trim().to_lowercase())
-        .collect()
-}
-
-pub fn remove_empty_strings(strings: Vec<String>) -> Vec<String> {
-    strings
-        .into_iter()
-        .filter(|s| !s.is_empty())
-        .collect()
-}
-
-pub fn clean_string_data(strings: Vec<String>) -> Vec<String> {
-    let normalized = normalize_strings(strings);
-    let non_empty = remove_empty_strings(normalized);
-    deduplicate(non_empty)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_deduplicate() {
-        let input = vec![1, 2, 2, 3, 4, 4, 5];
-        let result = deduplicate(input);
-        assert_eq!(result, vec![1, 2, 3, 4, 5]);
-    }
-
-    #[test]
-    fn test_normalize_strings() {
-        let input = vec!["  HELLO  ".to_string(), "World".to_string()];
-        let result = normalize_strings(input);
-        assert_eq!(result, vec!["hello", "world"]);
-    }
-
-    #[test]
-    fn test_remove_empty_strings() {
-        let input = vec!["hello".to_string(), "".to_string(), "world".to_string()];
-        let result = remove_empty_strings(input);
-        assert_eq!(result, vec!["hello", "world"]);
-    }
-
-    #[test]
-    fn test_clean_string_data() {
-        let input = vec![
-            "  Apple  ".to_string(),
-            "apple".to_string(),
-            "".to_string(),
-            "Banana  ".to_string(),
-            "banana".to_string(),
-        ];
-        let result = clean_string_data(input);
-        assert_eq!(result, vec!["apple", "banana"]);
-    }
-}use std::collections::HashSet;
-
-pub struct DataCleaner {
-    dedupe_set: HashSet<String>,
-}
-
-impl DataCleaner {
-    pub fn new() -> Self {
-        DataCleaner {
-            dedupe_set: HashSet::new(),
-        }
-    }
-
-    pub fn normalize_text(&self, input: &str) -> String {
-        input.trim().to_lowercase()
-    }
-
-    pub fn deduplicate(&mut self, item: &str) -> bool {
-        let normalized = self.normalize_text(item);
-        if self.dedupe_set.contains(&normalized) {
-            false
-        } else {
-            self.dedupe_set.insert(normalized);
-            true
-        }
-    }
-
-    pub fn clean_dataset(&mut self, data: Vec<&str>) -> Vec<String> {
-        let mut cleaned = Vec::new();
-        for item in data {
-            if self.deduplicate(item) {
-                cleaned.push(self.normalize_text(item));
-            }
-        }
-        cleaned
-    }
-
-    pub fn get_unique_count(&self) -> usize {
-        self.dedupe_set.len()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_deduplication() {
         let mut cleaner = DataCleaner::new();
-        let data = vec!["Apple", "apple", "APPLE", "Banana", "banana"];
-        let cleaned = cleaner.clean_dataset(data);
-        
-        assert_eq!(cleaned.len(), 2);
-        assert_eq!(cleaner.get_unique_count(), 2);
-        assert!(cleaned.contains(&"apple".to_string()));
-        assert!(cleaned.contains(&"banana".to_string()));
-    }
+        cleaner.add_record("  multiple   spaces   ".to_string());
+        cleaner.normalize_whitespace();
 
-    #[test]
-    fn test_normalization() {
-        let cleaner = DataCleaner::new();
-        assert_eq!(cleaner.normalize_text("  HELLO World  "), "hello world");
+        assert_eq!(cleaner.get_records()[0], "multiple spaces");
     }
 }

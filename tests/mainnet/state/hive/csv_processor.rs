@@ -460,3 +460,101 @@ mod tests {
         assert_eq!(output_content, expected);
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug, PartialEq)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
+}
+
+impl Record {
+    fn from_csv_line(line: &str) -> Result<Self, Box<dyn Error>> {
+        let parts: Vec<&str> = line.split(',').collect();
+        
+        if parts.len() != 4 {
+            return Err("Invalid number of fields".into());
+        }
+        
+        let id = parts[0].parse()?;
+        let name = parts[1].trim().to_string();
+        
+        if name.is_empty() {
+            return Err("Name cannot be empty".into());
+        }
+        
+        let value = parts[2].parse()?;
+        let active = parts[3].parse()?;
+        
+        Ok(Record {
+            id,
+            name,
+            value,
+            active,
+        })
+    }
+}
+
+fn process_csv_file<P: AsRef<Path>>(path: P) -> Result<Vec<Record>, Box<dyn Error>> {
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+    let mut records = Vec::new();
+    let mut line_number = 0;
+    
+    for line in reader.lines() {
+        line_number += 1;
+        let line_content = line?;
+        
+        if line_content.trim().is_empty() || line_content.starts_with('#') {
+            continue;
+        }
+        
+        match Record::from_csv_line(&line_content) {
+            Ok(record) => records.push(record),
+            Err(e) => eprintln!("Warning: Line {} failed: {}", line_number, e),
+        }
+    }
+    
+    if records.is_empty() {
+        return Err("No valid records found in file".into());
+    }
+    
+    Ok(records)
+}
+
+fn calculate_statistics(records: &[Record]) -> (f64, f64, usize) {
+    let sum: f64 = records.iter().map(|r| r.value).sum();
+    let count = records.len();
+    let average = if count > 0 { sum / count as f64 } else { 0.0 };
+    
+    let active_count = records.iter().filter(|r| r.active).count();
+    
+    (sum, average, active_count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_record_parsing() {
+        let line = "1,Test Item,42.5,true";
+        let record = Record::from_csv_line(line).unwrap();
+        
+        assert_eq!(record.id, 1);
+        assert_eq!(record.name, "Test Item");
+        assert_eq!(record.value, 42.5);
+        assert_eq!(record.active, true);
+    }
+    
+    #[test]
+    fn test_invalid_record() {
+        let line = "1,,42.5,true";
+        assert!(Record::from_csv_line(line).is_err());
+    }
+}

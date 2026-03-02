@@ -132,3 +132,125 @@ mod tests {
         assert_eq!(cleaned, vec!["apple", "banana", "cherry"]);
     }
 }
+use std::collections::HashMap;
+
+pub struct DataCleaner {
+    data: HashMap<String, Vec<Option<String>>>,
+}
+
+impl DataCleaner {
+    pub fn new() -> Self {
+        DataCleaner {
+            data: HashMap::new(),
+        }
+    }
+
+    pub fn add_column(&mut self, column_name: &str, values: Vec<Option<String>>) {
+        self.data.insert(column_name.to_string(), values);
+    }
+
+    pub fn clean_column(&mut self, column_name: &str) -> Result<Vec<String>, String> {
+        match self.data.get_mut(column_name) {
+            Some(column_data) => {
+                let mut cleaned = Vec::new();
+                for value in column_data.iter() {
+                    match value {
+                        Some(v) => {
+                            let trimmed = v.trim().to_string();
+                            if !trimmed.is_empty() {
+                                cleaned.push(trimmed);
+                            }
+                        }
+                        None => continue,
+                    }
+                }
+                Ok(cleaned)
+            }
+            None => Err(format!("Column '{}' not found", column_name)),
+        }
+    }
+
+    pub fn remove_null_rows(&mut self) -> HashMap<String, Vec<String>> {
+        let mut result = HashMap::new();
+        let row_count = self.get_row_count();
+
+        for row in 0..row_count {
+            let mut row_has_null = false;
+            for column in self.data.values() {
+                if column.get(row).map_or(true, |v| v.is_none()) {
+                    row_has_null = true;
+                    break;
+                }
+            }
+
+            if !row_has_null {
+                for (col_name, column) in &self.data {
+                    if let Some(value) = column.get(row) {
+                        if let Some(v) = value {
+                            result
+                                .entry(col_name.clone())
+                                .or_insert_with(Vec::new)
+                                .push(v.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        result
+    }
+
+    fn get_row_count(&self) -> usize {
+        self.data.values().next().map_or(0, |v| v.len())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_clean_column() {
+        let mut cleaner = DataCleaner::new();
+        cleaner.add_column(
+            "names",
+            vec![
+                Some("  John  ".to_string()),
+                Some("".to_string()),
+                Some("Jane".to_string()),
+                None,
+                Some("  Bob  ".to_string()),
+            ],
+        );
+
+        let cleaned = cleaner.clean_column("names").unwrap();
+        assert_eq!(cleaned, vec!["John", "Jane", "Bob"]);
+    }
+
+    #[test]
+    fn test_remove_null_rows() {
+        let mut cleaner = DataCleaner::new();
+        cleaner.add_column(
+            "id",
+            vec![
+                Some("1".to_string()),
+                Some("2".to_string()),
+                None,
+                Some("4".to_string()),
+            ],
+        );
+        cleaner.add_column(
+            "value",
+            vec![
+                Some("a".to_string()),
+                None,
+                Some("c".to_string()),
+                Some("d".to_string()),
+            ],
+        );
+
+        let result = cleaner.remove_null_rows();
+        assert_eq!(result.get("id").unwrap(), &vec!["1", "4"]);
+        assert_eq!(result.get("value").unwrap(), &vec!["a", "d"]);
+    }
+}

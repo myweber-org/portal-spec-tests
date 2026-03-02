@@ -119,4 +119,94 @@ mod tests {
         
         assert_eq!(test_data.to_vec(), decrypted_data);
     }
+}use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce
+};
+use argon2::{
+    password_hash::{
+        rand_core::OsRng,
+        PasswordHasher, SaltString
+    },
+    Argon2
+};
+use std::fs;
+use std::io::{self, Write};
+use std::path::Path;
+
+pub struct FileEncryptor {
+    cipher: Aes256Gcm,
+}
+
+impl FileEncryptor {
+    pub fn new(password: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let salt = SaltString::generate(&mut OsRng);
+        let argon2 = Argon2::default();
+        let password_hash = argon2.hash_password(password.as_bytes(), &salt)?;
+        
+        let key_bytes = password_hash.hash.unwrap().as_bytes();
+        let key = Key::<Aes256Gcm>::from_slice(&key_bytes[..32]);
+        let cipher = Aes256Gcm::new(key);
+        
+        Ok(Self { cipher })
+    }
+    
+    pub fn encrypt_file(&self, input_path: &Path, output_path: &Path) -> io::Result<()> {
+        let plaintext = fs::read(input_path)?;
+        let nonce = Nonce::generate(&mut OsRng);
+        
+        let ciphertext = self.cipher
+            .encrypt(&nonce, plaintext.as_ref())
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        
+        let mut output = fs::File::create(output_path)?;
+        output.write_all(nonce.as_slice())?;
+        output.write_all(&ciphertext)?;
+        
+        Ok(())
+    }
+    
+    pub fn decrypt_file(&self, input_path: &Path, output_path: &Path) -> io::Result<()> {
+        let data = fs::read(input_path)?;
+        if data.len() < 12 {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "File too short"));
+        }
+        
+        let (nonce_slice, ciphertext) = data.split_at(12);
+        let nonce = Nonce::from_slice(nonce_slice);
+        
+        let plaintext = self.cipher
+            .decrypt(nonce, ciphertext)
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        
+        fs::write(output_path, plaintext)?;
+        Ok(())
+    }
+}
+
+pub fn process_encryption() -> Result<(), Box<dyn std::error::Error>> {
+    let password = "secure_passphrase_123";
+    let encryptor = FileEncryptor::new(password)?;
+    
+    let test_data = b"Confidential document content";
+    let input_file = "test_input.txt";
+    let encrypted_file = "test_encrypted.bin";
+    let decrypted_file = "test_decrypted.txt";
+    
+    fs::write(input_file, test_data)?;
+    
+    encryptor.encrypt_file(Path::new(input_file), Path::new(encrypted_file))?;
+    println!("File encrypted successfully");
+    
+    encryptor.decrypt_file(Path::new(encrypted_file), Path::new(decrypted_file))?;
+    println!("File decrypted successfully");
+    
+    let restored_data = fs::read(decrypted_file)?;
+    assert_eq!(test_data.to_vec(), restored_data);
+    
+    fs::remove_file(input_file)?;
+    fs::remove_file(encrypted_file)?;
+    fs::remove_file(decrypted_file)?;
+    
+    Ok(())
 }

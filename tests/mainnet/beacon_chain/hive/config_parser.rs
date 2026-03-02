@@ -400,4 +400,123 @@ mod tests {
         let loaded = AppConfig::from_file(temp_file.path()).unwrap();
         assert_eq!(original.server_port, loaded.server_port);
     }
+}use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
+
+#[derive(Debug, Clone)]
+pub struct Config {
+    pub settings: HashMap<String, String>,
+    pub defaults: HashMap<String, String>,
+}
+
+impl Config {
+    pub fn new() -> Self {
+        Config {
+            settings: HashMap::new(),
+            defaults: HashMap::from([
+                ("timeout".to_string(), "30".to_string()),
+                ("retries".to_string(), "3".to_string()),
+                ("log_level".to_string(), "info".to_string()),
+            ]),
+        }
+    }
+
+    pub fn load_from_file<P: AsRef<Path>>(&mut self, path: P) -> Result<(), String> {
+        let content = fs::read_to_string(path).map_err(|e| format!("Failed to read file: {}", e))?;
+        
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+            
+            let parts: Vec<&str> = trimmed.splitn(2, '=').collect();
+            if parts.len() == 2 {
+                let key = parts[0].trim().to_string();
+                let value = parts[1].trim().to_string();
+                self.settings.insert(key, value);
+            }
+        }
+        
+        Ok(())
+    }
+
+    pub fn get(&self, key: &str) -> Option<&String> {
+        self.settings.get(key).or_else(|| self.defaults.get(key))
+    }
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+        
+        for (key, value) in &self.settings {
+            match key.as_str() {
+                "timeout" | "retries" => {
+                    if value.parse::<u32>().is_err() {
+                        errors.push(format!("{} must be a positive integer", key));
+                    }
+                }
+                "log_level" => {
+                    let valid_levels = ["error", "warn", "info", "debug", "trace"];
+                    if !valid_levels.contains(&value.as_str()) {
+                        errors.push(format!("{} must be one of: {}", key, valid_levels.join(", ")));
+                    }
+                }
+                _ => {}
+            }
+        }
+        
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+
+    pub fn merge_defaults(&mut self) {
+        for (key, value) in &self.defaults {
+            self.settings.entry(key.clone()).or_insert(value.clone());
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_config_loading() {
+        let mut config = Config::new();
+        
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "timeout=60\nretries=5\n# comment\nlog_level=debug").unwrap();
+        
+        assert!(config.load_from_file(temp_file.path()).is_ok());
+        assert_eq!(config.get("timeout"), Some(&"60".to_string()));
+        assert_eq!(config.get("retries"), Some(&"5".to_string()));
+        assert_eq!(config.get("log_level"), Some(&"debug".to_string()));
+    }
+
+    #[test]
+    fn test_default_values() {
+        let config = Config::new();
+        assert_eq!(config.get("timeout"), Some(&"30".to_string()));
+        assert_eq!(config.get("retries"), Some(&"3".to_string()));
+        assert_eq!(config.get("log_level"), Some(&"info".to_string()));
+        assert_eq!(config.get("non_existent"), None);
+    }
+
+    #[test]
+    fn test_validation() {
+        let mut config = Config::new();
+        config.settings.insert("timeout".to_string(), "invalid".to_string());
+        config.settings.insert("log_level".to_string(), "invalid".to_string());
+        
+        let result = config.validate();
+        assert!(result.is_err());
+        let errors = result.unwrap_err();
+        assert!(errors.len() >= 2);
+    }
 }

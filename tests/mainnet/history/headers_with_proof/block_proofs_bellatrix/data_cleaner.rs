@@ -224,4 +224,50 @@ mod tests {
         
         Ok(())
     }
+}use std::collections::HashSet;
+
+pub struct DataCleaner<T> {
+    data: Vec<T>,
+}
+
+impl<T: Clone + Eq + std::hash::Hash> DataCleaner<T> {
+    pub fn new(data: Vec<T>) -> Self {
+        DataCleaner { data }
+    }
+
+    pub fn remove_null_values(&mut self, null_value: &T) {
+        self.data.retain(|item| item != null_value);
+    }
+
+    pub fn deduplicate(&mut self) {
+        let mut seen = HashSet::new();
+        self.data.retain(|item| seen.insert(item.clone()));
+    }
+
+    pub fn get_data(&self) -> &Vec<T> {
+        &self.data
+    }
+
+    pub fn into_data(self) -> Vec<T> {
+        self.data
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_remove_null_values() {
+        let mut cleaner = DataCleaner::new(vec![Some(1), None, Some(2), None, Some(3)]);
+        cleaner.remove_null_values(&None);
+        assert_eq!(cleaner.get_data(), &vec![Some(1), Some(2), Some(3)]);
+    }
+
+    #[test]
+    fn test_deduplicate() {
+        let mut cleaner = DataCleaner::new(vec![1, 2, 2, 3, 3, 3, 4]);
+        cleaner.deduplicate();
+        assert_eq!(cleaner.get_data(), &vec![1, 2, 3, 4]);
+    }
 }

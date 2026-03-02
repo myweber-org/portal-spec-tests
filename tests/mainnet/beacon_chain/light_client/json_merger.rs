@@ -185,3 +185,126 @@ mod tests {
         assert_eq!(parsed["active"], true);
     }
 }
+use std::collections::HashMap;
+use std::fs::{self, File};
+use std::io::{self, BufReader, Write};
+use std::path::Path;
+
+use serde_json::{Value, Map};
+
+pub fn merge_json_files<P: AsRef<Path>>(paths: &[P], output_path: P) -> io::Result<()> {
+    let mut merged_array = Vec::new();
+
+    for path in paths {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let json_value: Value = serde_json::from_reader(reader)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+        merged_array.push(json_value);
+    }
+
+    let output_file = File::create(output_path)?;
+    serde_json::to_writer_pretty(output_file, &merged_array)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+    Ok(())
+}
+
+pub fn merge_json_with_key_deduplication<P: AsRef<Path>>(paths: &[P], output_path: P) -> io::Result<()> {
+    let mut aggregated_map: Map<String, Value> = Map::new();
+
+    for path in paths {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let json_value: Value = serde_json::from_reader(reader)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+        if let Value::Object(map) = json_value {
+            for (key, value) in map {
+                aggregated_map.insert(key, value);
+            }
+        }
+    }
+
+    let output_file = File::create(output_path)?;
+    serde_json::to_writer_pretty(output_file, &aggregated_map)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+    Ok(())
+}
+
+pub fn merge_json_with_custom_logic<P, F>(paths: &[P], output_path: P, mut logic: F) -> io::Result<()>
+where
+    P: AsRef<Path>,
+    F: FnMut(&mut HashMap<String, Value>, Value),
+{
+    let mut aggregated_data: HashMap<String, Value> = HashMap::new();
+
+    for path in paths {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let json_value: Value = serde_json::from_reader(reader)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+        logic(&mut aggregated_data, json_value);
+    }
+
+    let output_file = File::create(output_path)?;
+    let json_value = serde_json::to_value(&aggregated_data)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    serde_json::to_writer_pretty(output_file, &json_value)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+    use serde_json::json;
+
+    #[test]
+    fn test_merge_json_files() {
+        let file1 = NamedTempFile::new().unwrap();
+        let file2 = NamedTempFile::new().unwrap();
+        let output_file = NamedTempFile::new().unwrap();
+
+        let data1 = json!({"id": 1, "name": "Alice"});
+        let data2 = json!({"id": 2, "name": "Bob"});
+
+        fs::write(&file1, serde_json::to_string_pretty(&data1).unwrap()).unwrap();
+        fs::write(&file2, serde_json::to_string_pretty(&data2).unwrap()).unwrap();
+
+        let paths = [file1.path(), file2.path()];
+        merge_json_files(&paths, output_file.path()).unwrap();
+
+        let content = fs::read_to_string(output_file.path()).unwrap();
+        let parsed: Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(parsed, json!([data1, data2]));
+    }
+
+    #[test]
+    fn test_merge_json_with_key_deduplication() {
+        let file1 = NamedTempFile::new().unwrap();
+        let file2 = NamedTempFile::new().unwrap();
+        let output_file = NamedTempFile::new().unwrap();
+
+        let data1 = json!({"common": "value1", "unique1": "data1"});
+        let data2 = json!({"common": "value2", "unique2": "data2"});
+
+        fs::write(&file1, serde_json::to_string_pretty(&data1).unwrap()).unwrap();
+        fs::write(&file2, serde_json::to_string_pretty(&data2).unwrap()).unwrap();
+
+        let paths = [file1.path(), file2.path()];
+        merge_json_with_key_deduplication(&paths, output_file.path()).unwrap();
+
+        let content = fs::read_to_string(output_file.path()).unwrap();
+        let parsed: Value = serde_json::from_str(&content).unwrap();
+        
+        assert_eq!(parsed["common"], json!("value2"));
+        assert_eq!(parsed["unique1"], json!("data1"));
+        assert_eq!(parsed["unique2"], json!("data2"));
+    }
+}

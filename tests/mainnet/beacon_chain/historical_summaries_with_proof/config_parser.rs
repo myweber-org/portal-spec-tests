@@ -331,4 +331,146 @@ mod tests {
         assert_eq!(config.get("SECRET"), Some(&"super_secret_123".to_string()));
         assert_eq!(config.get("DB_HOST"), Some(&"localhost".to_string()));
     }
+}use std::collections::HashMap;
+use std::fs;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AppConfig {
+    pub server: ServerConfig,
+    pub database: DatabaseConfig,
+    pub logging: LoggingConfig,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ServerConfig {
+    pub host: String,
+    pub port: u16,
+    pub timeout_seconds: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DatabaseConfig {
+    pub url: String,
+    pub max_connections: u32,
+    pub min_connections: u32,
+    pub connection_timeout: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LoggingConfig {
+    pub level: String,
+    pub file_path: Option<String>,
+    pub max_files: usize,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        AppConfig {
+            server: ServerConfig {
+                host: "127.0.0.1".to_string(),
+                port: 8080,
+                timeout_seconds: 30,
+            },
+            database: DatabaseConfig {
+                url: "postgresql://localhost:5432/mydb".to_string(),
+                max_connections: 10,
+                min_connections: 2,
+                connection_timeout: 10,
+            },
+            logging: LoggingConfig {
+                level: "info".to_string(),
+                file_path: None,
+                max_files: 5,
+            },
+        }
+    }
+}
+
+pub struct ConfigParser {
+    config_path: String,
+    environment_vars: HashMap<String, String>,
+}
+
+impl ConfigParser {
+    pub fn new(config_path: &str) -> Self {
+        ConfigParser {
+            config_path: config_path.to_string(),
+            environment_vars: HashMap::new(),
+        }
+    }
+
+    pub fn load_config(&self) -> Result<AppConfig, Box<dyn std::error::Error>> {
+        let config_content = fs::read_to_string(&self.config_path)?;
+        let mut config: AppConfig = toml::from_str(&config_content)?;
+        
+        self.apply_environment_overrides(&mut config);
+        self.validate_config(&config)?;
+        
+        Ok(config)
+    }
+
+    pub fn load_config_with_defaults(&self) -> Result<AppConfig, Box<dyn std::error::Error>> {
+        match self.load_config() {
+            Ok(config) => Ok(config),
+            Err(_) => {
+                println!("Config file not found or invalid, using defaults");
+                Ok(AppConfig::default())
+            }
+        }
+    }
+
+    fn apply_environment_overrides(&self, config: &mut AppConfig) {
+        if let Ok(host) = std::env::var("SERVER_HOST") {
+            config.server.host = host;
+        }
+        
+        if let Ok(port) = std::env::var("SERVER_PORT") {
+            if let Ok(port_num) = port.parse::<u16>() {
+                config.server.port = port_num;
+            }
+        }
+        
+        if let Ok(db_url) = std::env::var("DATABASE_URL") {
+            config.database.url = db_url;
+        }
+        
+        if let Ok(log_level) = std::env::var("LOG_LEVEL") {
+            config.logging.level = log_level;
+        }
+    }
+
+    fn validate_config(&self, config: &AppConfig) -> Result<(), Box<dyn std::error::Error>> {
+        if config.server.port == 0 {
+            return Err("Server port cannot be 0".into());
+        }
+        
+        if config.database.max_connections < config.database.min_connections {
+            return Err("Max connections must be greater than or equal to min connections".into());
+        }
+        
+        if config.database.max_connections == 0 {
+            return Err("Max connections cannot be 0".into());
+        }
+        
+        let valid_log_levels = ["error", "warn", "info", "debug", "trace"];
+        if !valid_log_levels.contains(&config.logging.level.to_lowercase().as_str()) {
+            return Err(format!("Invalid log level: {}", config.logging.level).into());
+        }
+        
+        Ok(())
+    }
+
+    pub fn generate_default_config(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let default_config = AppConfig::default();
+        let toml_content = toml::to_string_pretty(&default_config)?;
+        fs::write(&self.config_path, toml_content)?;
+        println!("Default configuration generated at: {}", self.config_path);
+        Ok(())
+    }
+}
+
+pub fn parse_config_file(path: &str) -> Result<AppConfig, Box<dyn std::error::Error>> {
+    let parser = ConfigParser::new(path);
+    parser.load_config_with_defaults()
 }

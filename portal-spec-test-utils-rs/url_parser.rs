@@ -147,4 +147,134 @@ mod tests {
         assert!(valid_parser.is_valid_url());
         assert!(!invalid_parser.is_valid_url());
     }
+}use std::collections::HashMap;
+
+pub struct UrlParser;
+
+impl UrlParser {
+    pub fn parse_domain(url: &str) -> Option<String> {
+        let url = url.trim();
+        if url.is_empty() {
+            return None;
+        }
+
+        let url_lower = url.to_lowercase();
+        let prefixes = ["http://", "https://", "ftp://", "//"];
+
+        let mut start = 0;
+        for prefix in prefixes.iter() {
+            if url_lower.starts_with(prefix) {
+                start = prefix.len();
+                break;
+            }
+        }
+
+        let remaining = &url[start..];
+        let domain_end = remaining.find('/').unwrap_or(remaining.len());
+        let domain = &remaining[..domain_end];
+
+        if domain.is_empty() {
+            None
+        } else {
+            Some(domain.to_string())
+        }
+    }
+
+    pub fn parse_query_params(url: &str) -> HashMap<String, String> {
+        let mut params = HashMap::new();
+        
+        if let Some(query_start) = url.find('?') {
+            let query_string = &url[query_start + 1..];
+            
+            for pair in query_string.split('&') {
+                if let Some(equal_pos) = pair.find('=') {
+                    let key = &pair[..equal_pos];
+                    let value = &pair[equal_pos + 1..];
+                    
+                    if !key.is_empty() {
+                        params.insert(key.to_string(), value.to_string());
+                    }
+                }
+            }
+        }
+        
+        params
+    }
+
+    pub fn extract_path(url: &str) -> Option<String> {
+        let url = url.trim();
+        if url.is_empty() {
+            return None;
+        }
+
+        let url_lower = url.to_lowercase();
+        let prefixes = ["http://", "https://", "ftp://", "//"];
+
+        let mut start = 0;
+        for prefix in prefixes.iter() {
+            if url_lower.starts_with(prefix) {
+                start = prefix.len();
+                break;
+            }
+        }
+
+        let remaining = &url[start..];
+        if let Some(slash_pos) = remaining.find('/') {
+            let path = &remaining[slash_pos..];
+            
+            if let Some(query_pos) = path.find('?') {
+                Some(path[..query_pos].to_string())
+            } else {
+                Some(path.to_string())
+            }
+        } else {
+            Some("/".to_string())
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_domain() {
+        assert_eq!(
+            UrlParser::parse_domain("https://www.example.com/path"),
+            Some("www.example.com".to_string())
+        );
+        assert_eq!(
+            UrlParser::parse_domain("http://sub.domain.co.uk:8080"),
+            Some("sub.domain.co.uk:8080".to_string())
+        );
+        assert_eq!(UrlParser::parse_domain("invalid"), Some("invalid".to_string()));
+        assert_eq!(UrlParser::parse_domain(""), None);
+    }
+
+    #[test]
+    fn test_parse_query_params() {
+        let params = UrlParser::parse_query_params("https://example.com?key1=value1&key2=value2");
+        assert_eq!(params.get("key1"), Some(&"value1".to_string()));
+        assert_eq!(params.get("key2"), Some(&"value2".to_string()));
+        
+        let empty_params = UrlParser::parse_query_params("https://example.com");
+        assert!(empty_params.is_empty());
+    }
+
+    #[test]
+    fn test_extract_path() {
+        assert_eq!(
+            UrlParser::extract_path("https://example.com/api/v1/users"),
+            Some("/api/v1/users".to_string())
+        );
+        assert_eq!(
+            UrlParser::extract_path("https://example.com/api/v1/users?page=2"),
+            Some("/api/v1/users".to_string())
+        );
+        assert_eq!(
+            UrlParser::extract_path("https://example.com"),
+            Some("/".to_string())
+        );
+        assert_eq!(UrlParser::extract_path(""), None);
+    }
 }

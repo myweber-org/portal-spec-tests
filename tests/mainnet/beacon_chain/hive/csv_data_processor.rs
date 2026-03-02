@@ -326,3 +326,140 @@ mod tests {
         assert_eq!(max_record.name, "ItemB");
     }
 }
+use csv::{Reader, Writer};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::path::Path;
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+struct Record {
+    id: u32,
+    name: String,
+    category: String,
+    value: f64,
+    active: bool,
+}
+
+struct DataProcessor {
+    records: Vec<Record>,
+}
+
+impl DataProcessor {
+    fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    fn load_from_file<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn Error>> {
+        let mut reader = Reader::from_path(path)?;
+        for result in reader.deserialize() {
+            let record: Record = result?;
+            self.records.push(record);
+        }
+        Ok(())
+    }
+
+    fn filter_by_category(&self, category: &str) -> Vec<Record> {
+        self.records
+            .iter()
+            .filter(|r| r.category == category)
+            .cloned()
+            .collect()
+    }
+
+    fn filter_active(&self) -> Vec<Record> {
+        self.records
+            .iter()
+            .filter(|r| r.active)
+            .cloned()
+            .collect()
+    }
+
+    fn calculate_average_value(&self) -> Option<f64> {
+        if self.records.is_empty() {
+            return None;
+        }
+        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        Some(sum / self.records.len() as f64)
+    }
+
+    fn aggregate_by_category(&self) -> Vec<(String, f64)> {
+        let mut aggregates = std::collections::HashMap::new();
+        
+        for record in &self.records {
+            let entry = aggregates.entry(record.category.clone()).or_insert((0, 0.0));
+            entry.0 += 1;
+            entry.1 += record.value;
+        }
+
+        aggregates
+            .into_iter()
+            .map(|(category, (count, total))| (category, total / count as f64))
+            .collect()
+    }
+
+    fn save_to_file<P: AsRef<Path>>(&self, path: P, records: &[Record]) -> Result<(), Box<dyn Error>> {
+        let mut writer = Writer::from_path(path)?;
+        for record in records {
+            writer.serialize(record)?;
+        }
+        writer.flush()?;
+        Ok(())
+    }
+
+    fn find_max_value_record(&self) -> Option<&Record> {
+        self.records.iter().max_by(|a, b| {
+            a.value.partial_cmp(&b.value).unwrap_or(std::cmp::Ordering::Equal)
+        })
+    }
+
+    fn find_min_value_record(&self) -> Option<&Record> {
+        self.records.iter().min_by(|a, b| {
+            a.value.partial_cmp(&b.value).unwrap_or(std::cmp::Ordering::Equal)
+        })
+    }
+}
+
+fn process_sample_data() -> Result<(), Box<dyn Error>> {
+    let mut processor = DataProcessor::new();
+    
+    let sample_data = "id,name,category,value,active
+1,ItemA,Electronics,299.99,true
+2,ItemB,Books,19.99,true
+3,ItemC,Electronics,599.99,false
+4,ItemD,Clothing,49.99,true
+5,ItemE,Books,14.99,true";
+
+    let temp_path = "temp_sample.csv";
+    std::fs::write(temp_path, sample_data)?;
+    
+    processor.load_from_file(temp_path)?;
+    
+    println!("Total records: {}", processor.records.len());
+    
+    if let Some(avg) = processor.calculate_average_value() {
+        println!("Average value: {:.2}", avg);
+    }
+    
+    let electronics = processor.filter_by_category("Electronics");
+    println!("Electronics items: {}", electronics.len());
+    
+    let aggregates = processor.aggregate_by_category();
+    for (category, avg) in aggregates {
+        println!("Category {} average: {:.2}", category, avg);
+    }
+    
+    if let Some(max_record) = processor.find_max_value_record() {
+        println!("Max value record: {} - {}", max_record.name, max_record.value);
+    }
+    
+    std::fs::remove_file(temp_path)?;
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = process_sample_data() {
+        eprintln!("Error processing data: {}", e);
+    }
+}

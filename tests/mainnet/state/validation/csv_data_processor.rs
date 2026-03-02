@@ -204,4 +204,176 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     
     Ok(())
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+
+pub struct CsvProcessor {
+    headers: Vec<String>,
+    records: Vec<Vec<String>>,
+}
+
+impl CsvProcessor {
+    pub fn from_file(path: &str) -> Result<Self, Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut lines = reader.lines();
+
+        let headers = if let Some(first_line) = lines.next() {
+            first_line?
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .collect()
+        } else {
+            return Err("Empty CSV file".into());
+        };
+
+        let mut records = Vec::new();
+        for line in lines {
+            let record: Vec<String> = line?
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .collect();
+            if record.len() == headers.len() {
+                records.push(record);
+            }
+        }
+
+        Ok(CsvProcessor { headers, records })
+    }
+
+    pub fn filter_by_column(&self, column_name: &str, predicate: fn(&str) -> bool) -> Vec<Vec<String>> {
+        let column_index = self.headers.iter()
+            .position(|h| h == column_name);
+
+        match column_index {
+            Some(idx) => self.records.iter()
+                .filter(|record| predicate(&record[idx]))
+                .cloned()
+                .collect(),
+            None => Vec::new(),
+        }
+    }
+
+    pub fn aggregate_numeric_column(&self, column_name: &str, operation: Aggregation) -> Result<f64, String> {
+        let column_index = self.headers.iter()
+            .position(|h| h == column_name)
+            .ok_or_else(|| format!("Column '{}' not found", column_name))?;
+
+        let numeric_values: Vec<f64> = self.records.iter()
+            .filter_map(|record| record[column_index].parse().ok())
+            .collect();
+
+        if numeric_values.is_empty() {
+            return Err("No valid numeric data found".into());
+        }
+
+        match operation {
+            Aggregation::Sum => Ok(numeric_values.iter().sum()),
+            Aggregation::Average => Ok(numeric_values.iter().sum::<f64>() / numeric_values.len() as f64),
+            Aggregation::Max => Ok(numeric_values.iter().fold(f64::MIN, |a, &b| a.max(b))),
+            Aggregation::Min => Ok(numeric_values.iter().fold(f64::MAX, |a, &b| a.min(b))),
+        }
+    }
+
+    pub fn get_column_stats(&self, column_name: &str) -> Result<ColumnStats, String> {
+        let values: Vec<&str> = self.records.iter()
+            .filter_map(|record| {
+                let idx = self.headers.iter().position(|h| h == column_name)?;
+                Some(record[idx].as_str())
+            })
+            .collect();
+
+        if values.is_empty() {
+            return Err("Column not found or empty".into());
+        }
+
+        let unique_count = values.iter().collect::<std::collections::HashSet<_>>().len();
+        let null_count = values.iter().filter(|&&v| v.is_empty()).count();
+
+        Ok(ColumnStats {
+            total_count: values.len(),
+            unique_count,
+            null_count,
+            sample_values: values.iter().take(3).map(|&s| s.to_string()).collect(),
+        })
+    }
+}
+
+pub enum Aggregation {
+    Sum,
+    Average,
+    Max,
+    Min,
+}
+
+pub struct ColumnStats {
+    pub total_count: usize,
+    pub unique_count: usize,
+    pub null_count: usize,
+    pub sample_values: Vec<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    fn create_test_csv() -> NamedTempFile {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "name,age,salary,department").unwrap();
+        writeln!(file, "Alice,30,50000,Engineering").unwrap();
+        writeln!(file, "Bob,25,45000,Marketing").unwrap();
+        writeln!(file, "Charlie,35,60000,Engineering").unwrap();
+        writeln!(file, "Diana,28,48000,Sales").unwrap();
+        writeln!(file, "Eve,40,55000,Engineering").unwrap();
+        file
+    }
+
+    #[test]
+    fn test_csv_loading() {
+        let test_file = create_test_csv();
+        let processor = CsvProcessor::from_file(test_file.path().to_str().unwrap()).unwrap();
+        
+        assert_eq!(processor.headers, vec!["name", "age", "salary", "department"]);
+        assert_eq!(processor.records.len(), 5);
+    }
+
+    #[test]
+    fn test_filter_by_column() {
+        let test_file = create_test_csv();
+        let processor = CsvProcessor::from_file(test_file.path().to_str().unwrap()).unwrap();
+        
+        let engineering_records = processor.filter_by_column("department", |dept| dept == "Engineering");
+        assert_eq!(engineering_records.len(), 3);
+        
+        let high_salary = processor.filter_by_column("salary", |salary| {
+            salary.parse::<i32>().unwrap_or(0) > 50000
+        });
+        assert_eq!(high_salary.len(), 2);
+    }
+
+    #[test]
+    fn test_aggregation() {
+        let test_file = create_test_csv();
+        let processor = CsvProcessor::from_file(test_file.path().to_str().unwrap()).unwrap();
+        
+        let total_salary = processor.aggregate_numeric_column("salary", Aggregation::Sum).unwrap();
+        assert_eq!(total_salary, 258000.0);
+        
+        let avg_age = processor.aggregate_numeric_column("age", Aggregation::Average).unwrap();
+        assert_eq!(avg_age, 31.6);
+    }
+
+    #[test]
+    fn test_column_stats() {
+        let test_file = create_test_csv();
+        let processor = CsvProcessor::from_file(test_file.path().to_str().unwrap()).unwrap();
+        
+        let stats = processor.get_column_stats("department").unwrap();
+        assert_eq!(stats.total_count, 5);
+        assert_eq!(stats.unique_count, 3);
+        assert_eq!(stats.null_count, 0);
+    }
 }

@@ -376,3 +376,145 @@ mod tests {
         fs::remove_file(decrypted_path).unwrap();
     }
 }
+use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
+use pbkdf2::pbkdf2_hmac;
+use rand::RngCore;
+use sha2::Sha256;
+use std::fs;
+use std::io::{Read, Write};
+use std::path::Path;
+
+type Aes256CbcEnc = cbc::Encryptor<aes::Aes256>;
+type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
+
+const SALT_LEN: usize = 16;
+const IV_LEN: usize = 16;
+const KEY_LEN: usize = 32;
+const PBKDF2_ITERATIONS: u32 = 100_000;
+
+#[derive(Debug)]
+pub enum CryptoError {
+    IoError(std::io::Error),
+    InvalidData,
+    UnsupportedOperation,
+}
+
+impl From<std::io::Error> for CryptoError {
+    fn from(err: std::io::Error) -> Self {
+        CryptoError::IoError(err)
+    }
+}
+
+pub struct FileCrypto;
+
+impl FileCrypto {
+    pub fn encrypt_file(
+        source_path: &Path,
+        dest_path: &Path,
+        password: &str,
+    ) -> Result<(), CryptoError> {
+        let mut source_file = fs::File::open(source_path)?;
+        let mut plaintext = Vec::new();
+        source_file.read_to_end(&mut plaintext)?;
+
+        let mut salt = [0u8; SALT_LEN];
+        let mut iv = [0u8; IV_LEN];
+        rand::thread_rng().fill_bytes(&mut salt);
+        rand::thread_rng().fill_bytes(&mut iv);
+
+        let mut key = [0u8; KEY_LEN];
+        pbkdf2_hmac::<Sha256>(password.as_bytes(), &salt, PBKDF2_ITERATIONS, &mut key);
+
+        let ciphertext = Aes256CbcEnc::new(&key.into(), &iv.into())
+            .encrypt_padded_vec_mut::<Pkcs7>(&plaintext);
+
+        let mut dest_file = fs::File::create(dest_path)?;
+        dest_file.write_all(&salt)?;
+        dest_file.write_all(&iv)?;
+        dest_file.write_all(&ciphertext)?;
+
+        Ok(())
+    }
+
+    pub fn decrypt_file(
+        source_path: &Path,
+        dest_path: &Path,
+        password: &str,
+    ) -> Result<(), CryptoError> {
+        let mut source_file = fs::File::open(source_path)?;
+        let mut encrypted_data = Vec::new();
+        source_file.read_to_end(&mut encrypted_data)?;
+
+        if encrypted_data.len() < SALT_LEN + IV_LEN {
+            return Err(CryptoError::InvalidData);
+        }
+
+        let salt = &encrypted_data[..SALT_LEN];
+        let iv = &encrypted_data[SALT_LEN..SALT_LEN + IV_LEN];
+        let ciphertext = &encrypted_data[SALT_LEN + IV_LEN..];
+
+        let mut key = [0u8; KEY_LEN];
+        pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, PBKDF2_ITERATIONS, &mut key);
+
+        let decrypted_data = Aes256CbcDec::new(&key.into(), iv.into())
+            .decrypt_padded_vec_mut::<Pkcs7>(ciphertext)
+            .map_err(|_| CryptoError::InvalidData)?;
+
+        let mut dest_file = fs::File::create(dest_path)?;
+        dest_file.write_all(&decrypted_data)?;
+
+        Ok(())
+    }
+
+    pub fn generate_key_from_password(password: &str, salt: &[u8]) -> [u8; KEY_LEN] {
+        let mut key = [0u8; KEY_LEN];
+        pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, PBKDF2_ITERATIONS, &mut key);
+        key
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_encrypt_decrypt_cycle() {
+        let plaintext = b"Secret data that needs protection";
+        let password = "strong_password_123";
+
+        let source_file = NamedTempFile::new().unwrap();
+        let encrypted_file = NamedTempFile::new().unwrap();
+        let decrypted_file = NamedTempFile::new().unwrap();
+
+        fs::write(source_file.path(), plaintext).unwrap();
+
+        FileCrypto::encrypt_file(source_file.path(), encrypted_file.path(), password).unwrap();
+        FileCrypto::decrypt_file(encrypted_file.path(), decrypted_file.path(), password).unwrap();
+
+        let decrypted_data = fs::read(decrypted_file.path()).unwrap();
+        assert_eq!(decrypted_data, plaintext);
+    }
+
+    #[test]
+    fn test_wrong_password_fails() {
+        let plaintext = b"Test data";
+        let password = "correct_password";
+        let wrong_password = "wrong_password";
+
+        let source_file = NamedTempFile::new().unwrap();
+        let encrypted_file = NamedTempFile::new().unwrap();
+        let decrypted_file = NamedTempFile::new().unwrap();
+
+        fs::write(source_file.path(), plaintext).unwrap();
+
+        FileCrypto::encrypt_file(source_file.path(), encrypted_file.path(), password).unwrap();
+
+        let result = FileCrypto::decrypt_file(
+            encrypted_file.path(),
+            decrypted_file.path(),
+            wrong_password,
+        );
+        assert!(result.is_err());
+    }
+}

@@ -478,3 +478,172 @@ pub fn filter_by_category(records: Vec<Record>, category: &str) -> Vec<Record> {
         .filter(|r| r.category == category)
         .collect()
 }
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataRecord {
+    pub id: u64,
+    pub timestamp: i64,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
+}
+
+#[derive(Debug)]
+pub enum ProcessingError {
+    InvalidData(String),
+    TransformationError(String),
+    ValidationError(String),
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProcessingError::InvalidData(msg) => write!(f, "Invalid data: {}", msg),
+            ProcessingError::TransformationError(msg) => write!(f, "Transformation error: {}", msg),
+            ProcessingError::ValidationError(msg) => write!(f, "Validation error: {}", msg),
+        }
+    }
+}
+
+impl Error for ProcessingError {}
+
+pub struct DataProcessor {
+    config: ProcessingConfig,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProcessingConfig {
+    pub max_values: usize,
+    pub min_timestamp: i64,
+    pub require_metadata: bool,
+}
+
+impl Default for ProcessingConfig {
+    fn default() -> Self {
+        ProcessingConfig {
+            max_values: 100,
+            min_timestamp: 0,
+            require_metadata: false,
+        }
+    }
+}
+
+impl DataProcessor {
+    pub fn new(config: ProcessingConfig) -> Self {
+        DataProcessor { config }
+    }
+
+    pub fn validate_record(&self, record: &DataRecord) -> Result<(), ProcessingError> {
+        if record.values.len() > self.config.max_values {
+            return Err(ProcessingError::ValidationError(format!(
+                "Too many values: {} > {}",
+                record.values.len(),
+                self.config.max_values
+            )));
+        }
+
+        if record.timestamp < self.config.min_timestamp {
+            return Err(ProcessingError::ValidationError(format!(
+                "Invalid timestamp: {} < {}",
+                record.timestamp, self.config.min_timestamp
+            )));
+        }
+
+        if self.config.require_metadata && record.metadata.is_empty() {
+            return Err(ProcessingError::ValidationError(
+                "Metadata required but missing".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    pub fn normalize_values(&self, record: &mut DataRecord) -> Result<(), ProcessingError> {
+        if record.values.is_empty() {
+            return Err(ProcessingError::TransformationError(
+                "Cannot normalize empty values".to_string(),
+            ));
+        }
+
+        let sum: f64 = record.values.iter().sum();
+        if sum == 0.0 {
+            return Err(ProcessingError::TransformationError(
+                "Cannot normalize zero-sum values".to_string(),
+            ));
+        }
+
+        for value in &mut record.values {
+            *value /= sum;
+        }
+
+        Ok(())
+    }
+
+    pub fn process_record(&self, mut record: DataRecord) -> Result<DataRecord, ProcessingError> {
+        self.validate_record(&record)?;
+        self.normalize_values(&mut record)?;
+        
+        record.metadata.insert(
+            "processed_timestamp".to_string(),
+            chrono::Utc::now().timestamp().to_string(),
+        );
+        
+        Ok(record)
+    }
+
+    pub fn batch_process(
+        &self,
+        records: Vec<DataRecord>,
+    ) -> Result<Vec<DataRecord>, ProcessingError> {
+        let mut results = Vec::with_capacity(records.len());
+        
+        for record in records {
+            match self.process_record(record) {
+                Ok(processed) => results.push(processed),
+                Err(e) => return Err(e),
+            }
+        }
+        
+        Ok(results)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validation_success() {
+        let config = ProcessingConfig::default();
+        let processor = DataProcessor::new(config);
+        
+        let record = DataRecord {
+            id: 1,
+            timestamp: 1000,
+            values: vec![1.0, 2.0, 3.0],
+            metadata: HashMap::new(),
+        };
+        
+        assert!(processor.validate_record(&record).is_ok());
+    }
+
+    #[test]
+    fn test_normalization() {
+        let config = ProcessingConfig::default();
+        let processor = DataProcessor::new(config);
+        
+        let mut record = DataRecord {
+            id: 1,
+            timestamp: 1000,
+            values: vec![1.0, 2.0, 3.0],
+            metadata: HashMap::new(),
+        };
+        
+        assert!(processor.normalize_values(&mut record).is_ok());
+        let sum: f64 = record.values.iter().sum();
+        assert!((sum - 1.0).abs() < 1e-10);
+    }
+}

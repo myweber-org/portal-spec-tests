@@ -253,4 +253,110 @@ mod tests {
         assert_eq!(result.get("id").unwrap(), &vec!["1", "4"]);
         assert_eq!(result.get("value").unwrap(), &vec!["a", "d"]);
     }
+}use std::collections::HashSet;
+use std::error::Error;
+
+pub struct DataCleaner {
+    dedupe_set: HashSet<String>,
+}
+
+impl DataCleaner {
+    pub fn new() -> Self {
+        DataCleaner {
+            dedupe_set: HashSet::new(),
+        }
+    }
+
+    pub fn clean_record(&mut self, record: &str) -> Option<String> {
+        let trimmed = record.trim().to_string();
+        
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        if !self.is_valid_format(&trimmed) {
+            return None;
+        }
+
+        if self.dedupe_set.contains(&trimmed) {
+            return None;
+        }
+
+        self.dedupe_set.insert(trimmed.clone());
+        Some(trimmed)
+    }
+
+    fn is_valid_format(&self, record: &str) -> bool {
+        record.len() >= 3 && record.len() <= 255
+    }
+
+    pub fn get_unique_count(&self) -> usize {
+        self.dedupe_set.len()
+    }
+
+    pub fn process_batch(&mut self, records: Vec<&str>) -> Vec<String> {
+        records
+            .iter()
+            .filter_map(|record| self.clean_record(record))
+            .collect()
+    }
+}
+
+pub fn validate_email(email: &str) -> Result<(), Box<dyn Error>> {
+    if email.is_empty() {
+        return Err("Email cannot be empty".into());
+    }
+
+    if !email.contains('@') {
+        return Err("Email must contain @ symbol".into());
+    }
+
+    let parts: Vec<&str> = email.split('@').collect();
+    if parts.len() != 2 || parts[0].is_empty() || parts[1].is_empty() {
+        return Err("Invalid email format".into());
+    }
+
+    if !parts[1].contains('.') {
+        return Err("Domain must contain a dot".into());
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_clean_record() {
+        let mut cleaner = DataCleaner::new();
+        
+        assert_eq!(cleaner.clean_record("  test  "), Some("test".to_string()));
+        assert_eq!(cleaner.clean_record(""), None);
+        assert_eq!(cleaner.clean_record("ab"), None);
+        
+        let first = cleaner.clean_record("duplicate");
+        let second = cleaner.clean_record("duplicate");
+        assert_eq!(first, Some("duplicate".to_string()));
+        assert_eq!(second, None);
+    }
+
+    #[test]
+    fn test_validate_email() {
+        assert!(validate_email("user@example.com").is_ok());
+        assert!(validate_email("invalid").is_err());
+        assert!(validate_email("user@").is_err());
+        assert!(validate_email("@example.com").is_err());
+    }
+
+    #[test]
+    fn test_process_batch() {
+        let mut cleaner = DataCleaner::new();
+        let records = vec!["a", "valid", "valid", "toolong".repeat(50).as_str(), ""];
+        
+        let result = cleaner.process_batch(records);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], "valid");
+        assert_eq!(cleaner.get_unique_count(), 1);
+    }
 }

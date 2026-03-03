@@ -372,4 +372,41 @@ mod tests {
         assert_eq!(result["enabled"], true);
         assert!(result["tags"].is_array());
     }
+}use serde_json::{json, Value};
+use std::fs::{self, File};
+use std::io::{BufReader, Read};
+use std::path::Path;
+
+pub fn merge_json_files<P: AsRef<Path>>(paths: &[P]) -> Result<Value, String> {
+    let mut merged_array = Vec::new();
+
+    for path in paths {
+        let file = File::open(path).map_err(|e| format!("Failed to open {}: {}", path.as_ref().display(), e))?;
+        let mut reader = BufReader::new(file);
+        let mut contents = String::new();
+        reader.read_to_string(&mut contents).map_err(|e| format!("Failed to read {}: {}", path.as_ref().display(), e))?;
+
+        let value: Value = serde_json::from_str(&contents)
+            .map_err(|e| format!("Invalid JSON in {}: {}", path.as_ref().display(), e))?;
+
+        if let Value::Array(arr) = value {
+            merged_array.extend(arr);
+        } else {
+            merged_array.push(value);
+        }
+    }
+
+    Ok(json!(merged_array))
+}
+
+pub fn merge_and_write<P: AsRef<Path>>(input_paths: &[P], output_path: P) -> Result<(), String> {
+    let merged = merge_json_files(input_paths)?;
+    let json_string = serde_json::to_string_pretty(&merged)
+        .map_err(|e| format!("Failed to serialize merged JSON: {}", e))?;
+
+    fs::write(&output_path, json_string)
+        .map_err(|e| format!("Failed to write to {}: {}", output_path.as_ref().display(), e))?;
+
+    println!("Successfully merged {} files into {}", input_paths.len(), output_path.as_ref().display());
+    Ok(())
 }

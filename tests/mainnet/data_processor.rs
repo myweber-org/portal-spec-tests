@@ -652,4 +652,104 @@ mod tests {
         assert!((mean - 12.666).abs() < 0.001);
         assert!((std_dev - 2.054).abs() < 0.001);
     }
+}use std::collections::HashMap;
+
+pub struct DataProcessor {
+    cache: HashMap<String, Vec<f64>>,
+    validation_rules: Vec<ValidationRule>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ValidationRule {
+    pub min_value: Option<f64>,
+    pub max_value: Option<f64>,
+    pub required_fields: Vec<String>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            cache: HashMap::new(),
+            validation_rules: Vec::new(),
+        }
+    }
+
+    pub fn add_validation_rule(&mut self, rule: ValidationRule) {
+        self.validation_rules.push(rule);
+    }
+
+    pub fn process_dataset(&mut self, dataset_name: &str, data: &[f64]) -> Result<Vec<f64>, String> {
+        if data.is_empty() {
+            return Err("Dataset cannot be empty".to_string());
+        }
+
+        for rule in &self.validation_rules {
+            if let Some(min) = rule.min_value {
+                if data.iter().any(|&x| x < min) {
+                    return Err(format!("Value below minimum threshold: {}", min));
+                }
+            }
+            if let Some(max) = rule.max_value {
+                if data.iter().any(|&x| x > max) {
+                    return Err(format!("Value above maximum threshold: {}", max));
+                }
+            }
+        }
+
+        let processed: Vec<f64> = data.iter()
+            .map(|&x| x * 2.0) // Example transformation
+            .collect();
+
+        self.cache.insert(dataset_name.to_string(), processed.clone());
+        Ok(processed)
+    }
+
+    pub fn get_cached_data(&self, dataset_name: &str) -> Option<&Vec<f64>> {
+        self.cache.get(dataset_name)
+    }
+
+    pub fn calculate_statistics(&self, data: &[f64]) -> (f64, f64, f64) {
+        let mean = data.iter().sum::<f64>() / data.len() as f64;
+        let variance = data.iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>() / data.len() as f64;
+        let std_dev = variance.sqrt();
+        (mean, variance, std_dev)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_data_processing() {
+        let mut processor = DataProcessor::new();
+        let rule = ValidationRule {
+            min_value: Some(0.0),
+            max_value: Some(100.0),
+            required_fields: vec!["temperature".to_string()],
+        };
+        processor.add_validation_rule(rule);
+
+        let data = vec![10.0, 20.0, 30.0];
+        let result = processor.process_dataset("test_data", &data);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), vec![20.0, 40.0, 60.0]);
+    }
+
+    #[test]
+    fn test_validation_failure() {
+        let mut processor = DataProcessor::new();
+        let rule = ValidationRule {
+            min_value: Some(0.0),
+            max_value: Some(50.0),
+            required_fields: vec![],
+        };
+        processor.add_validation_rule(rule);
+
+        let data = vec![10.0, 60.0, 30.0];
+        let result = processor.process_dataset("invalid_data", &data);
+        assert!(result.is_err());
+    }
 }

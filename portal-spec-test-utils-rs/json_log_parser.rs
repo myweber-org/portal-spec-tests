@@ -1,4 +1,3 @@
-
 use serde_json::Value;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -32,155 +31,101 @@ pub struct LogEntry {
 }
 
 pub struct LogParser {
-    pub entries: Vec<LogEntry>,
+    file_path: String,
 }
 
 impl LogParser {
-    pub fn new() -> Self {
+    pub fn new(file_path: &str) -> Self {
         LogParser {
-            entries: Vec::new(),
+            file_path: file_path.to_string(),
         }
     }
 
-    pub fn parse_file<P: AsRef<Path>>(&mut self, path: P) -> Result<usize, ParseError> {
+    pub fn parse(&self) -> Result<Vec<LogEntry>, ParseError> {
+        let path = Path::new(&self.file_path);
         let file = File::open(path)?;
         let reader = BufReader::new(file);
-        
-        let mut count = 0;
-        
-        for line_result in reader.lines() {
-            let line = line_result?;
+        let mut entries = Vec::new();
+
+        for (line_num, line) in reader.lines().enumerate() {
+            let line_content = line?;
             
-            if line.trim().is_empty() {
+            if line_content.trim().is_empty() {
                 continue;
             }
+
+            let parsed: Value = serde_json::from_str(&line_content)?;
             
-            let entry = self.parse_line(&line)?;
-            self.entries.push(entry);
-            count += 1;
+            let entry = LogEntry {
+                timestamp: parsed["timestamp"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string(),
+                level: parsed["level"]
+                    .as_str()
+                    .unwrap_or("INFO")
+                    .to_string(),
+                message: parsed["message"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string(),
+                fields: parsed["fields"].clone(),
+            };
+
+            entries.push(entry);
         }
-        
-        Ok(count)
+
+        Ok(entries)
     }
 
-    fn parse_line(&self, line: &str) -> Result<LogEntry, ParseError> {
-        let json_value: Value = serde_json::from_str(line)?;
+    pub fn filter_by_level(&self, level: &str) -> Result<Vec<LogEntry>, ParseError> {
+        let entries = self.parse()?;
+        let filtered: Vec<LogEntry> = entries
+            .into_iter()
+            .filter(|entry| entry.level.to_uppercase() == level.to_uppercase())
+            .collect();
         
-        let timestamp = json_value["timestamp"]
-            .as_str()
-            .ok_or_else(|| ParseError::InvalidLogFormat("Missing timestamp".to_string()))?
-            .to_string();
-            
-        let level = json_value["level"]
-            .as_str()
-            .ok_or_else(|| ParseError::InvalidLogFormat("Missing level".to_string()))?
-            .to_string();
-            
-        let message = json_value["message"]
-            .as_str()
-            .ok_or_else(|| ParseError::InvalidLogFormat("Missing message".to_string()))?
-            .to_string();
-        
-        let mut fields = json_value.clone();
-        if let Some(obj) = fields.as_object_mut() {
-            obj.remove("timestamp");
-            obj.remove("level");
-            obj.remove("message");
-        }
-        
-        Ok(LogEntry {
-            timestamp,
-            level,
-            message,
-            fields,
-        })
-    }
-
-    pub fn filter_by_level(&self, level: &str) -> Vec<&LogEntry> {
-        self.entries
-            .iter()
-            .filter(|entry| entry.level.to_lowercase() == level.to_lowercase())
-            .collect()
-    }
-
-    pub fn get_stats(&self) -> (usize, usize, usize) {
-        let error_count = self.filter_by_level("error").len();
-        let warn_count = self.filter_by_level("warn").len();
-        let info_count = self.filter_by_level("info").len();
-        
-        (error_count, warn_count, info_count)
+        Ok(filtered)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
     use tempfile::NamedTempFile;
+    use std::io::Write;
 
     #[test]
-    fn test_parse_valid_log() {
-        let mut parser = LogParser::new();
-        
-        let log_data = r#"{"timestamp":"2024-01-15T10:30:00Z","level":"ERROR","message":"Failed to connect","service":"api","attempt":3}"#;
-        
-        let entry = parser.parse_line(log_data).unwrap();
-        
-        assert_eq!(entry.timestamp, "2024-01-15T10:30:00Z");
-        assert_eq!(entry.level, "ERROR");
-        assert_eq!(entry.message, "Failed to connect");
-        assert_eq!(entry.fields["service"], "api");
-        assert_eq!(entry.fields["attempt"], 3);
-    }
-
-    #[test]
-    fn test_parse_file() {
-        let mut parser = LogParser::new();
-        
+    fn test_parse_valid_logs() {
         let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, r#"{{"timestamp":"2024-01-15T10:30:00Z","level":"ERROR","message":"Failed to connect"}}"#).unwrap();
-        writeln!(temp_file, r#"{{"timestamp":"2024-01-15T10:31:00Z","level":"INFO","message":"Connection established"}}"#).unwrap();
+        let log_data = r#"{"timestamp": "2024-01-15T10:30:00Z", "level": "ERROR", "message": "Database connection failed", "fields": {"attempt": 3}}
+{"timestamp": "2024-01-15T10:31:00Z", "level": "INFO", "message": "Service started", "fields": {"port": 8080}}"#;
         
-        let count = parser.parse_file(temp_file.path()).unwrap();
+        write!(temp_file, "{}", log_data).unwrap();
         
-        assert_eq!(count, 2);
-        assert_eq!(parser.entries.len(), 2);
+        let parser = LogParser::new(temp_file.path().to_str().unwrap());
+        let result = parser.parse();
         
-        let stats = parser.get_stats();
-        assert_eq!(stats, (1, 0, 1));
+        assert!(result.is_ok());
+        let entries = result.unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].level, "ERROR");
+        assert_eq!(entries[1].level, "INFO");
     }
 
     #[test]
     fn test_filter_by_level() {
-        let mut parser = LogParser::new();
+        let mut temp_file = NamedTempFile::new().unwrap();
+        let log_data = r#"{"timestamp": "2024-01-15T10:30:00Z", "level": "ERROR", "message": "Error 1", "fields": {}}
+{"timestamp": "2024-01-15T10:31:00Z", "level": "INFO", "message": "Info 1", "fields": {}}
+{"timestamp": "2024-01-15T10:32:00Z", "level": "ERROR", "message": "Error 2", "fields": {}}"#;
         
-        let entries = vec![
-            LogEntry {
-                timestamp: "2024-01-15T10:30:00Z".to_string(),
-                level: "ERROR".to_string(),
-                message: "Failed".to_string(),
-                fields: Value::Object(serde_json::Map::new()),
-            },
-            LogEntry {
-                timestamp: "2024-01-15T10:31:00Z".to_string(),
-                level: "INFO".to_string(),
-                message: "Success".to_string(),
-                fields: Value::Object(serde_json::Map::new()),
-            },
-            LogEntry {
-                timestamp: "2024-01-15T10:32:00Z".to_string(),
-                level: "ERROR".to_string(),
-                message: "Failed again".to_string(),
-                fields: Value::Object(serde_json::Map::new()),
-            },
-        ];
+        write!(temp_file, "{}", log_data).unwrap();
         
-        parser.entries = entries;
+        let parser = LogParser::new(temp_file.path().to_str().unwrap());
+        let errors = parser.filter_by_level("ERROR").unwrap();
         
-        let errors = parser.filter_by_level("error");
         assert_eq!(errors.len(), 2);
-        
-        let infos = parser.filter_by_level("info");
-        assert_eq!(infos.len(), 1);
+        assert!(errors.iter().all(|e| e.level == "ERROR"));
     }
 }

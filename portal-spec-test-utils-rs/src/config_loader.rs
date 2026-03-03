@@ -114,3 +114,122 @@ mod tests {
         env::remove_var("DB_HOST");
     }
 }
+use serde::Deserialize;
+use std::env;
+
+#[derive(Debug, Deserialize)]
+pub struct DatabaseConfig {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: String,
+    pub database_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ServerConfig {
+    pub host: String,
+    pub port: u16,
+    pub max_connections: u32,
+    pub timeout_seconds: u64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AppConfig {
+    pub database: DatabaseConfig,
+    pub server: ServerConfig,
+    pub debug_mode: bool,
+    pub log_level: String,
+}
+
+impl AppConfig {
+    pub fn from_env() -> Result<Self, ConfigError> {
+        let database_config = DatabaseConfig {
+            host: env::var("DB_HOST")
+                .map_err(|_| ConfigError::MissingVariable("DB_HOST".to_string()))?,
+            port: env::var("DB_PORT")
+                .map_err(|_| ConfigError::MissingVariable("DB_PORT".to_string()))?
+                .parse()
+                .map_err(|_| ConfigError::InvalidValue("DB_PORT".to_string()))?,
+            username: env::var("DB_USER")
+                .map_err(|_| ConfigError::MissingVariable("DB_USER".to_string()))?,
+            password: env::var("DB_PASSWORD")
+                .map_err(|_| ConfigError::MissingVariable("DB_PASSWORD".to_string()))?,
+            database_name: env::var("DB_NAME")
+                .map_err(|_| ConfigError::MissingVariable("DB_NAME".to_string()))?,
+        };
+
+        let server_config = ServerConfig {
+            host: env::var("SERVER_HOST")
+                .unwrap_or_else(|_| "127.0.0.1".to_string()),
+            port: env::var("SERVER_PORT")
+                .unwrap_or_else(|_| "8080".to_string())
+                .parse()
+                .map_err(|_| ConfigError::InvalidValue("SERVER_PORT".to_string()))?,
+            max_connections: env::var("MAX_CONNECTIONS")
+                .unwrap_or_else(|_| "100".to_string())
+                .parse()
+                .map_err(|_| ConfigError::InvalidValue("MAX_CONNECTIONS".to_string()))?,
+            timeout_seconds: env::var("TIMEOUT_SECONDS")
+                .unwrap_or_else(|_| "30".to_string())
+                .parse()
+                .map_err(|_| ConfigError::InvalidValue("TIMEOUT_SECONDS".to_string()))?,
+        };
+
+        let debug_mode = env::var("DEBUG_MODE")
+            .unwrap_or_else(|_| "false".to_string())
+            .parse()
+            .map_err(|_| ConfigError::InvalidValue("DEBUG_MODE".to_string()))?;
+
+        let log_level = env::var("LOG_LEVEL")
+            .unwrap_or_else(|_| "info".to_string());
+
+        Ok(AppConfig {
+            database: database_config,
+            server: server_config,
+            debug_mode,
+            log_level,
+        })
+    }
+
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        if self.database.host.is_empty() {
+            return Err(ConfigError::InvalidValue("DB_HOST".to_string()));
+        }
+        if self.database.port == 0 {
+            return Err(ConfigError::InvalidValue("DB_PORT".to_string()));
+        }
+        if self.server.port == 0 {
+            return Err(ConfigError::InvalidValue("SERVER_PORT".to_string()));
+        }
+        if self.server.max_connections == 0 {
+            return Err(ConfigError::InvalidValue("MAX_CONNECTIONS".to_string()));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub enum ConfigError {
+    MissingVariable(String),
+    InvalidValue(String),
+    IoError(std::io::Error),
+}
+
+impl std::fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ConfigError::MissingVariable(var) => write!(f, "Missing environment variable: {}", var),
+            ConfigError::InvalidValue(var) => write!(f, "Invalid value for variable: {}", var),
+            ConfigError::IoError(err) => write!(f, "IO error: {}", err),
+        }
+    }
+}
+
+impl std::error::Error for ConfigError {}
+
+impl From<std::io::Error> for ConfigError {
+    fn from(err: std::io::Error) -> Self {
+        ConfigError::IoError(err)
+    }
+}

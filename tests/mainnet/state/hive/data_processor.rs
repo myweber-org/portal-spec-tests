@@ -283,3 +283,123 @@ mod tests {
         assert_eq!(processor.get_records().len(), 0);
     }
 }
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DataRecord {
+    pub id: u32,
+    pub value: f64,
+    pub category: String,
+}
+
+#[derive(Debug)]
+pub enum ValidationError {
+    InvalidId,
+    InvalidValue,
+    EmptyCategory,
+}
+
+impl fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ValidationError::InvalidId => write!(f, "ID must be greater than 0"),
+            ValidationError::InvalidValue => write!(f, "Value must be between 0.0 and 1000.0"),
+            ValidationError::EmptyCategory => write!(f, "Category cannot be empty"),
+        }
+    }
+}
+
+impl Error for ValidationError {}
+
+pub fn validate_record(record: &DataRecord) -> Result<(), ValidationError> {
+    if record.id == 0 {
+        return Err(ValidationError::InvalidId);
+    }
+    
+    if record.value < 0.0 || record.value > 1000.0 {
+        return Err(ValidationError::InvalidValue);
+    }
+    
+    if record.category.trim().is_empty() {
+        return Err(ValidationError::EmptyCategory);
+    }
+    
+    Ok(())
+}
+
+pub fn transform_record(record: &DataRecord, multiplier: f64) -> DataRecord {
+    DataRecord {
+        id: record.id,
+        value: record.value * multiplier,
+        category: record.category.to_uppercase(),
+    }
+}
+
+pub fn process_records(records: Vec<DataRecord>) -> Vec<Result<DataRecord, ValidationError>> {
+    records
+        .into_iter()
+        .map(|record| {
+            validate_record(&record)?;
+            Ok(transform_record(&record, 1.5))
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_record_valid() {
+        let record = DataRecord {
+            id: 1,
+            value: 100.0,
+            category: "test".to_string(),
+        };
+        assert!(validate_record(&record).is_ok());
+    }
+
+    #[test]
+    fn test_validate_record_invalid_id() {
+        let record = DataRecord {
+            id: 0,
+            value: 100.0,
+            category: "test".to_string(),
+        };
+        assert!(matches!(validate_record(&record), Err(ValidationError::InvalidId)));
+    }
+
+    #[test]
+    fn test_transform_record() {
+        let record = DataRecord {
+            id: 1,
+            value: 100.0,
+            category: "test".to_string(),
+        };
+        let transformed = transform_record(&record, 2.0);
+        assert_eq!(transformed.value, 200.0);
+        assert_eq!(transformed.category, "TEST");
+    }
+
+    #[test]
+    fn test_process_records() {
+        let records = vec![
+            DataRecord {
+                id: 1,
+                value: 100.0,
+                category: "a".to_string(),
+            },
+            DataRecord {
+                id: 0,
+                value: 200.0,
+                category: "b".to_string(),
+            },
+        ];
+        
+        let results = process_records(records);
+        assert_eq!(results.len(), 2);
+        assert!(results[0].is_ok());
+        assert!(results[1].is_err());
+    }
+}

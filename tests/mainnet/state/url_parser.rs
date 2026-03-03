@@ -401,3 +401,103 @@ mod tests {
         assert!(!UrlParser::is_valid_url("just-a-string"));
     }
 }
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug)]
+pub enum ParseError {
+    MalformedQuery,
+    InvalidEncoding,
+}
+
+impl fmt::Display for ParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ParseError::MalformedQuery => write!(f, "malformed query string"),
+            ParseError::InvalidEncoding => write!(f, "invalid percent encoding"),
+        }
+    }
+}
+
+impl Error for ParseError {}
+
+pub fn parse_query(query: &str) -> Result<HashMap<String, String>, ParseError> {
+    if query.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let mut params = HashMap::new();
+    
+    for pair in query.split('&') {
+        let mut parts = pair.splitn(2, '=');
+        
+        let key = parts.next().ok_or(ParseError::MalformedQuery)?;
+        let value = parts.next().unwrap_or("");
+        
+        let decoded_key = percent_decode(key).map_err(|_| ParseError::InvalidEncoding)?;
+        let decoded_value = percent_decode(value).map_err(|_| ParseError::InvalidEncoding)?;
+        
+        params.insert(decoded_key, decoded_value);
+    }
+    
+    Ok(params)
+}
+
+fn percent_decode(input: &str) -> Result<String, ()> {
+    let mut decoded = String::new();
+    let mut chars = input.chars().collect::<Vec<_>>();
+    let mut i = 0;
+    
+    while i < chars.len() {
+        if chars[i] == '%' && i + 2 < chars.len() {
+            let hex_str: String = chars[i + 1..i + 3].iter().collect();
+            if let Ok(byte) = u8::from_str_radix(&hex_str, 16) {
+                decoded.push(byte as char);
+                i += 3;
+                continue;
+            }
+        }
+        decoded.push(chars[i]);
+        i += 1;
+    }
+    
+    Ok(decoded)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_empty_query() {
+        let result = parse_query("").unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_single_param() {
+        let result = parse_query("name=john").unwrap();
+        assert_eq!(result.get("name"), Some(&"john".to_string()));
+    }
+
+    #[test]
+    fn test_multiple_params() {
+        let result = parse_query("name=john&age=25&city=new+york").unwrap();
+        assert_eq!(result.get("name"), Some(&"john".to_string()));
+        assert_eq!(result.get("age"), Some(&"25".to_string()));
+        assert_eq!(result.get("city"), Some(&"new york".to_string()));
+    }
+
+    #[test]
+    fn test_percent_encoding() {
+        let result = parse_query("message=hello%20world%21").unwrap();
+        assert_eq!(result.get("message"), Some(&"hello world!".to_string()));
+    }
+
+    #[test]
+    fn test_malformed_query() {
+        let result = parse_query("key=&=value");
+        assert!(matches!(result, Err(ParseError::MalformedQuery)));
+    }
+}

@@ -146,3 +146,100 @@ mod tests {
         );
     }
 }
+use regex::Regex;
+use std::collections::HashSet;
+
+pub struct UrlParser {
+    allowed_schemes: HashSet<String>,
+}
+
+impl UrlParser {
+    pub fn new(schemes: Vec<&str>) -> Self {
+        let allowed_schemes = schemes
+            .into_iter()
+            .map(|s| s.to_lowercase())
+            .collect();
+        UrlParser { allowed_schemes }
+    }
+
+    pub fn parse(&self, input: &str) -> Result<ParsedUrl, ParseError> {
+        let pattern = r"^(?P<scheme>[a-zA-Z][a-zA-Z0-9+\-.]*):(?P<rest>.*)$";
+        let re = Regex::new(pattern).map_err(|_| ParseError::InvalidRegex)?;
+        
+        let caps = re.captures(input).ok_or(ParseError::NoSchemeFound)?;
+        let scheme = caps.name("scheme").unwrap().as_str().to_lowercase();
+        
+        if !self.allowed_schemes.contains(&scheme) {
+            return Err(ParseError::SchemeNotAllowed(scheme));
+        }
+        
+        let rest = caps.name("rest").unwrap().as_str();
+        if rest.is_empty() {
+            return Err(ParseError::EmptyPath);
+        }
+        
+        Ok(ParsedUrl {
+            scheme,
+            path: rest.to_string(),
+            original: input.to_string(),
+        })
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub struct ParsedUrl {
+    pub scheme: String,
+    pub path: String,
+    pub original: String,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum ParseError {
+    InvalidRegex,
+    NoSchemeFound,
+    SchemeNotAllowed(String),
+    EmptyPath,
+}
+
+impl std::fmt::Display for ParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ParseError::InvalidRegex => write!(f, "Internal regex compilation failed"),
+            ParseError::NoSchemeFound => write!(f, "No URL scheme found in input"),
+            ParseError::SchemeNotAllowed(scheme) => write!(f, "Scheme '{}' is not allowed", scheme),
+            ParseError::EmptyPath => write!(f, "URL path cannot be empty after scheme"),
+        }
+    }
+}
+
+impl std::error::Error for ParseError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_custom_scheme() {
+        let parser = UrlParser::new(vec!["app", "custom", "internal"]);
+        let result = parser.parse("app://settings/profile");
+        assert!(result.is_ok());
+        let parsed = result.unwrap();
+        assert_eq!(parsed.scheme, "app");
+        assert_eq!(parsed.path, "//settings/profile");
+    }
+
+    #[test]
+    fn test_scheme_not_allowed() {
+        let parser = UrlParser::new(vec!["https", "http"]);
+        let result = parser.parse("ftp://example.com");
+        assert_eq!(result, Err(ParseError::SchemeNotAllowed("ftp".to_string())));
+    }
+
+    #[test]
+    fn test_case_insensitive_scheme() {
+        let parser = UrlParser::new(vec!["MYAPP"]);
+        let result = parser.parse("MyApp://data");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().scheme, "myapp");
+    }
+}

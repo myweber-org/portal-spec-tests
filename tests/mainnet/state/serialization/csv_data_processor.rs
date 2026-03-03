@@ -244,4 +244,81 @@ mod tests {
         let avg_salary = processor.aggregate_numeric_column("salary").unwrap();
         assert!((avg_salary - 51666.666).abs() < 0.001);
     }
+}use csv::{Reader, Writer};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+use std::path::Path;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    id: u32,
+    name: String,
+    category: String,
+    value: f64,
+    active: bool,
+}
+
+fn load_csv<P: AsRef<Path>>(path: P) -> Result<Vec<Record>, Box<dyn Error>> {
+    let file = File::open(path)?;
+    let mut reader = Reader::from_reader(file);
+    let mut records = Vec::new();
+    
+    for result in reader.deserialize() {
+        let record: Record = result?;
+        records.push(record);
+    }
+    
+    Ok(records)
+}
+
+fn filter_records(records: &[Record], category_filter: &str) -> Vec<Record> {
+    records
+        .iter()
+        .filter(|r| r.category == category_filter && r.active)
+        .cloned()
+        .collect()
+}
+
+fn aggregate_values(records: &[Record]) -> f64 {
+    records.iter().map(|r| r.value).sum()
+}
+
+fn save_results<P: AsRef<Path>>(records: &[Record], path: P) -> Result<(), Box<dyn Error>> {
+    let file = File::create(path)?;
+    let mut writer = Writer::from_writer(file);
+    
+    for record in records {
+        writer.serialize(record)?;
+    }
+    
+    writer.flush()?;
+    Ok(())
+}
+
+fn process_data(input_path: &str, output_path: &str, category: &str) -> Result<(), Box<dyn Error>> {
+    let all_records = load_csv(input_path)?;
+    let filtered = filter_records(&all_records, category);
+    
+    if filtered.is_empty() {
+        println!("No records found for category: {}", category);
+        return Ok(());
+    }
+    
+    let total_value = aggregate_values(&filtered);
+    println!("Processed {} records", filtered.len());
+    println!("Total value for category '{}': {:.2}", category, total_value);
+    
+    save_results(&filtered, output_path)?;
+    println!("Results saved to: {}", output_path);
+    
+    Ok(())
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let input_file = "data/input.csv";
+    let output_file = "data/output.csv";
+    let target_category = "electronics";
+    
+    process_data(input_file, output_file, target_category)
 }

@@ -354,3 +354,56 @@ mod tests {
         assert_eq!(std_dev, 8.16496580927726);
     }
 }
+use csv::{Reader, Writer};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    id: u32,
+    name: String,
+    age: u8,
+    active: bool,
+}
+
+fn filter_records(input_path: &str, output_path: &str, min_age: u8) -> Result<(), Box<dyn Error>> {
+    let mut reader = Reader::from_path(input_path)?;
+    let mut writer = Writer::from_writer(File::create(output_path)?);
+
+    for result in reader.deserialize() {
+        let record: Record = result?;
+        if record.age >= min_age && record.active {
+            writer.serialize(&record)?;
+        }
+    }
+
+    writer.flush()?;
+    Ok(())
+}
+
+fn transform_data(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
+    let mut reader = Reader::from_path(input_path)?;
+    let mut writer = Writer::from_writer(File::create(output_path)?);
+
+    for result in reader.deserialize() {
+        let mut record: Record = result?;
+        record.name = record.name.to_uppercase();
+        writer.serialize(&record)?;
+    }
+
+    writer.flush()?;
+    Ok(())
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let input_file = "data/input.csv";
+    let filtered_file = "data/filtered.csv";
+    let transformed_file = "data/transformed.csv";
+
+    filter_records(input_file, filtered_file, 25)?;
+    transform_data(input_file, transformed_file)?;
+
+    println!("Processing completed successfully");
+    Ok(())
+}

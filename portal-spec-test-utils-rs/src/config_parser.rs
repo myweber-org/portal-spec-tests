@@ -409,3 +409,136 @@ mod tests {
         assert_eq!(config.get("MISSING"), Some(&"${UNDEFINED_VAR}".to_string()));
     }
 }
+use std::collections::HashMap;
+use std::env;
+use std::fs;
+
+#[derive(Debug, Clone)]
+pub struct Config {
+    pub database_url: String,
+    pub port: u16,
+    pub debug_mode: bool,
+    pub api_keys: Vec<String>,
+}
+
+impl Config {
+    pub fn from_file(path: &str) -> Result<Self, String> {
+        let content = fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read config file: {}", e))?;
+
+        let mut config_map = HashMap::new();
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+
+            let parts: Vec<&str> = line.splitn(2, '=').collect();
+            if parts.len() == 2 {
+                config_map.insert(parts[0].trim().to_string(), parts[1].trim().to_string());
+            }
+        }
+
+        Self::from_map(&config_map)
+    }
+
+    fn from_map(map: &HashMap<String, String>) -> Result<Self, String> {
+        let database_url = Self::get_value(map, "DATABASE_URL")
+            .or_else(|| env::var("DATABASE_URL").ok())
+            .unwrap_or_else(|| "postgres://localhost:5432/app".to_string());
+
+        let port = Self::get_value(map, "PORT")
+            .or_else(|| env::var("PORT").ok())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(8080);
+
+        let debug_mode = Self::get_value(map, "DEBUG")
+            .or_else(|| env::var("DEBUG").ok())
+            .map(|s| s.to_lowercase() == "true")
+            .unwrap_or(false);
+
+        let api_keys = Self::get_value(map, "API_KEYS")
+            .or_else(|| env::var("API_KEYS").ok())
+            .map(|s| s.split(',').map(|key| key.trim().to_string()).collect())
+            .unwrap_or_else(Vec::new);
+
+        Ok(Config {
+            database_url,
+            port,
+            debug_mode,
+            api_keys,
+        })
+    }
+
+    fn get_value(map: &HashMap<String, String>, key: &str) -> Option<String> {
+        map.get(key).map(|s| s.to_string())
+    }
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.database_url.is_empty() {
+            errors.push("DATABASE_URL cannot be empty".to_string());
+        }
+
+        if self.port == 0 {
+            errors.push("PORT must be greater than 0".to_string());
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_config_parsing() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "DATABASE_URL=postgres://prod:5432/db").unwrap();
+        writeln!(temp_file, "PORT=9090").unwrap();
+        writeln!(temp_file, "DEBUG=true").unwrap();
+        writeln!(temp_file, "API_KEYS=key1,key2,key3").unwrap();
+
+        let config = Config::from_file(temp_file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.database_url, "postgres://prod:5432/db");
+        assert_eq!(config.port, 9090);
+        assert_eq!(config.debug_mode, true);
+        assert_eq!(config.api_keys, vec!["key1", "key2", "key3"]);
+    }
+
+    #[test]
+    fn test_config_with_env_fallback() {
+        env::set_var("DATABASE_URL", "postgres://env:5432/db");
+        
+        let config = Config::from_map(&HashMap::new()).unwrap();
+        assert_eq!(config.database_url, "postgres://env:5432/db");
+        assert_eq!(config.port, 8080);
+        assert_eq!(config.debug_mode, false);
+        
+        env::remove_var("DATABASE_URL");
+    }
+
+    #[test]
+    fn test_config_validation() {
+        let config = Config {
+            database_url: "".to_string(),
+            port: 0,
+            debug_mode: false,
+            api_keys: vec![],
+        };
+
+        let result = config.validate();
+        assert!(result.is_err());
+        let errors = result.unwrap_err();
+        assert!(errors.contains(&"DATABASE_URL cannot be empty".to_string()));
+        assert!(errors.contains(&"PORT must be greater than 0".to_string()));
+    }
+}

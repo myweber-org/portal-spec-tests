@@ -174,4 +174,136 @@ mod tests {
         let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
         assert_eq!(config.get("PATH"), Some(&"/home/user/data".to_string()));
     }
+}use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::Path;
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AppConfig {
+    pub server: ServerConfig,
+    pub database: DatabaseConfig,
+    pub logging: LoggingConfig,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ServerConfig {
+    pub host: String,
+    pub port: u16,
+    pub timeout_seconds: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DatabaseConfig {
+    pub url: String,
+    pub max_connections: u32,
+    pub min_connections: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LoggingConfig {
+    pub level: String,
+    pub file_path: Option<String>,
+    pub max_file_size_mb: u64,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        AppConfig {
+            server: ServerConfig {
+                host: "127.0.0.1".to_string(),
+                port: 8080,
+                timeout_seconds: 30,
+            },
+            database: DatabaseConfig {
+                url: "postgresql://localhost:5432/mydb".to_string(),
+                max_connections: 20,
+                min_connections: 5,
+            },
+            logging: LoggingConfig {
+                level: "info".to_string(),
+                file_path: None,
+                max_file_size_mb: 100,
+            },
+        }
+    }
+}
+
+impl AppConfig {
+    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
+        let content = fs::read_to_string(path)?;
+        let config: AppConfig = toml::from_str(&content)?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    pub fn validate(&self) -> Result<(), Box<dyn std::error::Error>> {
+        if self.server.port == 0 {
+            return Err("Server port cannot be zero".into());
+        }
+        
+        if self.database.max_connections < self.database.min_connections {
+            return Err("Max connections must be greater than or equal to min connections".into());
+        }
+
+        if self.database.max_connections == 0 {
+            return Err("Max connections cannot be zero".into());
+        }
+
+        if let Some(ref path) = self.logging.file_path {
+            if path.is_empty() {
+                return Err("Log file path cannot be empty if specified".into());
+            }
+        }
+
+        let valid_levels = ["error", "warn", "info", "debug", "trace"];
+        if !valid_levels.contains(&self.logging.level.as_str()) {
+            return Err(format!("Invalid log level: {}", self.logging.level).into());
+        }
+
+        Ok(())
+    }
+
+    pub fn to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn std::error::Error>> {
+        let content = toml::to_string_pretty(self)?;
+        fs::write(path, content)?;
+        Ok(())
+    }
+
+    pub fn merge_with_defaults(mut self) -> Self {
+        let default = AppConfig::default();
+        
+        if self.server.host.is_empty() {
+            self.server.host = default.server.host;
+        }
+        
+        if self.server.port == 0 {
+            self.server.port = default.server.port;
+        }
+        
+        if self.server.timeout_seconds == 0 {
+            self.server.timeout_seconds = default.server.timeout_seconds;
+        }
+        
+        if self.database.url.is_empty() {
+            self.database.url = default.database.url;
+        }
+        
+        if self.database.max_connections == 0 {
+            self.database.max_connections = default.database.max_connections;
+        }
+        
+        if self.database.min_connections == 0 {
+            self.database.min_connections = default.database.min_connections;
+        }
+        
+        if self.logging.level.is_empty() {
+            self.logging.level = default.logging.level;
+        }
+        
+        if self.logging.max_file_size_mb == 0 {
+            self.logging.max_file_size_mb = default.logging.max_file_size_mb;
+        }
+
+        self
+    }
 }

@@ -1,138 +1,40 @@
+
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpListener;
-use tokio_tungstenite::accept_async;
-use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::protocol::Message;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() {
     let addr = "127.0.0.1:8080";
-    let listener = TcpListener::bind(addr).await?;
-    println!("WebSocket echo server listening on {}", addr);
+    let listener = TcpListener::bind(addr).await.unwrap();
+    println!("WebSocket server listening on {}", addr);
 
     while let Ok((stream, _)) = listener.accept().await {
         tokio::spawn(handle_connection(stream));
     }
-    Ok(())
 }
 
-async fn handle_connection(stream: tokio::net::TcpStream) {
-    let ws_stream = match accept_async(stream).await {
-        Ok(ws) => ws,
-        Err(e) => {
-            eprintln!("Error during WebSocket handshake: {}", e);
-            return;
-        }
-    };
+async fn handle_connection(raw_stream: tokio::net::TcpStream) {
+    let ws_stream = tokio_tungstenite::accept_async(raw_stream)
+        .await
+        .unwrap();
+    let (mut ws_sender, mut ws_receiver) = ws_stream.split();
 
-    let (mut write, mut read) = ws_stream.split();
-
-    while let Some(msg) = read.next().await {
+    while let Some(msg) = ws_receiver.next().await {
         match msg {
             Ok(Message::Text(text)) => {
-                println!("Received text message: {}", text);
-                if let Err(e) = write.send(Message::Text(text)).await {
-                    eprintln!("Error sending message: {}", e);
+                let echo_msg = Message::Text(format!("Echo: {}", text));
+                if ws_sender.send(echo_msg).await.is_err() {
                     break;
                 }
             }
             Ok(Message::Close(_)) => {
-                println!("Client requested close");
                 break;
             }
-            Err(e) => {
-                eprintln!("Error reading message: {}", e);
+            Err(_) => {
                 break;
             }
             _ => {}
         }
     }
-}use tokio::net::TcpListener;
-use tokio_tungstenite::accept_async;
-use futures_util::{SinkExt, StreamExt};
-use std::error::Error;
-
-pub async fn run_websocket_server(addr: &str) -> Result<(), Box<dyn Error>> {
-    let listener = TcpListener::bind(addr).await?;
-    println!("WebSocket server listening on: {}", addr);
-
-    while let Ok((stream, _)) = listener.accept().await {
-        let peer = stream.peer_addr()?;
-        println!("New connection from: {}", peer);
-        
-        tokio::spawn(async move {
-            match accept_async(stream).await {
-                Ok(ws_stream) => {
-                    let (mut write, mut read) = ws_stream.split();
-                    
-                    while let Some(msg) = read.next().await {
-                        match msg {
-                            Ok(message) => {
-                                if message.is_text() || message.is_binary() {
-                                    if let Err(e) = write.send(message).await {
-                                        eprintln!("Failed to send message to {}: {}", peer, e);
-                                        break;
-                                    }
-                                }
-                                if message.is_close() {
-                                    break;
-                                }
-                            }
-                            Err(e) => {
-                                eprintln!("Error receiving message from {}: {}", peer, e);
-                                break;
-                            }
-                        }
-                    }
-                    println!("Connection closed: {}", peer);
-                }
-                Err(e) => eprintln!("WebSocket handshake failed for {}: {}", peer, e),
-            }
-        });
-    }
-    Ok(())
-}use futures_util::{SinkExt, StreamExt};
-use tokio::net::TcpListener;
-use tokio_tungstenite::tungstenite::protocol::Message;
-use tokio_tungstenite::accept_async;
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let addr = "127.0.0.1:8080";
-    let listener = TcpListener::bind(addr).await?;
-    println!("WebSocket echo server listening on {}", addr);
-
-    while let Ok((stream, _)) = listener.accept().await {
-        tokio::spawn(async move {
-            if let Err(e) = handle_connection(stream).await {
-                eprintln!("Error handling connection: {}", e);
-            }
-        });
-    }
-    Ok(())
-}
-
-async fn handle_connection(stream: tokio::net::TcpStream) -> Result<(), Box<dyn std::error::Error>> {
-    let ws_stream = accept_async(stream).await?;
-    let (mut write, mut read) = ws_stream.split();
-
-    while let Some(msg) = read.next().await {
-        match msg {
-            Ok(Message::Text(text)) => {
-                println!("Received text message: {}", text);
-                write.send(Message::Text(text)).await?;
-            }
-            Ok(Message::Close(_)) => {
-                println!("Client disconnected");
-                break;
-            }
-            Ok(other) => {
-                println!("Received other message type: {:?}", other);
-            }
-            Err(e) => {
-                eprintln!("Error reading message: {}", e);
-                break;
-            }
-        }
-    }
-    Ok(())
 }

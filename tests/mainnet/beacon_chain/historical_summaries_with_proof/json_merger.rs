@@ -88,4 +88,94 @@ pub fn merge_json_files<P: AsRef<Path>>(input_paths: &[P], output_path: P) -> Re
     fs::write(output_path, output_string)?;
 
     Ok(())
+}use std::collections::HashMap;
+use std::fs::{self, File};
+use std::io::{BufReader, Read};
+use std::path::Path;
+
+use serde_json::{Map, Value};
+
+pub fn merge_json_files(file_paths: &[&str]) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut merged_map = Map::new();
+
+    for file_path in file_paths {
+        let path = Path::new(file_path);
+        if !path.exists() {
+            eprintln!("Warning: File {} does not exist, skipping.", file_path);
+            continue;
+        }
+
+        let file = File::open(path)?;
+        let mut reader = BufReader::new(file);
+        let mut contents = String::new();
+        reader.read_to_string(&mut contents)?;
+
+        let json_value: Value = serde_json::from_str(&contents)?;
+
+        if let Value::Object(map) = json_value {
+            for (key, value) in map {
+                if merged_map.contains_key(&key) {
+                    eprintln!("Warning: Key '{}' already exists, overwriting.", key);
+                }
+                merged_map.insert(key, value);
+            }
+        } else {
+            eprintln!("Warning: File {} does not contain a JSON object, skipping.", file_path);
+        }
+    }
+
+    Ok(Value::Object(merged_map))
+}
+
+pub fn merge_json_files_with_prefix(
+    file_paths: &[&str],
+    prefix_keys: bool,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut merged_map = Map::new();
+
+    for file_path in file_paths {
+        let path = Path::new(file_path);
+        if !path.exists() {
+            eprintln!("Warning: File {} does not exist, skipping.", file_path);
+            continue;
+        }
+
+        let file_name = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown")
+            .to_string();
+
+        let file = File::open(path)?;
+        let mut reader = BufReader::new(file);
+        let mut contents = String::new();
+        reader.read_to_string(&mut contents)?;
+
+        let json_value: Value = serde_json::from_str(&contents)?;
+
+        if let Value::Object(map) = json_value {
+            for (key, value) in map {
+                let final_key = if prefix_keys {
+                    format!("{}_{}", file_name, key)
+                } else {
+                    key
+                };
+
+                if merged_map.contains_key(&final_key) {
+                    eprintln!("Warning: Key '{}' already exists, overwriting.", final_key);
+                }
+                merged_map.insert(final_key, value);
+            }
+        } else {
+            eprintln!("Warning: File {} does not contain a JSON object, skipping.", file_path);
+        }
+    }
+
+    Ok(Value::Object(merged_map))
+}
+
+pub fn write_merged_json(output_path: &str, value: &Value) -> Result<(), Box<dyn std::error::Error>> {
+    let json_string = serde_json::to_string_pretty(value)?;
+    fs::write(output_path, json_string)?;
+    Ok(())
 }

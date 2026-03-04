@@ -1,68 +1,180 @@
-use csv::Reader;
-use serde::Deserialize;
-use std::error::Error;
-use std::fs::File;
 
-#[derive(Debug, Deserialize)]
-struct Record {
-    id: u32,
-    name: String,
-    value: f64,
-    category: String,
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum DataError {
+    #[error("Invalid data format")]
+    InvalidFormat,
+    #[error("Missing required field: {0}")]
+    MissingField(String),
+    #[error("Validation failed: {0}")]
+    ValidationFailed(String),
 }
 
-pub fn process_data_file(input_path: &str, output_path: &str, min_value: f64) -> Result<(), Box<dyn Error>> {
-    let file = File::open(input_path)?;
-    let mut rdr = Reader::from_reader(file);
-    let mut wtr = csv::Writer::from_path(output_path)?;
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataRecord {
+    pub id: u64,
+    pub timestamp: i64,
+    pub values: HashMap<String, f64>,
+    pub tags: Vec<String>,
+}
 
-    for result in rdr.deserialize() {
-        let record: Record = result?;
-        
-        if record.value >= min_value && !record.name.is_empty() {
-            wtr.serialize(&record)?;
+impl DataRecord {
+    pub fn new(id: u64, timestamp: i64) -> Self {
+        Self {
+            id,
+            timestamp,
+            values: HashMap::new(),
+            tags: Vec::new(),
         }
     }
 
-    wtr.flush()?;
-    Ok(())
-}
-
-pub fn calculate_statistics(records: &[Record]) -> (f64, f64, f64) {
-    if records.is_empty() {
-        return (0.0, 0.0, 0.0);
+    pub fn add_value(&mut self, key: String, value: f64) {
+        self.values.insert(key, value);
     }
 
-    let sum: f64 = records.iter().map(|r| r.value).sum();
-    let count = records.len() as f64;
-    let mean = sum / count;
+    pub fn add_tag(&mut self, tag: String) {
+        if !self.tags.contains(&tag) {
+            self.tags.push(tag);
+        }
+    }
 
-    let variance: f64 = records.iter()
-        .map(|r| (r.value - mean).powi(2))
-        .sum::<f64>() / count;
+    pub fn validate(&self) -> Result<(), DataError> {
+        if self.values.is_empty() {
+            return Err(DataError::ValidationFailed(
+                "Record must contain at least one value".to_string(),
+            ));
+        }
 
-    let std_dev = variance.sqrt();
+        if self.timestamp < 0 {
+            return Err(DataError::ValidationFailed(
+                "Timestamp cannot be negative".to_string(),
+            ));
+        }
 
-    (mean, variance, std_dev)
+        for (key, value) in &self.values {
+            if key.trim().is_empty() {
+                return Err(DataError::ValidationFailed(
+                    "Value key cannot be empty".to_string(),
+                ));
+            }
+            if !value.is_finite() {
+                return Err(DataError::ValidationFailed(format!(
+                    "Value for key '{}' must be finite",
+                    key
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn normalize_values(&mut self) {
+        let sum: f64 = self.values.values().sum();
+        if sum != 0.0 {
+            for value in self.values.values_mut() {
+                *value /= sum;
+            }
+        }
+    }
+}
+
+pub struct DataProcessor {
+    records: Vec<DataRecord>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        Self {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn add_record(&mut self, record: DataRecord) -> Result<(), DataError> {
+        record.validate()?;
+        self.records.push(record);
+        Ok(())
+    }
+
+    pub fn process_records(&mut self) -> HashMap<String, f64> {
+        let mut aggregated = HashMap::new();
+
+        for record in &self.records {
+            for (key, value) in &record.values {
+                *aggregated.entry(key.clone()).or_insert(0.0) += value;
+            }
+        }
+
+        aggregated
+    }
+
+    pub fn filter_by_tag(&self, tag: &str) -> Vec<&DataRecord> {
+        self.records
+            .iter()
+            .filter(|record| record.tags.contains(&tag.to_string()))
+            .collect()
+    }
+
+    pub fn clear(&mut self) {
+        self.records.clear();
+    }
+
+    pub fn record_count(&self) -> usize {
+        self.records.len()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_statistics_calculation() {
-        let records = vec![
-            Record { id: 1, name: "Test1".to_string(), value: 10.0, category: "A".to_string() },
-            Record { id: 2, name: "Test2".to_string(), value: 20.0, category: "B".to_string() },
-            Record { id: 3, name: "Test3".to_string(), value: 30.0, category: "A".to_string() },
-        ];
+    fn test_record_validation() {
+        let mut record = DataRecord::new(1, 1234567890);
+        record.add_value("temperature".to_string(), 25.5);
+        assert!(record.validate().is_ok());
+    }
 
-        let (mean, variance, std_dev) = calculate_statistics(&records);
+    #[test]
+    fn test_record_validation_failure() {
+        let record = DataRecord::new(2, -100);
+        assert!(record.validate().is_err());
+    }
+
+    #[test]
+    fn test_normalize_values() {
+        let mut record = DataRecord::new(3, 1234567890);
+        record.add_value("a".to_string(), 10.0);
+        record.add_value("b".to_string(), 20.0);
+        record.add_value("c".to_string(), 30.0);
         
-        assert_eq!(mean, 20.0);
-        assert_eq!(variance, 66.66666666666667);
-        assert_eq!(std_dev, 8.16496580927726);
+        record.normalize_values();
+        
+        let sum: f64 = record.values.values().sum();
+        assert!((sum - 1.0).abs() < 0.0001);
+    }
+
+    #[test]
+    fn test_data_processor() {
+        let mut processor = DataProcessor::new();
+        
+        let mut record1 = DataRecord::new(1, 1234567890);
+        record1.add_value("metric1".to_string(), 10.0);
+        record1.add_tag("important".to_string());
+        
+        let mut record2 = DataRecord::new(2, 1234567891);
+        record2.add_value("metric1".to_string(), 20.0);
+        record2.add_tag("important".to_string());
+        
+        assert!(processor.add_record(record1).is_ok());
+        assert!(processor.add_record(record2).is_ok());
+        
+        let aggregated = processor.process_records();
+        assert_eq!(aggregated.get("metric1"), Some(&30.0));
+        
+        let filtered = processor.filter_by_tag("important");
+        assert_eq!(filtered.len(), 2);
     }
 }

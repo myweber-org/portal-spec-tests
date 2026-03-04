@@ -53,4 +53,75 @@ mod tests {
         let output = fs::read_to_string(output_file.path()).unwrap();
         assert_eq!(output, "name,age,city\nJohn,25,NYC\nAlice,30,Boston\n");
     }
+}use std::collections::HashSet;
+
+pub struct DataCleaner {
+    dedupe_cache: HashSet<String>,
+}
+
+impl DataCleaner {
+    pub fn new() -> Self {
+        DataCleaner {
+            dedupe_cache: HashSet::new(),
+        }
+    }
+
+    pub fn normalize_string(&self, input: &str) -> String {
+        input.trim().to_lowercase()
+    }
+
+    pub fn deduplicate(&mut self, item: &str) -> bool {
+        let normalized = self.normalize_string(item);
+        if self.dedupe_cache.contains(&normalized) {
+            false
+        } else {
+            self.dedupe_cache.insert(normalized);
+            true
+        }
+    }
+
+    pub fn process_batch(&mut self, items: Vec<&str>) -> Vec<String> {
+        items
+            .iter()
+            .filter(|&&item| self.deduplicate(item))
+            .map(|&item| self.normalize_string(item))
+            .collect()
+    }
+
+    pub fn clear_cache(&mut self) {
+        self.dedupe_cache.clear();
+    }
+
+    pub fn cache_size(&self) -> usize {
+        self.dedupe_cache.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_normalization() {
+        let cleaner = DataCleaner::new();
+        assert_eq!(cleaner.normalize_string("  HELLO World  "), "hello world");
+    }
+
+    #[test]
+    fn test_deduplication() {
+        let mut cleaner = DataCleaner::new();
+        assert!(cleaner.deduplicate("test"));
+        assert!(!cleaner.deduplicate("TEST"));
+        assert!(!cleaner.deduplicate("  test  "));
+        assert!(cleaner.deduplicate("another"));
+    }
+
+    #[test]
+    fn test_batch_processing() {
+        let mut cleaner = DataCleaner::new();
+        let input = vec!["apple", "APPLE", "banana", "  Banana  ", "cherry"];
+        let result = cleaner.process_batch(input);
+        assert_eq!(result, vec!["apple", "banana", "cherry"]);
+        assert_eq!(cleaner.cache_size(), 3);
+    }
 }

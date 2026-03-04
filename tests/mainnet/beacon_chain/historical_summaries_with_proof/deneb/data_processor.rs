@@ -1,111 +1,151 @@
 
-use csv::Reader;
-use serde::Deserialize;
+use std::collections::HashMap;
 use std::error::Error;
-use std::fs::File;
+use std::fmt;
 
-#[derive(Debug, Deserialize)]
-struct Record {
+#[derive(Debug, Clone)]
+pub struct DataRecord {
     id: u32,
     name: String,
     value: f64,
-    category: String,
+    tags: Vec<String>,
 }
 
-pub struct DataProcessor {
-    records: Vec<Record>,
+#[derive(Debug)]
+pub enum ValidationError {
+    InvalidId,
+    EmptyName,
+    NegativeValue,
+    DuplicateTag,
 }
 
-impl DataProcessor {
-    pub fn new() -> Self {
-        DataProcessor {
-            records: Vec::new(),
+impl fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ValidationError::InvalidId => write!(f, "ID must be greater than zero"),
+            ValidationError::EmptyName => write!(f, "Name cannot be empty"),
+            ValidationError::NegativeValue => write!(f, "Value cannot be negative"),
+            ValidationError::DuplicateTag => write!(f, "Tags contain duplicates"),
         }
     }
+}
 
-    pub fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
-        let file = File::open(file_path)?;
-        let mut rdr = Reader::from_reader(file);
+impl Error for ValidationError {}
 
-        for result in rdr.deserialize() {
-            let record: Record = result?;
-            self.records.push(record);
+impl DataRecord {
+    pub fn new(id: u32, name: String, value: f64, tags: Vec<String>) -> Result<Self, ValidationError> {
+        if id == 0 {
+            return Err(ValidationError::InvalidId);
         }
-
-        Ok(())
-    }
-
-    pub fn validate_records(&self) -> Vec<&Record> {
-        self.records
-            .iter()
-            .filter(|r| r.value >= 0.0 && !r.name.is_empty())
-            .collect()
-    }
-
-    pub fn calculate_average(&self) -> Option<f64> {
-        if self.records.is_empty() {
-            return None;
+        if name.trim().is_empty() {
+            return Err(ValidationError::EmptyName);
         }
-
-        let sum: f64 = self.records.iter().map(|r| r.value).sum();
-        Some(sum / self.records.len() as f64)
-    }
-
-    pub fn group_by_category(&self) -> std::collections::HashMap<String, Vec<&Record>> {
-        let mut groups = std::collections::HashMap::new();
-
-        for record in &self.records {
-            groups
-                .entry(record.category.clone())
-                .or_insert_with(Vec::new)
-                .push(record);
+        if value < 0.0 {
+            return Err(ValidationError::NegativeValue);
         }
-
-        groups
-    }
-
-    pub fn find_max_value(&self) -> Option<&Record> {
-        self.records.iter().max_by(|a, b| {
-            a.value
-                .partial_cmp(&b.value)
-                .unwrap_or(std::cmp::Ordering::Equal)
+        
+        let mut seen_tags = HashMap::new();
+        for tag in &tags {
+            if seen_tags.contains_key(tag) {
+                return Err(ValidationError::DuplicateTag);
+            }
+            seen_tags.insert(tag.clone(), true);
+        }
+        
+        Ok(DataRecord {
+            id,
+            name,
+            value,
+            tags,
         })
     }
+    
+    pub fn transform(&self, multiplier: f64) -> Self {
+        DataRecord {
+            id: self.id,
+            name: self.name.clone(),
+            value: self.value * multiplier,
+            tags: self.tags.clone(),
+        }
+    }
+    
+    pub fn add_tag(&mut self, tag: String) -> Result<(), ValidationError> {
+        if self.tags.contains(&tag) {
+            return Err(ValidationError::DuplicateTag);
+        }
+        self.tags.push(tag);
+        Ok(())
+    }
+    
+    pub fn calculate_score(&self) -> f64 {
+        let base_score = self.value * 100.0;
+        let tag_bonus = self.tags.len() as f64 * 10.0;
+        base_score + tag_bonus
+    }
+}
+
+pub fn process_records(records: Vec<DataRecord>) -> Vec<DataRecord> {
+    records
+        .into_iter()
+        .filter(|r| r.value > 50.0)
+        .map(|r| r.transform(1.1))
+        .collect()
+}
+
+pub fn aggregate_values(records: &[DataRecord]) -> HashMap<String, f64> {
+    let mut result = HashMap::new();
+    
+    for record in records {
+        let entry = result.entry(record.name.clone()).or_insert(0.0);
+        *entry += record.value;
+    }
+    
+    result
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
-
+    
     #[test]
-    fn test_data_processing() {
-        let mut processor = DataProcessor::new();
-
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "id,name,value,category").unwrap();
-        writeln!(temp_file, "1,ItemA,10.5,Category1").unwrap();
-        writeln!(temp_file, "2,ItemB,20.3,Category2").unwrap();
-        writeln!(temp_file, "3,ItemC,15.7,Category1").unwrap();
-
-        let result = processor.load_from_csv(temp_file.path().to_str().unwrap());
-        assert!(result.is_ok());
-        assert_eq!(processor.records.len(), 3);
-
-        let valid_records = processor.validate_records();
-        assert_eq!(valid_records.len(), 3);
-
-        let avg = processor.calculate_average();
-        assert!(avg.is_some());
-        assert!((avg.unwrap() - 15.5).abs() < 0.1);
-
-        let groups = processor.group_by_category();
-        assert_eq!(groups.len(), 2);
-        assert_eq!(groups.get("Category1").unwrap().len(), 2);
-
-        let max_record = processor.find_max_value();
-        assert!(max_record.is_some());
-        assert_eq!(max_record.unwrap().name, "ItemB");
+    fn test_valid_record_creation() {
+        let record = DataRecord::new(
+            1,
+            "Test Record".to_string(),
+            100.0,
+            vec!["tag1".to_string(), "tag2".to_string()]
+        );
+        
+        assert!(record.is_ok());
+        let record = record.unwrap();
+        assert_eq!(record.id, 1);
+        assert_eq!(record.name, "Test Record");
+        assert_eq!(record.value, 100.0);
+        assert_eq!(record.tags.len(), 2);
+    }
+    
+    #[test]
+    fn test_invalid_id() {
+        let record = DataRecord::new(
+            0,
+            "Test".to_string(),
+            100.0,
+            vec![]
+        );
+        
+        assert!(matches!(record, Err(ValidationError::InvalidId)));
+    }
+    
+    #[test]
+    fn test_calculate_score() {
+        let record = DataRecord::new(
+            1,
+            "Test".to_string(),
+            100.0,
+            vec!["tag1".to_string(), "tag2".to_string()]
+        ).unwrap();
+        
+        let score = record.calculate_score();
+        assert_eq!(score, 100.0 * 100.0 + 2.0 * 10.0);
     }
 }

@@ -955,4 +955,159 @@ mod tests {
         assert!(max_record.is_some());
         assert_eq!(max_record.unwrap().id, 2);
     }
+}use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DataRecord {
+    pub id: u32,
+    pub value: f64,
+    pub timestamp: i64,
+}
+
+#[derive(Debug)]
+pub enum ValidationError {
+    InvalidId,
+    InvalidValue,
+    InvalidTimestamp,
+    EmptyDataset,
+}
+
+impl fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ValidationError::InvalidId => write!(f, "ID must be greater than zero"),
+            ValidationError::InvalidValue => write!(f, "Value must be between 0.0 and 1000.0"),
+            ValidationError::InvalidTimestamp => write!(f, "Timestamp must be non-negative"),
+            ValidationError::EmptyDataset => write!(f, "Dataset cannot be empty"),
+        }
+    }
+}
+
+impl Error for ValidationError {}
+
+pub fn validate_record(record: &DataRecord) -> Result<(), ValidationError> {
+    if record.id == 0 {
+        return Err(ValidationError::InvalidId);
+    }
+    
+    if record.value < 0.0 || record.value > 1000.0 {
+        return Err(ValidationError::InvalidValue);
+    }
+    
+    if record.timestamp < 0 {
+        return Err(ValidationError::InvalidTimestamp);
+    }
+    
+    Ok(())
+}
+
+pub fn normalize_value(value: f64, min: f64, max: f64) -> f64 {
+    if max == min {
+        return 0.0;
+    }
+    (value - min) / (max - min)
+}
+
+pub fn process_dataset(records: &[DataRecord]) -> Result<Vec<f64>, ValidationError> {
+    if records.is_empty() {
+        return Err(ValidationError::EmptyDataset);
+    }
+    
+    for record in records {
+        validate_record(record)?;
+    }
+    
+    let min_value = records.iter().map(|r| r.value).fold(f64::INFINITY, f64::min);
+    let max_value = records.iter().map(|r| r.value).fold(f64::NEG_INFINITY, f64::max);
+    
+    let normalized: Vec<f64> = records
+        .iter()
+        .map(|record| normalize_value(record.value, min_value, max_value))
+        .collect();
+    
+    Ok(normalized)
+}
+
+pub fn calculate_statistics(records: &[DataRecord]) -> Option<(f64, f64, f64)> {
+    if records.is_empty() {
+        return None;
+    }
+    
+    let count = records.len() as f64;
+    let sum: f64 = records.iter().map(|r| r.value).sum();
+    let mean = sum / count;
+    
+    let variance: f64 = records
+        .iter()
+        .map(|r| (r.value - mean).powi(2))
+        .sum::<f64>() / count;
+    
+    let std_dev = variance.sqrt();
+    
+    Some((mean, variance, std_dev))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_validate_record_valid() {
+        let record = DataRecord {
+            id: 1,
+            value: 500.0,
+            timestamp: 1234567890,
+        };
+        assert!(validate_record(&record).is_ok());
+    }
+    
+    #[test]
+    fn test_validate_record_invalid_id() {
+        let record = DataRecord {
+            id: 0,
+            value: 500.0,
+            timestamp: 1234567890,
+        };
+        assert!(matches!(validate_record(&record), Err(ValidationError::InvalidId)));
+    }
+    
+    #[test]
+    fn test_normalize_value() {
+        assert_eq!(normalize_value(50.0, 0.0, 100.0), 0.5);
+        assert_eq!(normalize_value(0.0, 0.0, 100.0), 0.0);
+        assert_eq!(normalize_value(100.0, 0.0, 100.0), 1.0);
+    }
+    
+    #[test]
+    fn test_process_dataset() {
+        let records = vec![
+            DataRecord { id: 1, value: 10.0, timestamp: 1000 },
+            DataRecord { id: 2, value: 20.0, timestamp: 2000 },
+            DataRecord { id: 3, value: 30.0, timestamp: 3000 },
+        ];
+        
+        let result = process_dataset(&records);
+        assert!(result.is_ok());
+        let normalized = result.unwrap();
+        assert_eq!(normalized.len(), 3);
+        assert_eq!(normalized[0], 0.0);
+        assert_eq!(normalized[2], 1.0);
+    }
+    
+    #[test]
+    fn test_calculate_statistics() {
+        let records = vec![
+            DataRecord { id: 1, value: 10.0, timestamp: 1000 },
+            DataRecord { id: 2, value: 20.0, timestamp: 2000 },
+            DataRecord { id: 3, value: 30.0, timestamp: 3000 },
+        ];
+        
+        let stats = calculate_statistics(&records);
+        assert!(stats.is_some());
+        let (mean, variance, std_dev) = stats.unwrap();
+        assert_eq!(mean, 20.0);
+        assert_eq!(variance, 66.66666666666667);
+        assert_eq!(std_dev, 8.16496580927726);
+    }
 }

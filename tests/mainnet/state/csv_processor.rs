@@ -1115,3 +1115,156 @@ mod tests {
         assert!(result.is_err());
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{self, BufRead, BufReader, Write};
+use std::path::Path;
+
+pub struct CsvProcessor {
+    input_path: String,
+    output_path: String,
+    filter_column: usize,
+    filter_value: String,
+    transform_column: usize,
+    transform_fn: Box<dyn Fn(&str) -> String>,
+}
+
+impl CsvProcessor {
+    pub fn new(
+        input_path: String,
+        output_path: String,
+        filter_column: usize,
+        filter_value: String,
+        transform_column: usize,
+        transform_fn: Box<dyn Fn(&str) -> String>,
+    ) -> Self {
+        Self {
+            input_path,
+            output_path,
+            filter_column,
+            filter_value,
+            transform_column,
+            transform_fn,
+        }
+    }
+
+    pub fn process(&self) -> Result<(), Box<dyn Error>> {
+        let input_file = File::open(&self.input_path)?;
+        let reader = BufReader::new(input_file);
+        let mut output_file = File::create(&self.output_path)?;
+
+        for (line_num, line) in reader.lines().enumerate() {
+            let line = line?;
+            let parts: Vec<&str> = line.split(',').collect();
+
+            if parts.len() <= self.filter_column {
+                continue;
+            }
+
+            if parts[self.filter_column] == self.filter_value {
+                let mut transformed_parts = parts.clone();
+
+                if transformed_parts.len() > self.transform_column {
+                    let original = transformed_parts[self.transform_column];
+                    let transformed = (self.transform_fn)(original);
+                    transformed_parts[self.transform_column] = &transformed;
+                }
+
+                writeln!(output_file, "{}", transformed_parts.join(","))?;
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn validate_columns(&self) -> Result<(), String> {
+        let path = Path::new(&self.input_path);
+        if !path.exists() {
+            return Err("Input file does not exist".to_string());
+        }
+
+        let file = File::open(&self.input_path).map_err(|e| e.to_string())?;
+        let reader = BufReader::new(file);
+
+        if let Some(first_line) = reader.lines().next() {
+            let first_line = first_line.map_err(|e| e.to_string())?;
+            let column_count = first_line.split(',').count();
+
+            if self.filter_column >= column_count {
+                return Err(format!(
+                    "Filter column index {} exceeds available columns {}",
+                    self.filter_column, column_count
+                ));
+            }
+
+            if self.transform_column >= column_count {
+                return Err(format!(
+                    "Transform column index {} exceeds available columns {}",
+                    self.transform_column, column_count
+                ));
+            }
+        }
+
+        Ok(())
+    }
+}
+
+pub fn uppercase_transform(value: &str) -> String {
+    value.to_uppercase()
+}
+
+pub fn reverse_transform(value: &str) -> String {
+    value.chars().rev().collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_csv_processing() {
+        let input_content = "id,name,status\n1,alice,active\n2,bob,inactive\n3,charlie,active";
+        let input_file = NamedTempFile::new().unwrap();
+        fs::write(input_file.path(), input_content).unwrap();
+
+        let output_file = NamedTempFile::new().unwrap();
+
+        let processor = CsvProcessor::new(
+            input_file.path().to_str().unwrap().to_string(),
+            output_file.path().to_str().unwrap().to_string(),
+            2,
+            "active".to_string(),
+            1,
+            Box::new(uppercase_transform),
+        );
+
+        assert!(processor.validate_columns().is_ok());
+        assert!(processor.process().is_ok());
+
+        let output_content = fs::read_to_string(output_file.path()).unwrap();
+        let expected = "1,ALICE,active\n3,CHARLIE,active\n";
+        assert_eq!(output_content, expected);
+    }
+
+    #[test]
+    fn test_invalid_column_index() {
+        let input_content = "id,name\n1,alice";
+        let input_file = NamedTempFile::new().unwrap();
+        fs::write(input_file.path(), input_content).unwrap();
+
+        let output_file = NamedTempFile::new().unwrap();
+
+        let processor = CsvProcessor::new(
+            input_file.path().to_str().unwrap().to_string(),
+            output_file.path().to_str().unwrap().to_string(),
+            5,
+            "test".to_string(),
+            1,
+            Box::new(uppercase_transform),
+        );
+
+        assert!(processor.validate_columns().is_err());
+    }
+}

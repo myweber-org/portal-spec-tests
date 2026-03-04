@@ -128,4 +128,123 @@ mod tests {
         assert_eq!(errors.len(), 2);
         assert!(errors.iter().all(|e| e.level == "ERROR"));
     }
+}use std::fs::File;
+use std::io::{self, BufRead};
+use std::path::Path;
+use chrono::{DateTime, FixedOffset};
+use serde_json::Value;
+
+#[derive(Debug)]
+pub struct LogEntry {
+    pub timestamp: DateTime<FixedOffset>,
+    pub level: String,
+    pub message: String,
+    pub component: Option<String>,
+}
+
+pub struct LogParser {
+    min_level: String,
+    start_time: Option<DateTime<FixedOffset>>,
+    end_time: Option<DateTime<FixedOffset>>,
+}
+
+impl LogParser {
+    pub fn new(min_level: &str) -> Self {
+        LogParser {
+            min_level: min_level.to_lowercase(),
+            start_time: None,
+            end_time: None,
+        }
+    }
+
+    pub fn set_time_range(&mut self, start: Option<DateTime<FixedOffset>>, end: Option<DateTime<FixedOffset>>) {
+        self.start_time = start;
+        self.end_time = end;
+    }
+
+    pub fn parse_file<P: AsRef<Path>>(&self, path: P) -> io::Result<Vec<LogEntry>> {
+        let file = File::open(path)?;
+        let reader = io::BufReader::new(file);
+        let mut entries = Vec::new();
+
+        for line in reader.lines() {
+            let line = line?;
+            if let Ok(entry) = self.parse_line(&line) {
+                entries.push(entry);
+            }
+        }
+
+        Ok(entries)
+    }
+
+    fn parse_line(&self, line: &str) -> Result<LogEntry, Box<dyn std::error::Error>> {
+        let json: Value = serde_json::from_str(line)?;
+
+        let timestamp_str = json["timestamp"]
+            .as_str()
+            .ok_or("Missing timestamp field")?;
+        let timestamp = DateTime::parse_from_rfc3339(timestamp_str)?;
+
+        if let Some(start) = self.start_time {
+            if timestamp < start {
+                return Err("Before time range".into());
+            }
+        }
+
+        if let Some(end) = self.end_time {
+            if timestamp > end {
+                return Err("After time range".into());
+            }
+        }
+
+        let level = json["level"]
+            .as_str()
+            .ok_or("Missing level field")?
+            .to_lowercase();
+
+        let level_priority = self.get_level_priority(&level);
+        let min_priority = self.get_level_priority(&self.min_level);
+
+        if level_priority < min_priority {
+            return Err("Below minimum log level".into());
+        }
+
+        let message = json["message"]
+            .as_str()
+            .ok_or("Missing message field")?
+            .to_string();
+
+        let component = json["component"].as_str().map(|s| s.to_string());
+
+        Ok(LogEntry {
+            timestamp,
+            level,
+            message,
+            component,
+        })
+    }
+
+    fn get_level_priority(&self, level: &str) -> u8 {
+        match level {
+            "trace" => 1,
+            "debug" => 2,
+            "info" => 3,
+            "warn" => 4,
+            "error" => 5,
+            "fatal" => 6,
+            _ => 0,
+        }
+    }
+}
+
+pub fn print_entries(entries: &[LogEntry]) {
+    for entry in entries {
+        println!(
+            "[{}] {} - {} {}",
+            entry.timestamp.format("%Y-%m-%d %H:%M:%S"),
+            entry.level.to_uppercase(),
+            entry.component.as_deref().unwrap_or("unknown"),
+            entry.message
+        );
+    }
 }

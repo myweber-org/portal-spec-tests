@@ -62,3 +62,55 @@ mod tests {
         Ok(())
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{self, BufReader, BufWriter};
+use std::path::Path;
+
+use csv::{ReaderBuilder, WriterBuilder};
+
+pub fn merge_csv_files<P: AsRef<Path>>(
+    input_paths: &[P],
+    output_path: P,
+) -> Result<(), Box<dyn Error>> {
+    if input_paths.is_empty() {
+        return Err("No input files provided".into());
+    }
+
+    let mut headers_written = false;
+    let output_file = File::create(output_path)?;
+    let mut writer = WriterBuilder::new().from_writer(BufWriter::new(output_file));
+
+    for input_path in input_paths {
+        let file = File::open(input_path)?;
+        let reader = BufReader::new(file);
+        let mut csv_reader = ReaderBuilder::new().has_headers(true).from_reader(reader);
+
+        if !headers_written {
+            let headers = csv_reader.headers()?.clone();
+            writer.write_record(&headers)?;
+            headers_written = true;
+        }
+
+        for result in csv_reader.records() {
+            let record = result?;
+            writer.write_record(&record)?;
+        }
+    }
+
+    writer.flush()?;
+    Ok(())
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let input_files = vec![
+        "data/file1.csv",
+        "data/file2.csv",
+        "data/file3.csv",
+    ];
+    
+    merge_csv_files(&input_files, "merged_output.csv")?;
+    
+    println!("CSV files merged successfully");
+    Ok(())
+}

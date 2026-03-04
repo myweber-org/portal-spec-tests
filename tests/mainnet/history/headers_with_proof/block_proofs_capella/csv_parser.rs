@@ -143,4 +143,111 @@ mod tests {
         
         assert!(result.is_err());
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+
+#[derive(Debug)]
+pub struct CsvRecord {
+    pub fields: Vec<String>,
+}
+
+pub struct CsvParser {
+    delimiter: char,
+    has_header: bool,
+}
+
+impl CsvParser {
+    pub fn new(delimiter: char, has_header: bool) -> Self {
+        CsvParser {
+            delimiter,
+            has_header,
+        }
+    }
+
+    pub fn parse_file(&self, file_path: &str) -> Result<Vec<CsvRecord>, Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        let mut records = Vec::new();
+        let mut lines = reader.lines().enumerate();
+
+        if self.has_header {
+            lines.next();
+        }
+
+        for (line_num, line) in lines {
+            let line_content = line?;
+            let record = self.parse_line(&line_content, line_num + 1)?;
+            records.push(record);
+        }
+
+        Ok(records)
+    }
+
+    fn parse_line(&self, line: &str, line_number: usize) -> Result<CsvRecord, Box<dyn Error>> {
+        let fields: Vec<String> = line
+            .split(self.delimiter)
+            .map(|s| s.trim().to_string())
+            .collect();
+
+        if fields.is_empty() {
+            return Err(format!("Line {} is empty", line_number).into());
+        }
+
+        Ok(CsvRecord { fields })
+    }
+
+    pub fn validate_record(&self, record: &CsvRecord, expected_fields: usize) -> Result<(), String> {
+        if record.fields.len() != expected_fields {
+            return Err(format!(
+                "Expected {} fields, found {}",
+                expected_fields,
+                record.fields.len()
+            ));
+        }
+
+        for (i, field) in record.fields.iter().enumerate() {
+            if field.is_empty() {
+                return Err(format!("Field {} is empty", i + 1));
+            }
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_parse_csv_with_header() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,city").unwrap();
+        writeln!(temp_file, "Alice,30,New York").unwrap();
+        writeln!(temp_file, "Bob,25,London").unwrap();
+
+        let parser = CsvParser::new(',', true);
+        let records = parser.parse_file(temp_file.path().to_str().unwrap()).unwrap();
+
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].fields, vec!["Alice", "30", "New York"]);
+        assert_eq!(records[1].fields, vec!["Bob", "25", "London"]);
+    }
+
+    #[test]
+    fn test_validate_record() {
+        let parser = CsvParser::new(',', false);
+        let valid_record = CsvRecord {
+            fields: vec!["test".to_string(), "data".to_string()],
+        };
+        let invalid_record = CsvRecord {
+            fields: vec!["".to_string(), "data".to_string()],
+        };
+
+        assert!(parser.validate_record(&valid_record, 2).is_ok());
+        assert!(parser.validate_record(&invalid_record, 2).is_err());
+    }
 }

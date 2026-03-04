@@ -111,4 +111,77 @@ mod tests {
         let parsed: Value = serde_json::from_str(&content).unwrap();
         assert_eq!(parsed["data"], "test");
     }
+}use std::collections::HashMap;
+use std::fs::{self, File};
+use std::io::{BufReader, Read, Write};
+use std::path::Path;
+
+type JsonValue = serde_json::Value;
+
+pub fn merge_json_files<P: AsRef<Path>>(paths: &[P], output_path: P) -> Result<(), Box<dyn std::error::Error>> {
+    let mut merged_array = Vec::new();
+    let mut seen_keys = HashMap::new();
+
+    for path in paths {
+        let file = File::open(path)?;
+        let mut reader = BufReader::new(file);
+        let mut content = String::new();
+        reader.read_to_string(&mut content)?;
+
+        let json_data: JsonValue = serde_json::from_str(&content)?;
+
+        match json_data {
+            JsonValue::Array(arr) => {
+                for item in arr {
+                    if let Some(key) = item.get("id").and_then(|v| v.as_str()) {
+                        if !seen_keys.contains_key(key) {
+                            seen_keys.insert(key.to_string(), true);
+                            merged_array.push(item);
+                        }
+                    } else {
+                        merged_array.push(item);
+                    }
+                }
+            }
+            JsonValue::Object(obj) => {
+                if let Some(key) = obj.get("id").and_then(|v| v.as_str()) {
+                    if !seen_keys.contains_key(key) {
+                        seen_keys.insert(key.to_string(), true);
+                        merged_array.push(JsonValue::Object(obj));
+                    }
+                } else {
+                    merged_array.push(JsonValue::Object(obj));
+                }
+            }
+            _ => {
+                merged_array.push(json_data);
+            }
+        }
+    }
+
+    let output_json = JsonValue::Array(merged_array);
+    let serialized = serde_json::to_string_pretty(&output_json)?;
+
+    let mut output_file = File::create(output_path)?;
+    output_file.write_all(serialized.as_bytes())?;
+
+    Ok(())
+}
+
+pub fn merge_json_directory<P: AsRef<Path>>(dir_path: P, output_path: P) -> Result<(), Box<dyn std::error::Error>> {
+    let mut json_files = Vec::new();
+
+    for entry in fs::read_dir(dir_path)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) == Some("json") {
+            json_files.push(path);
+        }
+    }
+
+    if json_files.is_empty() {
+        return Err("No JSON files found in directory".into());
+    }
+
+    merge_json_files(&json_files, output_path)
 }

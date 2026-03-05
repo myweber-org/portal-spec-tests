@@ -564,3 +564,123 @@ fn main() -> io::Result<()> {
     println!("File processed successfully with XOR key 0x{:02X}", DEFAULT_KEY);
     Ok(())
 }
+use std::fs;
+use std::io::{self, Read, Write};
+use std::path::Path;
+
+pub struct XORCipher {
+    key: Vec<u8>,
+}
+
+impl XORCipher {
+    pub fn new(key: &str) -> Self {
+        XORCipher {
+            key: key.as_bytes().to_vec(),
+        }
+    }
+
+    pub fn encrypt_file(&self, source_path: &Path, dest_path: &Path) -> io::Result<()> {
+        self.process_file(source_path, dest_path)
+    }
+
+    pub fn decrypt_file(&self, source_path: &Path, dest_path: &Path) -> io::Result<()> {
+        self.process_file(source_path, dest_path)
+    }
+
+    fn process_file(&self, source_path: &Path, dest_path: &Path) -> io::Result<()> {
+        let mut source_file = fs::File::open(source_path)?;
+        let mut dest_file = fs::File::create(dest_path)?;
+
+        let mut buffer = [0; 4096];
+        let mut key_index = 0;
+
+        loop {
+            let bytes_read = source_file.read(&mut buffer)?;
+            if bytes_read == 0 {
+                break;
+            }
+
+            let mut processed_buffer = buffer[..bytes_read].to_vec();
+            self.xor_transform(&mut processed_buffer, &mut key_index);
+
+            dest_file.write_all(&processed_buffer)?;
+        }
+
+        dest_file.flush()?;
+        Ok(())
+    }
+
+    fn xor_transform(&self, data: &mut [u8], key_index: &mut usize) {
+        if self.key.is_empty() {
+            return;
+        }
+
+        for byte in data.iter_mut() {
+            *byte ^= self.key[*key_index];
+            *key_index = (*key_index + 1) % self.key.len();
+        }
+    }
+}
+
+pub fn encrypt_string(text: &str, key: &str) -> Vec<u8> {
+    let cipher = XORCipher::new(key);
+    let mut data = text.as_bytes().to_vec();
+    let mut key_index = 0;
+    cipher.xor_transform(&mut data, &mut key_index);
+    data
+}
+
+pub fn decrypt_string(data: &[u8], key: &str) -> String {
+    let cipher = XORCipher::new(key);
+    let mut processed = data.to_vec();
+    let mut key_index = 0;
+    cipher.xor_transform(&mut processed, &mut key_index);
+    String::from_utf8_lossy(&processed).to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_string_encryption() {
+        let original = "Secret message";
+        let key = "mykey123";
+        
+        let encrypted = encrypt_string(original, key);
+        let decrypted = decrypt_string(&encrypted, key);
+        
+        assert_ne!(encrypted, original.as_bytes());
+        assert_eq!(decrypted, original);
+    }
+
+    #[test]
+    fn test_file_encryption() -> io::Result<()> {
+        let key = "test_key";
+        let cipher = XORCipher::new(key);
+        
+        let mut source_file = NamedTempFile::new()?;
+        let content = b"File content to encrypt";
+        source_file.write_all(content)?;
+        
+        let dest_file = NamedTempFile::new()?;
+        
+        cipher.encrypt_file(source_file.path(), dest_file.path())?;
+        
+        let mut encrypted_content = Vec::new();
+        fs::File::open(dest_file.path())?.read_to_end(&mut encrypted_content)?;
+        
+        assert_ne!(encrypted_content, content);
+        
+        let decrypted_file = NamedTempFile::new()?;
+        cipher.decrypt_file(dest_file.path(), decrypted_file.path())?;
+        
+        let mut decrypted_content = Vec::new();
+        fs::File::open(decrypted_file.path())?.read_to_end(&mut decrypted_content)?;
+        
+        assert_eq!(decrypted_content, content);
+        
+        Ok(())
+    }
+}

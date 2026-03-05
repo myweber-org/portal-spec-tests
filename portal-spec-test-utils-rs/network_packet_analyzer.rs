@@ -285,3 +285,132 @@ mod tests {
         assert_eq!(Protocol::from_u8(99), Protocol::Unknown(99));
     }
 }
+use std::net::Ipv4Addr;
+
+#[derive(Debug, PartialEq)]
+pub enum EtherType {
+    IPv4,
+    ARP,
+    IPv6,
+    Unknown(u16),
+}
+
+impl From<u16> for EtherType {
+    fn from(value: u16) -> Self {
+        match value {
+            0x0800 => EtherType::IPv4,
+            0x0806 => EtherType::ARP,
+            0x86DD => EtherType::IPv6,
+            _ => EtherType::Unknown(value),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct EthernetFrame {
+    pub destination_mac: [u8; 6],
+    pub source_mac: [u8; 6],
+    pub ether_type: EtherType,
+    pub payload: Vec<u8>,
+}
+
+impl EthernetFrame {
+    pub fn parse(raw_data: &[u8]) -> Option<Self> {
+        if raw_data.len() < 14 {
+            return None;
+        }
+
+        let mut dest_mac = [0u8; 6];
+        dest_mac.copy_from_slice(&raw_data[0..6]);
+
+        let mut src_mac = [0u8; 6];
+        src_mac.copy_from_slice(&raw_data[6..12]);
+
+        let ether_type_val = u16::from_be_bytes([raw_data[12], raw_data[13]]);
+        let ether_type = EtherType::from(ether_type_val);
+
+        let payload = raw_data[14..].to_vec();
+
+        Some(EthernetFrame {
+            destination_mac: dest_mac,
+            source_mac: src_mac,
+            ether_type,
+            payload,
+        })
+    }
+
+    pub fn format_mac(mac: &[u8; 6]) -> String {
+        mac.iter()
+            .map(|byte| format!("{:02x}", byte))
+            .collect::<Vec<String>>()
+            .join(":")
+    }
+
+    pub fn extract_ipv4_addresses(&self) -> Option<(Ipv4Addr, Ipv4Addr)> {
+        if let EtherType::IPv4 = self.ether_type {
+            if self.payload.len() >= 20 {
+                let src_ip = Ipv4Addr::new(
+                    self.payload[12],
+                    self.payload[13],
+                    self.payload[14],
+                    self.payload[15],
+                );
+                let dst_ip = Ipv4Addr::new(
+                    self.payload[16],
+                    self.payload[17],
+                    self.payload[18],
+                    self.payload[19],
+                );
+                return Some((src_ip, dst_ip));
+            }
+        }
+        None
+    }
+}
+
+pub fn analyze_packet(packet_data: &[u8]) {
+    match EthernetFrame::parse(packet_data) {
+        Some(frame) => {
+            println!("Destination MAC: {}", EthernetFrame::format_mac(&frame.destination_mac));
+            println!("Source MAC: {}", EthernetFrame::format_mac(&frame.source_mac));
+            println!("EtherType: {:?}", frame.ether_type);
+            println!("Payload length: {} bytes", frame.payload.len());
+
+            if let Some((src_ip, dst_ip)) = frame.extract_ipv4_addresses() {
+                println!("IPv4 Source: {}", src_ip);
+                println!("IPv4 Destination: {}", dst_ip);
+            }
+        }
+        None => println!("Invalid Ethernet frame"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ethernet_parsing() {
+        let sample_frame = [
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55,
+            0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb,
+            0x08, 0x00,
+            0x45, 0x00, 0x00, 0x1c, 0x00, 0x01,
+            0x00, 0x00, 0x40, 0x06, 0x00, 0x00,
+            0xc0, 0xa8, 0x00, 0x01,
+            0xc0, 0xa8, 0x00, 0x02,
+        ];
+
+        let frame = EthernetFrame::parse(&sample_frame).unwrap();
+        assert_eq!(frame.destination_mac, [0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);
+        assert_eq!(frame.source_mac, [0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb]);
+        assert_eq!(frame.ether_type, EtherType::IPv4);
+        assert_eq!(frame.payload.len(), 20);
+    }
+
+    #[test]
+    fn test_mac_formatting() {
+        let mac = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55];
+        assert_eq!(EthernetFrame::format_mac(&mac), "00:11:22:33:44:55");
+    }
+}

@@ -236,4 +236,115 @@ mod tests {
         assert_eq!(counts.get("electronics"), Some(&2));
         assert_eq!(counts.get("books"), Some(&1));
     }
+}use csv::{Reader, Writer};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    id: u32,
+    name: String,
+    category: String,
+    value: f64,
+    active: bool,
+}
+
+fn process_csv(input_path: &str, output_path: &str, min_value: f64) -> Result<(), Box<dyn Error>> {
+    let mut reader = Reader::from_path(input_path)?;
+    let mut writer = Writer::from_path(output_path)?;
+
+    let mut total_records = 0;
+    let mut filtered_records = 0;
+    let mut sum_values = 0.0;
+
+    for result in reader.deserialize() {
+        let record: Record = result?;
+        total_records += 1;
+
+        if record.value >= min_value && record.active {
+            writer.serialize(&record)?;
+            filtered_records += 1;
+            sum_values += record.value;
+        }
+    }
+
+    writer.flush()?;
+
+    if filtered_records > 0 {
+        let average_value = sum_values / filtered_records as f64;
+        println!("Processed {} records", total_records);
+        println!("Filtered {} records with value >= {}", filtered_records, min_value);
+        println!("Average value of filtered records: {:.2}", average_value);
+    } else {
+        println!("No records matched the filter criteria");
+    }
+
+    Ok(())
+}
+
+fn aggregate_by_category(input_path: &str) -> Result<Vec<(String, f64)>, Box<dyn Error>> {
+    let mut reader = Reader::from_path(input_path)?;
+    let mut category_totals = std::collections::HashMap::new();
+
+    for result in reader.deserialize() {
+        let record: Record = result?;
+        if record.active {
+            let entry = category_totals.entry(record.category.clone()).or_insert(0.0);
+            *entry += record.value;
+        }
+    }
+
+    let mut results: Vec<(String, f64)> = category_totals.into_iter().collect();
+    results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+
+    Ok(results)
+}
+
+fn validate_record(record: &Record) -> bool {
+    !record.name.is_empty() && record.value >= 0.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_validate_record() {
+        let valid_record = Record {
+            id: 1,
+            name: "Test".to_string(),
+            category: "A".to_string(),
+            value: 10.5,
+            active: true,
+        };
+
+        let invalid_record = Record {
+            id: 2,
+            name: "".to_string(),
+            category: "B".to_string(),
+            value: -5.0,
+            active: true,
+        };
+
+        assert!(validate_record(&valid_record));
+        assert!(!validate_record(&invalid_record));
+    }
+
+    #[test]
+    fn test_aggregate_by_category() -> Result<(), Box<dyn Error>> {
+        let test_data = "id,name,category,value,active\n1,Item1,CategoryA,10.5,true\n2,Item2,CategoryB,15.0,true\n3,Item3,CategoryA,5.5,true\n4,Item4,CategoryB,20.0,false";
+        
+        let mut temp_file = NamedTempFile::new()?;
+        std::io::Write::write_all(&mut temp_file, test_data.as_bytes())?;
+        
+        let results = aggregate_by_category(temp_file.path().to_str().unwrap())?;
+        
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].0, "CategoryB");
+        assert_eq!(results[0].1, 15.0);
+        
+        Ok(())
+    }
 }

@@ -548,4 +548,170 @@ pub fn load_config() -> Result<Config, String> {
         .map_err(|errors| errors.join("; "))?;
 
     Ok(config)
+}use std::collections::HashMap;
+use std::fs;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AppConfig {
+    pub server: ServerConfig,
+    pub database: DatabaseConfig,
+    pub logging: LoggingConfig,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ServerConfig {
+    pub host: String,
+    pub port: u16,
+    pub timeout_seconds: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DatabaseConfig {
+    pub url: String,
+    pub max_connections: u32,
+    pub min_connections: u32,
+    pub connect_timeout: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct LoggingConfig {
+    pub level: String,
+    pub file_path: String,
+    pub max_file_size_mb: u64,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        AppConfig {
+            server: ServerConfig {
+                host: "127.0.0.1".to_string(),
+                port: 8080,
+                timeout_seconds: 30,
+            },
+            database: DatabaseConfig {
+                url: "postgresql://localhost:5432/mydb".to_string(),
+                max_connections: 20,
+                min_connections: 5,
+                connect_timeout: 10,
+            },
+            logging: LoggingConfig {
+                level: "info".to_string(),
+                file_path: "logs/app.log".to_string(),
+                max_file_size_mb: 100,
+            },
+        }
+    }
+}
+
+pub fn load_config(path: &str) -> Result<AppConfig, String> {
+    let content = fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read config file: {}", e))?;
+
+    let config: AppConfig = toml::from_str(&content)
+        .map_err(|e| format!("Failed to parse config: {}", e))?;
+
+    validate_config(&config)?;
+    Ok(config)
+}
+
+pub fn load_config_with_defaults(path: &str) -> Result<AppConfig, String> {
+    match load_config(path) {
+        Ok(config) => Ok(config),
+        Err(_) => {
+            println!("Using default configuration");
+            Ok(AppConfig::default())
+        }
+    }
+}
+
+fn validate_config(config: &AppConfig) -> Result<(), String> {
+    if config.server.port == 0 {
+        return Err("Server port cannot be 0".to_string());
+    }
+
+    if config.database.max_connections < config.database.min_connections {
+        return Err("Max connections cannot be less than min connections".to_string());
+    }
+
+    if config.logging.max_file_size_mb == 0 {
+        return Err("Max file size must be greater than 0".to_string());
+    }
+
+    let valid_log_levels = ["error", "warn", "info", "debug", "trace"];
+    if !valid_log_levels.contains(&config.logging.level.as_str()) {
+        return Err(format!("Invalid log level: {}", config.logging.level));
+    }
+
+    Ok(())
+}
+
+pub fn generate_config_template() -> String {
+    let default_config = AppConfig::default();
+    toml::to_string_pretty(&default_config)
+        .unwrap_or_else(|_| "Failed to generate config template".to_string())
+}
+
+pub fn merge_configs(base: &AppConfig, overrides: HashMap<&str, &str>) -> AppConfig {
+    let mut merged = base.clone();
+
+    for (key, value) in overrides {
+        match key {
+            "server.host" => merged.server.host = value.to_string(),
+            "server.port" => if let Ok(port) = value.parse() { merged.server.port = port },
+            "server.timeout_seconds" => if let Ok(timeout) = value.parse() { merged.server.timeout_seconds = timeout },
+            "database.url" => merged.database.url = value.to_string(),
+            "database.max_connections" => if let Ok(max) = value.parse() { merged.database.max_connections = max },
+            "database.min_connections" => if let Ok(min) = value.parse() { merged.database.min_connections = min },
+            "database.connect_timeout" => if let Ok(timeout) = value.parse() { merged.database.connect_timeout = timeout },
+            "logging.level" => merged.logging.level = value.to_string(),
+            "logging.file_path" => merged.logging.file_path = value.to_string(),
+            "logging.max_file_size_mb" => if let Ok(size) = value.parse() { merged.logging.max_file_size_mb = size },
+            _ => println!("Unknown config key: {}", key),
+        }
+    }
+
+    merged
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_config() {
+        let config = AppConfig::default();
+        assert_eq!(config.server.port, 8080);
+        assert_eq!(config.database.max_connections, 20);
+        assert_eq!(config.logging.level, "info");
+    }
+
+    #[test]
+    fn test_config_validation() {
+        let mut config = AppConfig::default();
+        config.server.port = 0;
+        assert!(validate_config(&config).is_err());
+
+        let mut config2 = AppConfig::default();
+        config2.database.max_connections = 1;
+        config2.database.min_connections = 5;
+        assert!(validate_config(&config2).is_err());
+
+        let mut config3 = AppConfig::default();
+        config3.logging.level = "invalid".to_string();
+        assert!(validate_config(&config3).is_err());
+    }
+
+    #[test]
+    fn test_merge_configs() {
+        let base = AppConfig::default();
+        let mut overrides = HashMap::new();
+        overrides.insert("server.port", "9000");
+        overrides.insert("logging.level", "debug");
+
+        let merged = merge_configs(&base, overrides);
+        assert_eq!(merged.server.port, 9000);
+        assert_eq!(merged.logging.level, "debug");
+        assert_eq!(merged.database.max_connections, 20);
+    }
 }

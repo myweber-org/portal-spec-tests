@@ -1041,4 +1041,84 @@ mod tests {
         assert_eq!(groups.get("CategoryA").unwrap().len(), 2);
         assert_eq!(groups.get("CategoryB").unwrap().len(), 1);
     }
+}use std::collections::HashMap;
+
+pub struct DataProcessor {
+    filters: Vec<Box<dyn Fn(&HashMap<String, String>) -> bool>>,
+    transformers: Vec<Box<dyn Fn(HashMap<String, String>) -> HashMap<String, String>>>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            filters: Vec::new(),
+            transformers: Vec::new(),
+        }
+    }
+
+    pub fn add_filter<F>(&mut self, filter: F)
+    where
+        F: Fn(&HashMap<String, String>) -> bool + 'static,
+    {
+        self.filters.push(Box::new(filter));
+    }
+
+    pub fn add_transformer<F>(&mut self, transformer: F)
+    where
+        F: Fn(HashMap<String, String>) -> HashMap<String, String> + 'static,
+    {
+        self.transformers.push(Box::new(transformer));
+    }
+
+    pub fn process(&self, data: Vec<HashMap<String, String>>) -> Vec<HashMap<String, String>> {
+        data.into_iter()
+            .filter(|item| self.filters.iter().all(|filter| filter(item)))
+            .map(|mut item| {
+                for transformer in &self.transformers {
+                    item = transformer(item);
+                }
+                item
+            })
+            .collect()
+    }
+}
+
+pub fn create_sample_data() -> Vec<HashMap<String, String>> {
+    vec![
+        [("name".to_string(), "Alice".to_string()), ("age".to_string(), "30".to_string())]
+            .iter().cloned().collect(),
+        [("name".to_string(), "Bob".to_string()), ("age".to_string(), "25".to_string())]
+            .iter().cloned().collect(),
+        [("name".to_string(), "Charlie".to_string()), ("age".to_string(), "35".to_string())]
+            .iter().cloned().collect(),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_data_processor() {
+        let mut processor = DataProcessor::new();
+        
+        processor.add_filter(|data| {
+            data.get("age")
+                .and_then(|age_str| age_str.parse::<u32>().ok())
+                .map_or(false, |age| age >= 30)
+        });
+
+        processor.add_transformer(|mut data| {
+            if let Some(name) = data.get("name") {
+                data.insert("name_uppercase".to_string(), name.to_uppercase());
+            }
+            data
+        });
+
+        let sample_data = create_sample_data();
+        let result = processor.process(sample_data);
+
+        assert_eq!(result.len(), 2);
+        assert!(result.iter().all(|item| item.contains_key("name_uppercase")));
+    }
 }

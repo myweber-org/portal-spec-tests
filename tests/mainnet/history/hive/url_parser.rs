@@ -53,4 +53,65 @@ mod tests {
         assert!(UrlParser::is_valid_url("https://example.com"));
         assert!(!UrlParser::is_valid_url("ftp://example.com"));
     }
+}use std::collections::HashMap;
+use url::Url;
+
+pub struct UrlParser {
+    url: Url,
+}
+
+impl UrlParser {
+    pub fn parse(input: &str) -> Result<Self, url::ParseError> {
+        let url = Url::parse(input)?;
+        Ok(Self { url })
+    }
+
+    pub fn domain(&self) -> Option<&str> {
+        self.url.host_str()
+    }
+
+    pub fn path_segments(&self) -> Vec<&str> {
+        self.url.path_segments()
+            .map(|segments| segments.collect())
+            .unwrap_or_default()
+    }
+
+    pub fn query_params(&self) -> HashMap<String, String> {
+        self.url.query_pairs()
+            .into_owned()
+            .collect()
+    }
+
+    pub fn scheme(&self) -> &str {
+        self.url.scheme()
+    }
+
+    pub fn port(&self) -> Option<u16> {
+        self.url.port()
+    }
+
+    pub fn fragment(&self) -> Option<&str> {
+        self.url.fragment()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_url_parsing() {
+        let parser = UrlParser::parse("https://example.com/path?key=value#section").unwrap();
+        assert_eq!(parser.scheme(), "https");
+        assert_eq!(parser.domain(), Some("example.com"));
+        assert_eq!(parser.path_segments(), vec!["path"]);
+        assert_eq!(parser.query_params().get("key"), Some(&"value".to_string()));
+        assert_eq!(parser.fragment(), Some("section"));
+    }
+
+    #[test]
+    fn test_invalid_url() {
+        let result = UrlParser::parse("not-a-valid-url");
+        assert!(result.is_err());
+    }
 }

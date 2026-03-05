@@ -946,4 +946,111 @@ mod tests {
             panic!("Expected ValidationError");
         }
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug)]
+pub enum CsvError {
+    IoError(std::io::Error),
+    ParseError(String),
+    InvalidHeader,
+    MissingColumn,
+}
+
+impl From<std::io::Error> for CsvError {
+    fn from(err: std::io::Error) -> Self {
+        CsvError::IoError(err)
+    }
+}
+
+pub struct CsvProcessor {
+    delimiter: char,
+    has_header: bool,
+}
+
+impl CsvProcessor {
+    pub fn new(delimiter: char, has_header: bool) -> Self {
+        CsvProcessor {
+            delimiter,
+            has_header,
+        }
+    }
+
+    pub fn process_file<P: AsRef<Path>>(
+        &self,
+        path: P,
+    ) -> Result<Vec<Vec<String>>, CsvError> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut records = Vec::new();
+
+        for (line_num, line) in reader.lines().enumerate() {
+            let line = line?;
+            let record: Vec<String> = line
+                .split(self.delimiter)
+                .map(|s| s.trim().to_string())
+                .collect();
+
+            if line_num == 0 && self.has_header {
+                if record.is_empty() {
+                    return Err(CsvError::InvalidHeader);
+                }
+                continue;
+            }
+
+            if record.iter().any(|field| field.is_empty()) {
+                return Err(CsvError::ParseError(format!(
+                    "Empty field found at line {}",
+                    line_num + 1
+                )));
+            }
+
+            records.push(record);
+        }
+
+        if records.is_empty() {
+            return Err(CsvError::MissingColumn);
+        }
+
+        Ok(records)
+    }
+
+    pub fn validate_records(&self, records: &[Vec<String>]) -> Result<(), CsvError> {
+        let expected_len = records.first().map(|r| r.len()).unwrap_or(0);
+
+        for (idx, record) in records.iter().enumerate() {
+            if record.len() != expected_len {
+                return Err(CsvError::ParseError(format!(
+                    "Record {} has {} fields, expected {}",
+                    idx + 1,
+                    record.len(),
+                    expected_len
+                )));
+            }
+        }
+
+        Ok(())
+    }
+}
+
+pub fn calculate_column_average(records: &[Vec<String>], column_idx: usize) -> Option<f64> {
+    let mut sum = 0.0;
+    let mut count = 0;
+
+    for record in records {
+        if let Some(field) = record.get(column_idx) {
+            if let Ok(value) = field.parse::<f64>() {
+                sum += value;
+                count += 1;
+            }
+        }
+    }
+
+    if count > 0 {
+        Some(sum / count as f64)
+    } else {
+        None
+    }
 }

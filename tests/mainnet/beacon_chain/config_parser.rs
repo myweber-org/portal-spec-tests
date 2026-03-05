@@ -542,4 +542,129 @@ mod tests {
         assert_eq!(config.get("PASSWORD"), Some(&"secret123".to_string()));
         assert_eq!(config.get("NORMAL"), Some(&"value".to_string()));
     }
+}use std::collections::HashMap;
+use std::fs;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AppConfig {
+    pub server: ServerConfig,
+    pub database: DatabaseConfig,
+    pub logging: LoggingConfig,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ServerConfig {
+    pub host: String,
+    pub port: u16,
+    pub timeout_seconds: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DatabaseConfig {
+    pub url: String,
+    pub max_connections: u32,
+    pub min_connections: u32,
+    pub connection_timeout: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct LoggingConfig {
+    pub level: String,
+    pub file_path: String,
+    pub max_file_size_mb: u64,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        AppConfig {
+            server: ServerConfig {
+                host: "127.0.0.1".to_string(),
+                port: 8080,
+                timeout_seconds: 30,
+            },
+            database: DatabaseConfig {
+                url: "postgresql://localhost:5432/mydb".to_string(),
+                max_connections: 20,
+                min_connections: 5,
+                connection_timeout: 10,
+            },
+            logging: LoggingConfig {
+                level: "info".to_string(),
+                file_path: "logs/app.log".to_string(),
+                max_file_size_mb: 100,
+            },
+        }
+    }
+}
+
+pub struct ConfigParser;
+
+impl ConfigParser {
+    pub fn load_from_file(path: &str) -> Result<AppConfig, String> {
+        let content = fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read config file: {}", e))?;
+        
+        let mut config: AppConfig = toml::from_str(&content)
+            .map_err(|e| format!("Failed to parse config file: {}", e))?;
+        
+        Self::validate_config(&mut config)?;
+        Ok(config)
+    }
+    
+    pub fn load_with_defaults(path: Option<&str>) -> AppConfig {
+        match path {
+            Some(p) => {
+                match Self::load_from_file(p) {
+                    Ok(config) => config,
+                    Err(e) => {
+                        eprintln!("Warning: Failed to load config from file: {}. Using defaults.", e);
+                        AppConfig::default()
+                    }
+                }
+            }
+            None => AppConfig::default(),
+        }
+    }
+    
+    fn validate_config(config: &mut AppConfig) -> Result<(), String> {
+        if config.server.port == 0 {
+            return Err("Server port cannot be 0".to_string());
+        }
+        
+        if config.database.max_connections < config.database.min_connections {
+            return Err("Max connections cannot be less than min connections".to_string());
+        }
+        
+        if config.database.max_connections == 0 {
+            return Err("Max connections must be greater than 0".to_string());
+        }
+        
+        let valid_log_levels = ["trace", "debug", "info", "warn", "error"];
+        if !valid_log_levels.contains(&config.logging.level.as_str()) {
+            return Err(format!("Invalid log level: {}. Must be one of: {:?}", 
+                config.logging.level, valid_log_levels));
+        }
+        
+        Ok(())
+    }
+    
+    pub fn to_env_vars(config: &AppConfig) -> HashMap<String, String> {
+        let mut env_vars = HashMap::new();
+        
+        env_vars.insert("SERVER_HOST".to_string(), config.server.host.clone());
+        env_vars.insert("SERVER_PORT".to_string(), config.server.port.to_string());
+        env_vars.insert("SERVER_TIMEOUT".to_string(), config.server.timeout_seconds.to_string());
+        
+        env_vars.insert("DATABASE_URL".to_string(), config.database.url.clone());
+        env_vars.insert("DB_MAX_CONNECTIONS".to_string(), config.database.max_connections.to_string());
+        env_vars.insert("DB_MIN_CONNECTIONS".to_string(), config.database.min_connections.to_string());
+        env_vars.insert("DB_CONNECTION_TIMEOUT".to_string(), config.database.connection_timeout.to_string());
+        
+        env_vars.insert("LOG_LEVEL".to_string(), config.logging.level.clone());
+        env_vars.insert("LOG_FILE_PATH".to_string(), config.logging.file_path.clone());
+        env_vars.insert("LOG_MAX_SIZE_MB".to_string(), config.logging.max_file_size_mb.to_string());
+        
+        env_vars
+    }
 }

@@ -872,4 +872,83 @@ mod tests {
         let decrypted_content = fs::read(decrypted_file.path()).unwrap();
         assert_eq!(decrypted_content, original_text);
     }
+}use std::fs;
+use std::io::{self, Read, Write};
+
+const DEFAULT_KEY: u8 = 0x55;
+
+pub fn xor_encrypt(data: &[u8], key: u8) -> Vec<u8> {
+    data.iter().map(|byte| byte ^ key).collect()
+}
+
+pub fn xor_decrypt(data: &[u8], key: u8) -> Vec<u8> {
+    xor_encrypt(data, key)
+}
+
+pub fn encrypt_file(input_path: &str, output_path: &str, key: Option<u8>) -> io::Result<()> {
+    let key = key.unwrap_or(DEFAULT_KEY);
+    let mut file = fs::File::open(input_path)?;
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer)?;
+    
+    let encrypted = xor_encrypt(&buffer, key);
+    
+    let mut output = fs::File::create(output_path)?;
+    output.write_all(&encrypted)?;
+    
+    Ok(())
+}
+
+pub fn decrypt_file(input_path: &str, output_path: &str, key: Option<u8>) -> io::Result<()> {
+    let key = key.unwrap_or(DEFAULT_KEY);
+    let mut file = fs::File::open(input_path)?;
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer)?;
+    
+    let decrypted = xor_decrypt(&buffer, key);
+    
+    let mut output = fs::File::create(output_path)?;
+    output.write_all(&decrypted)?;
+    
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    
+    #[test]
+    fn test_xor_cipher() {
+        let data = b"Hello, World!";
+        let key = 0x42;
+        
+        let encrypted = xor_encrypt(data, key);
+        assert_ne!(encrypted, data);
+        
+        let decrypted = xor_decrypt(&encrypted, key);
+        assert_eq!(decrypted, data);
+    }
+    
+    #[test]
+    fn test_file_encryption() -> io::Result<()> {
+        let test_data = b"Test encryption data";
+        let input_path = "test_input.txt";
+        let encrypted_path = "test_encrypted.bin";
+        let decrypted_path = "test_decrypted.txt";
+        
+        fs::write(input_path, test_data)?;
+        
+        encrypt_file(input_path, encrypted_path, Some(0x77))?;
+        decrypt_file(encrypted_path, decrypted_path, Some(0x77))?;
+        
+        let decrypted_content = fs::read(decrypted_path)?;
+        assert_eq!(decrypted_content, test_data);
+        
+        fs::remove_file(input_path)?;
+        fs::remove_file(encrypted_path)?;
+        fs::remove_file(decrypted_path)?;
+        
+        Ok(())
+    }
 }

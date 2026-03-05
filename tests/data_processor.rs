@@ -647,3 +647,147 @@ mod tests {
         assert!((sum - 1.0).abs() < 1e-10);
     }
 }
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use thiserror::Error;
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DataRecord {
+    pub id: u64,
+    pub timestamp: i64,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
+}
+
+#[derive(Debug, Error)]
+pub enum ProcessingError {
+    #[error("Invalid data format")]
+    InvalidFormat,
+    #[error("Data validation failed: {0}")]
+    ValidationFailed(String),
+    #[error("Transformation error: {0}")]
+    TransformationError(String),
+}
+
+pub fn validate_record(record: &DataRecord) -> Result<(), ProcessingError> {
+    if record.id == 0 {
+        return Err(ProcessingError::ValidationFailed("ID cannot be zero".to_string()));
+    }
+    
+    if record.timestamp < 0 {
+        return Err(ProcessingError::ValidationFailed("Timestamp cannot be negative".to_string()));
+    }
+    
+    if record.values.is_empty() {
+        return Err(ProcessingError::ValidationFailed("Values cannot be empty".to_string()));
+    }
+    
+    Ok(())
+}
+
+pub fn normalize_values(record: &mut DataRecord) -> Result<(), ProcessingError> {
+    if record.values.is_empty() {
+        return Err(ProcessingError::TransformationError("No values to normalize".to_string()));
+    }
+    
+    let min_value = record.values
+        .iter()
+        .copied()
+        .fold(f64::INFINITY, f64::min);
+    
+    let max_value = record.values
+        .iter()
+        .copied()
+        .fold(f64::NEG_INFINITY, f64::max);
+    
+    if (max_value - min_value).abs() < f64::EPSILON {
+        return Err(ProcessingError::TransformationError("Cannot normalize constant values".to_string()));
+    }
+    
+    for value in &mut record.values {
+        *value = (*value - min_value) / (max_value - min_value);
+    }
+    
+    Ok(())
+}
+
+pub fn process_record(mut record: DataRecord) -> Result<DataRecord, ProcessingError> {
+    validate_record(&record)?;
+    normalize_values(&mut record)?;
+    
+    record.metadata.insert(
+        "processed".to_string(),
+        "true".to_string()
+    );
+    
+    record.metadata.insert(
+        "normalized".to_string(),
+        "true".to_string()
+    );
+    
+    Ok(record)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn test_validate_record_valid() {
+        let record = DataRecord {
+            id: 1,
+            timestamp: 1000,
+            values: vec![1.0, 2.0, 3.0],
+            metadata: HashMap::new(),
+        };
+        
+        assert!(validate_record(&record).is_ok());
+    }
+
+    #[test]
+    fn test_validate_record_invalid_id() {
+        let record = DataRecord {
+            id: 0,
+            timestamp: 1000,
+            values: vec![1.0, 2.0, 3.0],
+            metadata: HashMap::new(),
+        };
+        
+        assert!(validate_record(&record).is_err());
+    }
+
+    #[test]
+    fn test_normalize_values() {
+        let mut record = DataRecord {
+            id: 1,
+            timestamp: 1000,
+            values: vec![0.0, 5.0, 10.0],
+            metadata: HashMap::new(),
+        };
+        
+        assert!(normalize_values(&mut record).is_ok());
+        assert_eq!(record.values, vec![0.0, 0.5, 1.0]);
+    }
+
+    #[test]
+    fn test_process_record() {
+        let mut metadata = HashMap::new();
+        metadata.insert("source".to_string(), "test".to_string());
+        
+        let record = DataRecord {
+            id: 1,
+            timestamp: 1000,
+            values: vec![0.0, 5.0, 10.0],
+            metadata,
+        };
+        
+        let result = process_record(record);
+        assert!(result.is_ok());
+        
+        let processed = result.unwrap();
+        assert_eq!(processed.metadata.get("processed"), Some(&"true".to_string()));
+        assert_eq!(processed.metadata.get("normalized"), Some(&"true".to_string()));
+        assert_eq!(processed.metadata.get("source"), Some(&"test".to_string()));
+    }
+}

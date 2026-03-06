@@ -1,110 +1,72 @@
-use serde_json::{Value, Map};
-use std::collections::HashSet;
+use serde_json::{Map, Value};
+use std::fs;
+use std::path::Path;
 
-pub fn merge_json(base: &mut Value, extension: &Value, overwrite_arrays: bool) {
-    match (base, extension) {
-        (Value::Object(base_map), Value::Object(ext_map)) => {
-            for (key, ext_value) in ext_map {
-                if let Some(base_value) = base_map.get_mut(key) {
-                    merge_json(base_value, ext_value, overwrite_arrays);
-                } else {
-                    base_map.insert(key.clone(), ext_value.clone());
-                }
-            }
+pub fn merge_json_files(file_paths: &[&str]) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut merged_map = Map::new();
+
+    for path_str in file_paths {
+        let path = Path::new(path_str);
+        if !path.exists() {
+            return Err(format!("File not found: {}", path_str).into());
         }
-        (Value::Array(base_arr), Value::Array(ext_arr)) => {
-            if overwrite_arrays {
-                *base_arr = ext_arr.clone();
-            } else {
-                let mut seen = HashSet::new();
-                for item in base_arr.iter() {
-                    if let Value::Object(obj) = item {
-                        if let Some(id) = obj.get("id").and_then(|v| v.as_str()) {
-                            seen.insert(id.to_string());
-                        }
-                    }
+
+        let content = fs::read_to_string(path)?;
+        let json_value: Value = serde_json::from_str(&content)?;
+
+        if let Value::Object(map) = json_value {
+            for (key, value) in map {
+                if merged_map.contains_key(&key) {
+                    eprintln!("Warning: Key '{}' already exists, overwriting.", key);
                 }
-                
-                for item in ext_arr {
-                    if let Value::Object(obj) = item {
-                        if let Some(id) = obj.get("id").and_then(|v| v.as_str()) {
-                            if !seen.contains(id) {
-                                base_arr.push(item.clone());
-                                seen.insert(id.to_string());
-                            }
-                        } else {
-                            base_arr.push(item.clone());
-                        }
-                    } else {
-                        base_arr.push(item.clone());
-                    }
-                }
+                merged_map.insert(key, value);
             }
-        }
-        (base, extension) => {
-            *base = extension.clone();
+        } else {
+            return Err("Top-level JSON value must be an object".into());
         }
     }
-}
 
-pub fn merge_json_with_strategy(
-    base: &Value,
-    extension: &Value,
-    strategy: MergeStrategy,
-) -> Value {
-    let mut result = base.clone();
-    match strategy {
-        MergeStrategy::Deep => merge_json(&mut result, extension, false),
-        MergeStrategy::Shallow => {
-            if let (Value::Object(base_map), Value::Object(ext_map)) = (&result, extension) {
-                let mut merged = base_map.clone();
-                for (key, value) in ext_map {
-                    merged.insert(key.clone(), value.clone());
-                }
-                result = Value::Object(merged);
-            }
-        }
-        MergeStrategy::OverwriteArrays => merge_json(&mut result, extension, true),
-    }
-    result
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum MergeStrategy {
-    Deep,
-    Shallow,
-    OverwriteArrays,
+    Ok(Value::Object(merged_map))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_deep_merge() {
-        let mut base = json!({
-            "name": "Base",
-            "nested": {
-                "value": 1,
-                "extra": "base"
-            }
-        });
-        
-        let extension = json!({
-            "nested": {
-                "value": 2,
-                "new": "extension"
-            },
-            "additional": "field"
-        });
-        
-        merge_json(&mut base, &extension, false);
-        
-        assert_eq!(base["name"], "Base");
-        assert_eq!(base["nested"]["value"], 2);
-        assert_eq!(base["nested"]["extra"], "base");
-        assert_eq!(base["nested"]["new"], "extension");
-        assert_eq!(base["additional"], "field");
+    fn test_merge_json_files() {
+        let mut file1 = NamedTempFile::new().unwrap();
+        let mut file2 = NamedTempFile::new().unwrap();
+
+        writeln!(file1, r#"{"a": 1, "b": "test"}"#).unwrap();
+        writeln!(file2, r#"{"c": true, "d": [1,2,3]}"#).unwrap();
+
+        let result = merge_json_files(&[
+            file1.path().to_str().unwrap(),
+            file2.path().to_str().unwrap(),
+        ]).unwrap();
+
+        assert_eq!(result["a"], 1);
+        assert_eq!(result["b"], "test");
+        assert_eq!(result["c"], true);
+        assert!(result["d"].is_array());
+    }
+
+    #[test]
+    fn test_overwrite_keys() {
+        let mut file1 = NamedTempFile::new().unwrap();
+        let mut file2 = NamedTempFile::new().unwrap();
+
+        writeln!(file1, r#"{"key": "first"}"#).unwrap();
+        writeln!(file2, r#"{"key": "second"}"#).unwrap();
+
+        let result = merge_json_files(&[
+            file1.path().to_str().unwrap(),
+            file2.path().to_str().unwrap(),
+        ]).unwrap();
+
+        assert_eq!(result["key"], "second");
     }
 }

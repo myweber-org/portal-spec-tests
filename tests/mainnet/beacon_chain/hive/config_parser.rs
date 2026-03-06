@@ -520,3 +520,140 @@ mod tests {
         assert!(errors.len() >= 2);
     }
 }
+use std::collections::HashMap;
+use std::env;
+use std::fs;
+
+#[derive(Debug, Clone)]
+pub struct Config {
+    pub database_url: String,
+    pub port: u16,
+    pub debug_mode: bool,
+    pub api_keys: Vec<String>,
+    pub timeout_seconds: u64,
+}
+
+impl Config {
+    pub fn from_file(path: &str) -> Result<Self, String> {
+        let content = fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read config file: {}", e))?;
+
+        let mut settings = HashMap::new();
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            if let Some((key, value)) = line.split_once('=') {
+                settings.insert(key.trim().to_string(), value.trim().to_string());
+            }
+        }
+
+        Self::from_hashmap(&settings)
+    }
+
+    pub fn from_hashmap(map: &HashMap<String, String>) -> Result<Self, String> {
+        let database_url = Self::get_value(map, "DATABASE_URL")
+            .or_else(|| env::var("DATABASE_URL").ok())
+            .unwrap_or_else(|| "postgres://localhost:5432/app".to_string());
+
+        let port = Self::get_value(map, "PORT")
+            .or_else(|| env::var("PORT").ok())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(8080);
+
+        let debug_mode = Self::get_value(map, "DEBUG")
+            .or_else(|| env::var("DEBUG").ok())
+            .map(|s| s.to_lowercase() == "true")
+            .unwrap_or(false);
+
+        let api_keys = Self::get_value(map, "API_KEYS")
+            .or_else(|| env::var("API_KEYS").ok())
+            .map(|s| s.split(',').map(|key| key.trim().to_string()).collect())
+            .unwrap_or_else(Vec::new);
+
+        let timeout_seconds = Self::get_value(map, "TIMEOUT_SECONDS")
+            .or_else(|| env::var("TIMEOUT_SECONDS").ok())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(30);
+
+        Ok(Config {
+            database_url,
+            port,
+            debug_mode,
+            api_keys,
+            timeout_seconds,
+        })
+    }
+
+    fn get_value(map: &HashMap<String, String>, key: &str) -> Option<String> {
+        map.get(key).map(|s| s.to_string())
+    }
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.database_url.is_empty() {
+            errors.push("DATABASE_URL cannot be empty".to_string());
+        }
+
+        if self.port == 0 {
+            errors.push("PORT must be greater than 0".to_string());
+        }
+
+        if self.timeout_seconds == 0 {
+            errors.push("TIMEOUT_SECONDS must be greater than 0".to_string());
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_config_from_hashmap() {
+        let mut map = HashMap::new();
+        map.insert("DATABASE_URL".to_string(), "postgres://test".to_string());
+        map.insert("PORT".to_string(), "3000".to_string());
+        map.insert("DEBUG".to_string(), "true".to_string());
+
+        let config = Config::from_hashmap(&map).unwrap();
+        assert_eq!(config.database_url, "postgres://test");
+        assert_eq!(config.port, 3000);
+        assert!(config.debug_mode);
+    }
+
+    #[test]
+    fn test_config_defaults() {
+        let map = HashMap::new();
+        let config = Config::from_hashmap(&map).unwrap();
+        assert_eq!(config.database_url, "postgres://localhost:5432/app");
+        assert_eq!(config.port, 8080);
+        assert!(!config.debug_mode);
+        assert!(config.api_keys.is_empty());
+        assert_eq!(config.timeout_seconds, 30);
+    }
+
+    #[test]
+    fn test_config_validation() {
+        let config = Config {
+            database_url: "".to_string(),
+            port: 0,
+            debug_mode: false,
+            api_keys: vec![],
+            timeout_seconds: 0,
+        };
+
+        let result = config.validate();
+        assert!(result.is_err());
+        let errors = result.unwrap_err();
+        assert_eq!(errors.len(), 3);
+    }
+}

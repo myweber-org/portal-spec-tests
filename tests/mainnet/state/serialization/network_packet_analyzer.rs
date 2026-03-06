@@ -273,4 +273,247 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     Ok(())
 }
-```
+```use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::str;
+
+#[derive(Debug, PartialEq)]
+pub enum Protocol {
+    TCP,
+    UDP,
+    ICMP,
+    Unknown,
+}
+
+#[derive(Debug)]
+pub struct Packet {
+    pub source_ip: IpAddr,
+    pub dest_ip: IpAddr,
+    pub protocol: Protocol,
+    pub payload: Vec<u8>,
+    pub timestamp: u64,
+}
+
+impl Packet {
+    pub fn new(raw_data: &[u8]) -> Option<Self> {
+        if raw_data.len() < 20 {
+            return None;
+        }
+
+        let version = (raw_data[0] >> 4) & 0x0F;
+        
+        let (source_ip, dest_ip, protocol, payload_start) = match version {
+            4 => Self::parse_ipv4(raw_data)?,
+            6 => Self::parse_ipv6(raw_data)?,
+            _ => return None,
+        };
+
+        let protocol_enum = match protocol {
+            6 => Protocol::TCP,
+            17 => Protocol::UDP,
+            1 => Protocol::ICMP,
+            _ => Protocol::Unknown,
+        };
+
+        let payload = raw_data[payload_start..].to_vec();
+
+        Some(Packet {
+            source_ip,
+            dest_ip,
+            protocol: protocol_enum,
+            payload,
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+        })
+    }
+
+    fn parse_ipv4(data: &[u8]) -> Option<(IpAddr, IpAddr, u8, usize)> {
+        if data.len() < 20 {
+            return None;
+        }
+
+        let ihl = (data[0] & 0x0F) as usize * 4;
+        let protocol = data[9];
+        
+        let source_ip = IpAddr::V4(Ipv4Addr::new(
+            data[12], data[13], data[14], data[15]
+        ));
+        
+        let dest_ip = IpAddr::V4(Ipv4Addr::new(
+            data[16], data[17], data[18], data[19]
+        ));
+
+        Some((source_ip, dest_ip, protocol, ihl))
+    }
+
+    fn parse_ipv6(data: &[u8]) -> Option<(IpAddr, IpAddr, u8, usize)> {
+        if data.len() < 40 {
+            return None;
+        }
+
+        let next_header = data[6];
+        let payload_length = u16::from_be_bytes([data[4], data[5]]) as usize;
+        
+        let source_ip = IpAddr::V6(Ipv6Addr::from([
+            data[8], data[9], data[10], data[11],
+            data[12], data[13], data[14], data[15],
+            data[16], data[17], data[18], data[19],
+            data[20], data[21], data[22], data[23],
+        ]));
+        
+        let dest_ip = IpAddr::V6(Ipv6Addr::from([
+            data[24], data[25], data[26], data[27],
+            data[28], data[29], data[30], data[31],
+            data[32], data[33], data[34], data[35],
+            data[36], data[37], data[38], data[39],
+        ]));
+
+        Some((source_ip, dest_ip, next_header, 40))
+    }
+
+    pub fn extract_http_info(&self) -> Option<String> {
+        if self.protocol != Protocol::TCP {
+            return None;
+        }
+
+        if let Ok(payload_str) = str::from_utf8(&self.payload) {
+            if payload_str.starts_with("GET") || payload_str.starts_with("POST") {
+                let first_line = payload_str.lines().next()?;
+                return Some(first_line.to_string());
+            }
+        }
+        None
+    }
+
+    pub fn is_local_traffic(&self) -> bool {
+        match (self.source_ip, self.dest_ip) {
+            (IpAddr::V4(src), IpAddr::V4(dst)) => {
+                src.is_private() || dst.is_private() || 
+                src.is_loopback() || dst.is_loopback()
+            }
+            (IpAddr::V6(src), IpAddr::V6(dst)) => {
+                src.is_loopback() || dst.is_loopback()
+            }
+            _ => false,
+        }
+    }
+}
+
+pub struct PacketAnalyzer {
+    packets: Vec<Packet>,
+    stats: AnalyzerStats,
+}
+
+#[derive(Debug, Default)]
+pub struct AnalyzerStats {
+    pub total_packets: usize,
+    pub tcp_count: usize,
+    pub udp_count: usize,
+    pub icmp_count: usize,
+    pub unknown_count: usize,
+    pub local_traffic: usize,
+}
+
+impl PacketAnalyzer {
+    pub fn new() -> Self {
+        PacketAnalyzer {
+            packets: Vec::new(),
+            stats: AnalyzerStats::default(),
+        }
+    }
+
+    pub fn add_packet(&mut self, raw_data: &[u8]) -> bool {
+        if let Some(packet) = Packet::new(raw_data) {
+            self.update_stats(&packet);
+            self.packets.push(packet);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn update_stats(&mut self, packet: &Packet) {
+        self.stats.total_packets += 1;
+        
+        match packet.protocol {
+            Protocol::TCP => self.stats.tcp_count += 1,
+            Protocol::UDP => self.stats.udp_count += 1,
+            Protocol::ICMP => self.stats.icmp_count += 1,
+            Protocol::Unknown => self.stats.unknown_count += 1,
+        }
+
+        if packet.is_local_traffic() {
+            self.stats.local_traffic += 1;
+        }
+    }
+
+    pub fn get_stats(&self) -> &AnalyzerStats {
+        &self.stats
+    }
+
+    pub fn find_http_requests(&self) -> Vec<String> {
+        self.packets
+            .iter()
+            .filter_map(|p| p.extract_http_info())
+            .collect()
+    }
+
+    pub fn clear(&mut self) {
+        self.packets.clear();
+        self.stats = AnalyzerStats::default();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ipv4_packet_parsing() {
+        let mut ipv4_data = vec![0x45, 0x00, 0x00, 0x1C];
+        ipv4_data.extend(vec![0x00, 0x00, 0x00, 0x00, 0x40, 0x06]);
+        ipv4_data.extend(vec![0x00, 0x00]);
+        ipv4_data.extend(vec![192, 168, 1, 1]);
+        ipv4_data.extend(vec![10, 0, 0, 1]);
+        ipv4_data.extend(vec![0x48, 0x54, 0x54, 0x50]);
+
+        let packet = Packet::new(&ipv4_data);
+        assert!(packet.is_some());
+        
+        let packet = packet.unwrap();
+        assert_eq!(packet.source_ip, IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)));
+        assert_eq!(packet.dest_ip, IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)));
+        assert_eq!(packet.protocol, Protocol::TCP);
+    }
+
+    #[test]
+    fn test_http_extraction() {
+        let http_request = b"GET /index.html HTTP/1.1\r\nHost: example.com\r\n\r\n";
+        let mut packet_data = vec![0x45, 0x00, 0x00, 0x3C];
+        packet_data.extend(vec![0x00, 0x00, 0x00, 0x00, 0x40, 0x06]);
+        packet_data.extend(vec![0x00, 0x00]);
+        packet_data.extend(vec![192, 168, 1, 100]);
+        packet_data.extend(vec![93, 184, 216, 34]);
+        packet_data.extend(http_request);
+
+        let packet = Packet::new(&packet_data).unwrap();
+        let http_info = packet.extract_http_info();
+        
+        assert!(http_info.is_some());
+        assert_eq!(http_info.unwrap(), "GET /index.html HTTP/1.1");
+    }
+
+    #[test]
+    fn test_local_traffic_detection() {
+        let local_packet = Packet {
+            source_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
+            dest_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 2)),
+            protocol: Protocol::TCP,
+            payload: Vec::new(),
+            timestamp: 0,
+        };
+
+        assert!(local_packet.is_local_traffic());
+    }
+}

@@ -317,4 +317,92 @@ mod tests {
         let decrypted_content = fs::read(decrypted_file.path()).unwrap();
         assert_eq!(original_content.to_vec(), decrypted_content);
     }
+}use std::fs;
+use std::io::{self, Read, Write};
+use std::path::Path;
+
+const BUFFER_SIZE: usize = 8192;
+
+pub fn xor_cipher(data: &mut [u8], key: &[u8]) {
+    let key_len = key.len();
+    for (i, byte) in data.iter_mut().enumerate() {
+        *byte ^= key[i % key_len];
+    }
+}
+
+pub fn process_file(input_path: &Path, output_path: &Path, key: &[u8]) -> io::Result<()> {
+    let mut input_file = fs::File::open(input_path)?;
+    let mut output_file = fs::File::create(output_path)?;
+    
+    let mut buffer = [0u8; BUFFER_SIZE];
+    
+    loop {
+        let bytes_read = input_file.read(&mut buffer)?;
+        if bytes_read == 0 {
+            break;
+        }
+        
+        let data_slice = &mut buffer[..bytes_read];
+        xor_cipher(data_slice, key);
+        output_file.write_all(data_slice)?;
+    }
+    
+    output_file.flush()?;
+    Ok(())
+}
+
+pub fn validate_key(key: &str) -> Result<Vec<u8>, &'static str> {
+    if key.is_empty() {
+        return Err("Encryption key cannot be empty");
+    }
+    if key.len() < 8 {
+        return Err("Encryption key must be at least 8 characters long");
+    }
+    Ok(key.as_bytes().to_vec())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+    
+    #[test]
+    fn test_xor_cipher_symmetry() {
+        let key = b"secret_key";
+        let mut data = b"Hello, World!".to_vec();
+        let original = data.clone();
+        
+        xor_cipher(&mut data, key);
+        assert_ne!(data, original);
+        
+        xor_cipher(&mut data, key);
+        assert_eq!(data, original);
+    }
+    
+    #[test]
+    fn test_file_encryption() {
+        let key = b"test_key_123";
+        let content = b"Test file content for encryption";
+        
+        let input_file = NamedTempFile::new().unwrap();
+        let output_file = NamedTempFile::new().unwrap();
+        
+        fs::write(input_file.path(), content).unwrap();
+        
+        process_file(input_file.path(), output_file.path(), key).unwrap();
+        
+        let encrypted = fs::read(output_file.path()).unwrap();
+        assert_ne!(encrypted, content);
+        
+        let mut decrypted = encrypted.clone();
+        xor_cipher(&mut decrypted, key);
+        assert_eq!(decrypted, content);
+    }
+    
+    #[test]
+    fn test_key_validation() {
+        assert!(validate_key("").is_err());
+        assert!(validate_key("short").is_err());
+        assert!(validate_key("valid_key_length").is_ok());
+    }
 }

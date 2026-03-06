@@ -128,3 +128,181 @@ mod tests {
         assert!((std_dev - 8.164965).abs() < 0.0001);
     }
 }
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use thiserror::Error;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataRecord {
+    pub id: u64,
+    pub timestamp: i64,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
+}
+
+#[derive(Debug, Error)]
+pub enum ProcessingError {
+    #[error("Invalid data format")]
+    InvalidFormat,
+    #[error("Data validation failed: {0}")]
+    ValidationFailed(String),
+    #[error("Transformation error: {0}")]
+    TransformationError(String),
+}
+
+pub struct DataProcessor {
+    config: ProcessingConfig,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProcessingConfig {
+    pub max_values: usize,
+    pub require_timestamp: bool,
+    pub validation_rules: Vec<ValidationRule>,
+}
+
+#[derive(Debug, Clone)]
+pub enum ValidationRule {
+    ValueRange { min: f64, max: f64 },
+    NonEmptyMetadata,
+    TimestampRecency { threshold_seconds: i64 },
+}
+
+impl DataProcessor {
+    pub fn new(config: ProcessingConfig) -> Self {
+        DataProcessor { config }
+    }
+
+    pub fn process(&self, record: &DataRecord) -> Result<DataRecord, ProcessingError> {
+        self.validate(record)?;
+        self.transform(record)
+    }
+
+    fn validate(&self, record: &DataRecord) -> Result<(), ProcessingError> {
+        if record.values.len() > self.config.max_values {
+            return Err(ProcessingError::ValidationFailed(
+                format!("Exceeds maximum values limit: {}", self.config.max_values)
+            ));
+        }
+
+        if self.config.require_timestamp && record.timestamp <= 0 {
+            return Err(ProcessingError::ValidationFailed(
+                "Invalid timestamp".to_string()
+            ));
+        }
+
+        for rule in &self.config.validation_rules {
+            match rule {
+                ValidationRule::ValueRange { min, max } => {
+                    for value in &record.values {
+                        if value < min || value > max {
+                            return Err(ProcessingError::ValidationFailed(
+                                format!("Value {} outside range [{}, {}]", value, min, max)
+                            ));
+                        }
+                    }
+                }
+                ValidationRule::NonEmptyMetadata => {
+                    if record.metadata.is_empty() {
+                        return Err(ProcessingError::ValidationFailed(
+                            "Metadata cannot be empty".to_string()
+                        ));
+                    }
+                }
+                ValidationRule::TimestampRecency { threshold_seconds } => {
+                    let current_time = chrono::Utc::now().timestamp();
+                    if current_time - record.timestamp > *threshold_seconds {
+                        return Err(ProcessingError::ValidationFailed(
+                            "Timestamp is too old".to_string()
+                        ));
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn transform(&self, record: &DataRecord) -> Result<DataRecord, ProcessingError> {
+        let mut transformed = record.clone();
+        
+        if !transformed.values.is_empty() {
+            let sum: f64 = transformed.values.iter().sum();
+            let mean = sum / transformed.values.len() as f64;
+            
+            transformed.metadata.insert(
+                "mean_value".to_string(),
+                format!("{:.4}", mean)
+            );
+            
+            transformed.metadata.insert(
+                "processed_at".to_string(),
+                chrono::Utc::now().to_rfc3339()
+            );
+        }
+        
+        transformed.values = transformed.values
+            .iter()
+            .map(|&v| v * 1.05)
+            .collect();
+        
+        Ok(transformed)
+    }
+}
+
+pub fn create_default_config() -> ProcessingConfig {
+    ProcessingConfig {
+        max_values: 100,
+        require_timestamp: true,
+        validation_rules: vec![
+            ValidationRule::ValueRange { min: 0.0, max: 1000.0 },
+            ValidationRule::NonEmptyMetadata,
+            ValidationRule::TimestampRecency { threshold_seconds: 86400 },
+        ],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_data_processing() {
+        let config = create_default_config();
+        let processor = DataProcessor::new(config);
+        
+        let mut metadata = HashMap::new();
+        metadata.insert("source".to_string(), "test".to_string());
+        
+        let record = DataRecord {
+            id: 1,
+            timestamp: chrono::Utc::now().timestamp(),
+            values: vec![10.0, 20.0, 30.0],
+            metadata,
+        };
+        
+        let result = processor.process(&record);
+        assert!(result.is_ok());
+        
+        let processed = result.unwrap();
+        assert_eq!(processed.values.len(), 3);
+        assert!(processed.metadata.contains_key("mean_value"));
+        assert!(processed.metadata.contains_key("processed_at"));
+    }
+    
+    #[test]
+    fn test_validation_failure() {
+        let config = create_default_config();
+        let processor = DataProcessor::new(config);
+        
+        let record = DataRecord {
+            id: 2,
+            timestamp: 0,
+            values: vec![1500.0],
+            metadata: HashMap::new(),
+        };
+        
+        let result = processor.process(&record);
+        assert!(result.is_err());
+    }
+}

@@ -394,3 +394,110 @@ mod tests {
         assert_eq!(column, vec!["b".to_string(), "e".to_string()]);
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+pub struct DataProcessor {
+    delimiter: char,
+    has_header: bool,
+}
+
+impl DataProcessor {
+    pub fn new(delimiter: char, has_header: bool) -> Self {
+        DataProcessor {
+            delimiter,
+            has_header,
+        }
+    }
+
+    pub fn process_file<P: AsRef<Path>>(&self, file_path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        let mut records = Vec::new();
+
+        for (line_number, line) in reader.lines().enumerate() {
+            let line = line?;
+            
+            if line.is_empty() {
+                continue;
+            }
+
+            let record: Vec<String> = line
+                .split(self.delimiter)
+                .map(|s| s.trim().to_string())
+                .collect();
+
+            if self.has_header && line_number == 0 {
+                continue;
+            }
+
+            if !self.validate_record(&record) {
+                return Err(format!("Invalid record at line {}", line_number + 1).into());
+            }
+
+            records.push(record);
+        }
+
+        Ok(records)
+    }
+
+    fn validate_record(&self, record: &[String]) -> bool {
+        !record.is_empty() && record.iter().all(|field| !field.is_empty())
+    }
+
+    pub fn calculate_statistics(&self, data: &[Vec<String>], column_index: usize) -> Option<f64> {
+        if data.is_empty() {
+            return None;
+        }
+
+        let values: Vec<f64> = data
+            .iter()
+            .filter_map(|record| record.get(column_index).and_then(|s| s.parse().ok()))
+            .collect();
+
+        if values.is_empty() {
+            return None;
+        }
+
+        let sum: f64 = values.iter().sum();
+        let count = values.len() as f64;
+        Some(sum / count)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_process_csv() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,city").unwrap();
+        writeln!(temp_file, "Alice,30,New York").unwrap();
+        writeln!(temp_file, "Bob,25,London").unwrap();
+
+        let processor = DataProcessor::new(',', true);
+        let result = processor.process_file(temp_file.path()).unwrap();
+        
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], vec!["Alice", "30", "New York"]);
+    }
+
+    #[test]
+    fn test_calculate_average() {
+        let data = vec![
+            vec!["10".to_string(), "20".to_string()],
+            vec!["30".to_string(), "40".to_string()],
+            vec!["50".to_string(), "60".to_string()],
+        ];
+        
+        let processor = DataProcessor::new(',', false);
+        let avg = processor.calculate_statistics(&data, 0).unwrap();
+        
+        assert!((avg - 30.0).abs() < 0.001);
+    }
+}

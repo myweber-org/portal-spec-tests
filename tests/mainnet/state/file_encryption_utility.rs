@@ -908,3 +908,124 @@ pub fn generate_secure_password(length: usize) -> String {
         })
         .collect()
 }
+use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce
+};
+use pbkdf2::{
+    password_hash::{
+        rand_core::RngCore,
+        PasswordHasher, SaltString
+    },
+    Params, Pbkdf2
+};
+use std::fs;
+
+const SALT_LENGTH: usize = 16;
+const NONCE_LENGTH: usize = 12;
+const PBKDF2_ITERATIONS: u32 = 100_000;
+
+pub struct EncryptionResult {
+    pub ciphertext: Vec<u8>,
+    pub salt: [u8; SALT_LENGTH],
+    pub nonce: [u8; NONCE_LENGTH],
+}
+
+pub fn derive_key(password: &str, salt: &[u8]) -> Result<Key<Aes256Gcm>, String> {
+    let salt_string = SaltString::b64_encode(salt)
+        .map_err(|e| format!("Salt encoding failed: {}", e))?;
+    
+    let params = Params {
+        rounds: PBKDF2_ITERATIONS,
+        output_length: 32,
+    };
+    
+    let password_hash = Pbkdf2
+        .hash_password_customized(password.as_bytes(), None, None, params, &salt_string)
+        .map_err(|e| format!("Key derivation failed: {}", e))?;
+    
+    let key_bytes = password_hash.hash.ok_or("No hash generated")?.as_bytes();
+    if key_bytes.len() != 32 {
+        return Err("Invalid key length".to_string());
+    }
+    
+    Ok(*Key::<Aes256Gcm>::from_slice(key_bytes))
+}
+
+pub fn encrypt_file(
+    file_path: &str,
+    password: &str
+) -> Result<EncryptionResult, String> {
+    let plaintext = fs::read(file_path)
+        .map_err(|e| format!("Failed to read file: {}", e))?;
+    
+    let mut salt = [0u8; SALT_LENGTH];
+    OsRng.fill_bytes(&mut salt);
+    
+    let mut nonce = [0u8; NONCE_LENGTH];
+    OsRng.fill_bytes(&mut nonce);
+    
+    let key = derive_key(password, &salt)?;
+    let cipher = Aes256Gcm::new(&key);
+    
+    let ciphertext = cipher
+        .encrypt(Nonce::from_slice(&nonce), plaintext.as_ref())
+        .map_err(|e| format!("Encryption failed: {}", e))?;
+    
+    Ok(EncryptionResult {
+        ciphertext,
+        salt,
+        nonce,
+    })
+}
+
+pub fn decrypt_file(
+    encrypted_data: &EncryptionResult,
+    password: &str
+) -> Result<Vec<u8>, String> {
+    let key = derive_key(password, &encrypted_data.salt)?;
+    let cipher = Aes256Gcm::new(&key);
+    
+    cipher
+        .decrypt(Nonce::from_slice(&encrypted_data.nonce), encrypted_data.ciphertext.as_ref())
+        .map_err(|e| format!("Decryption failed: {}", e))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+    
+    #[test]
+    fn test_encryption_roundtrip() {
+        let test_content = b"Test encryption and decryption";
+        let password = "secure_password_123";
+        
+        let mut temp_file = NamedTempFile::new().unwrap();
+        std::fs::write(temp_file.path(), test_content).unwrap();
+        
+        let encrypted = encrypt_file(temp_file.path().to_str().unwrap(), password)
+            .expect("Encryption should succeed");
+        
+        let decrypted = decrypt_file(&encrypted, password)
+            .expect("Decryption should succeed");
+        
+        assert_eq!(decrypted, test_content);
+    }
+    
+    #[test]
+    fn test_wrong_password_fails() {
+        let test_content = b"Sensitive data";
+        let password = "correct_password";
+        let wrong_password = "wrong_password";
+        
+        let mut temp_file = NamedTempFile::new().unwrap();
+        std::fs::write(temp_file.path(), test_content).unwrap();
+        
+        let encrypted = encrypt_file(temp_file.path().to_str().unwrap(), password)
+            .expect("Encryption should succeed");
+        
+        let result = decrypt_file(&encrypted, wrong_password);
+        assert!(result.is_err());
+    }
+}

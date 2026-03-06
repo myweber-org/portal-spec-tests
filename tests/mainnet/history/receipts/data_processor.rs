@@ -450,3 +450,169 @@ mod tests {
         assert_eq!(freq.get("B"), Some(&1));
     }
 }
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::error::Error;
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DataRecord {
+    pub id: u64,
+    pub timestamp: i64,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
+}
+
+#[derive(Debug)]
+pub struct ProcessedData {
+    pub record_id: u64,
+    pub normalized_values: Vec<f64>,
+    pub statistics: DataStatistics,
+    pub is_valid: bool,
+}
+
+#[derive(Debug)]
+pub struct DataStatistics {
+    pub mean: f64,
+    pub variance: f64,
+    pub min: f64,
+    pub max: f64,
+}
+
+pub struct DataProcessor {
+    validation_threshold: f64,
+}
+
+impl DataProcessor {
+    pub fn new(threshold: f64) -> Self {
+        DataProcessor {
+            validation_threshold: threshold,
+        }
+    }
+
+    pub fn process_record(&self, record: &DataRecord) -> Result<ProcessedData, Box<dyn Error>> {
+        if record.values.is_empty() {
+            return Err("Empty values vector".into());
+        }
+
+        let normalized = self.normalize_values(&record.values);
+        let stats = self.calculate_statistics(&normalized);
+        let is_valid = self.validate_record(&normalized, &stats);
+
+        Ok(ProcessedData {
+            record_id: record.id,
+            normalized_values: normalized,
+            statistics: stats,
+            is_valid,
+        })
+    }
+
+    fn normalize_values(&self, values: &[f64]) -> Vec<f64> {
+        if values.len() < 2 {
+            return values.to_vec();
+        }
+
+        let mean = values.iter().sum::<f64>() / values.len() as f64;
+        let variance = values.iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>() / values.len() as f64;
+        let std_dev = variance.sqrt();
+
+        if std_dev.abs() < 1e-10 {
+            return values.to_vec();
+        }
+
+        values.iter()
+            .map(|&x| (x - mean) / std_dev)
+            .collect()
+    }
+
+    fn calculate_statistics(&self, values: &[f64]) -> DataStatistics {
+        let count = values.len();
+        let sum: f64 = values.iter().sum();
+        let mean = sum / count as f64;
+        
+        let variance = values.iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>() / count as f64;
+        
+        let min = values.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+        let max = values.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+
+        DataStatistics {
+            mean,
+            variance,
+            min,
+            max,
+        }
+    }
+
+    fn validate_record(&self, values: &[f64], stats: &DataStatistics) -> bool {
+        if values.is_empty() {
+            return false;
+        }
+
+        let outlier_count = values.iter()
+            .filter(|&&x| (x - stats.mean).abs() > self.validation_threshold * stats.variance.sqrt())
+            .count();
+
+        outlier_count <= values.len() / 10
+    }
+
+    pub fn batch_process(&self, records: &[DataRecord]) -> Vec<Result<ProcessedData, Box<dyn Error>>> {
+        records.iter()
+            .map(|record| self.process_record(record))
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_normalization() {
+        let processor = DataProcessor::new(3.0);
+        let values = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let normalized = processor.normalize_values(&values);
+        
+        let mean = normalized.iter().sum::<f64>() / normalized.len() as f64;
+        let variance = normalized.iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>() / normalized.len() as f64;
+        
+        assert!(mean.abs() < 1e-10);
+        assert!((variance - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_statistics_calculation() {
+        let processor = DataProcessor::new(3.0);
+        let values = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let stats = processor.calculate_statistics(&values);
+        
+        assert_eq!(stats.mean, 3.0);
+        assert_eq!(stats.min, 1.0);
+        assert_eq!(stats.max, 5.0);
+    }
+
+    #[test]
+    fn test_record_processing() {
+        let processor = DataProcessor::new(3.0);
+        let mut metadata = HashMap::new();
+        metadata.insert("source".to_string(), "test".to_string());
+        
+        let record = DataRecord {
+            id: 1,
+            timestamp: 1234567890,
+            values: vec![1.0, 2.0, 3.0, 4.0, 5.0],
+            metadata,
+        };
+
+        let result = processor.process_record(&record);
+        assert!(result.is_ok());
+        
+        let processed = result.unwrap();
+        assert_eq!(processed.record_id, 1);
+        assert!(processed.is_valid);
+    }
+}

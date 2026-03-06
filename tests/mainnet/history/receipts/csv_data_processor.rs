@@ -204,4 +204,95 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     Ok(())
+}use std::error::Error;
+use std::fs::File;
+use csv::{Reader, Writer};
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    id: u32,
+    category: String,
+    value: f64,
+    active: bool,
+}
+
+impl DataRecord {
+    pub fn new(id: u32, category: String, value: f64, active: bool) -> Self {
+        Self { id, category, value, active }
+    }
+}
+
+pub struct DataProcessor {
+    records: Vec<DataRecord>,
+}
+
+impl DataProcessor {
+    pub fn from_csv(file_path: &str) -> Result<Self, Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let mut reader = Reader::from_reader(file);
+        let mut records = Vec::new();
+
+        for result in reader.deserialize() {
+            let record: DataRecord = result?;
+            records.push(record);
+        }
+
+        Ok(Self { records })
+    }
+
+    pub fn filter_by_category(&self, category: &str) -> Vec<DataRecord> {
+        self.records
+            .iter()
+            .filter(|r| r.category == category)
+            .cloned()
+            .collect()
+    }
+
+    pub fn calculate_average(&self) -> f64 {
+        if self.records.is_empty() {
+            return 0.0;
+        }
+        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        sum / self.records.len() as f64
+    }
+
+    pub fn export_filtered(&self, category: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
+        let filtered = self.filter_by_category(category);
+        let mut writer = Writer::from_path(output_path)?;
+
+        for record in filtered {
+            writer.serialize(record)?;
+        }
+
+        writer.flush()?;
+        Ok(())
+    }
+
+    pub fn get_active_records(&self) -> Vec<DataRecord> {
+        self.records
+            .iter()
+            .filter(|r| r.active)
+            .cloned()
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_data_processing() {
+        let records = vec![
+            DataRecord::new(1, "A".to_string(), 10.5, true),
+            DataRecord::new(2, "B".to_string(), 20.0, false),
+            DataRecord::new(3, "A".to_string(), 30.5, true),
+        ];
+
+        let processor = DataProcessor { records };
+        assert_eq!(processor.filter_by_category("A").len(), 2);
+        assert_eq!(processor.calculate_average(), 20.333333333333332);
+        assert_eq!(processor.get_active_records().len(), 2);
+    }
 }

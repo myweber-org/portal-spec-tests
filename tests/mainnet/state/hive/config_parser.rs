@@ -410,4 +410,99 @@ mod tests {
         let result = AppConfig::load_from_file("/nonexistent/path/config.yaml");
         assert!(matches!(result, Err(ConfigError::FileNotFound(_))));
     }
+}use std::collections::HashMap;
+use std::env;
+use regex::Regex;
+
+pub struct ConfigParser {
+    values: HashMap<String, String>,
+}
+
+impl ConfigParser {
+    pub fn new() -> Self {
+        ConfigParser {
+            values: HashMap::new(),
+        }
+    }
+
+    pub fn load_from_str(&mut self, content: &str) -> Result<(), String> {
+        let var_pattern = Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}").unwrap();
+        
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+            
+            if let Some(equal_pos) = trimmed.find('=') {
+                let key = trimmed[..equal_pos].trim().to_string();
+                let mut value = trimmed[equal_pos + 1..].trim().to_string();
+                
+                value = var_pattern.replace_all(&value, |caps: ®ex::Captures| {
+                    let var_name = &caps[1];
+                    env::var(var_name).unwrap_or_else(|_| String::new())
+                }).to_string();
+                
+                self.values.insert(key, value);
+            }
+        }
+        
+        Ok(())
+    }
+
+    pub fn get(&self, key: &str) -> Option<&String> {
+        self.values.get(key)
+    }
+
+    pub fn get_with_default(&self, key: &str, default: &str) -> String {
+        self.values.get(key).cloned().unwrap_or_else(|| default.to_string())
+    }
+
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.values.contains_key(key)
+    }
+
+    pub fn keys(&self) -> Vec<&String> {
+        self.values.keys().collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_basic_parsing() {
+        let mut parser = ConfigParser::new();
+        let config = r#"
+            server_host=localhost
+            server_port=8080
+            debug_mode=true
+        "#;
+        
+        parser.load_from_str(config).unwrap();
+        
+        assert_eq!(parser.get("server_host"), Some(&"localhost".to_string()));
+        assert_eq!(parser.get("server_port"), Some(&"8080".to_string()));
+        assert_eq!(parser.get_with_default("missing_key", "default_value"), "default_value");
+    }
+    
+    #[test]
+    fn test_environment_substitution() {
+        env::set_var("APP_PORT", "3000");
+        env::set_var("DB_HOST", "postgresql");
+        
+        let mut parser = ConfigParser::new();
+        let config = r#"
+            port=${APP_PORT}
+            database=${DB_HOST}
+            fallback=${NONEXISTENT}
+        "#;
+        
+        parser.load_from_str(config).unwrap();
+        
+        assert_eq!(parser.get("port"), Some(&"3000".to_string()));
+        assert_eq!(parser.get("database"), Some(&"postgresql".to_string()));
+        assert_eq!(parser.get("fallback"), Some(&"".to_string()));
+    }
 }

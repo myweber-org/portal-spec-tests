@@ -327,4 +327,175 @@ impl std::fmt::Display for CsvSummary {
         writeln!(f, "  Headers: {}", self.headers.join(", "))?;
         Ok(())
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{self, BufRead, Write};
+
+#[derive(Debug)]
+struct CSVData {
+    headers: Vec<String>,
+    rows: Vec<Vec<String>>,
+}
+
+impl CSVData {
+    fn from_file(path: &str) -> Result<Self, Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = io::BufReader::new(file);
+        let mut lines = reader.lines();
+        
+        let headers = if let Some(first_line) = lines.next() {
+            first_line?.split(',').map(|s| s.trim().to_string()).collect()
+        } else {
+            return Err("Empty CSV file".into());
+        };
+        
+        let mut rows = Vec::new();
+        for line in lines {
+            let row: Vec<String> = line?.split(',').map(|s| s.trim().to_string()).collect();
+            if row.len() == headers.len() {
+                rows.push(row);
+            }
+        }
+        
+        Ok(CSVData { headers, rows })
+    }
+    
+    fn column_stats(&self, column_index: usize) -> Option<ColumnStatistics> {
+        if column_index >= self.headers.len() {
+            return None;
+        }
+        
+        let mut numeric_values = Vec::new();
+        let mut string_values = Vec::new();
+        
+        for row in &self.rows {
+            if let Some(value) = row.get(column_index) {
+                if let Ok(num) = value.parse::<f64>() {
+                    numeric_values.push(num);
+                } else {
+                    string_values.push(value.clone());
+                }
+            }
+        }
+        
+        Some(ColumnStatistics {
+            column_name: self.headers[column_index].clone(),
+            numeric_count: numeric_values.len(),
+            string_count: string_values.len(),
+            numeric_stats: if !numeric_values.is_empty() {
+                Some(NumericStats::from_values(&numeric_values))
+            } else {
+                None
+            },
+            unique_strings: string_values.len(),
+        })
+    }
+    
+    fn filter_rows<F>(&self, predicate: F) -> Vec<Vec<String>>
+    where
+        F: Fn(&[String]) -> bool,
+    {
+        self.rows.iter()
+            .filter(|row| predicate(row))
+            .cloned()
+            .collect()
+    }
+    
+    fn to_string(&self) -> String {
+        let mut output = self.headers.join(",") + "\n";
+        for row in &self.rows {
+            output += &row.join(",");
+            output += "\n";
+        }
+        output
+    }
+}
+
+#[derive(Debug)]
+struct ColumnStatistics {
+    column_name: String,
+    numeric_count: usize,
+    string_count: usize,
+    numeric_stats: Option<NumericStats>,
+    unique_strings: usize,
+}
+
+#[derive(Debug)]
+struct NumericStats {
+    min: f64,
+    max: f64,
+    mean: f64,
+    median: f64,
+}
+
+impl NumericStats {
+    fn from_values(values: &[f64]) -> Self {
+        let mut sorted = values.to_vec();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        
+        let min = *sorted.first().unwrap_or(&0.0);
+        let max = *sorted.last().unwrap_or(&0.0);
+        
+        let sum: f64 = values.iter().sum();
+        let mean = sum / values.len() as f64;
+        
+        let median = if sorted.len() % 2 == 0 {
+            let mid = sorted.len() / 2;
+            (sorted[mid - 1] + sorted[mid]) / 2.0
+        } else {
+            sorted[sorted.len() / 2]
+        };
+        
+        NumericStats { min, max, mean, median }
+    }
+}
+
+fn process_csv_file(input_path: &str, output_path: Option<&str>) -> Result<(), Box<dyn Error>> {
+    let data = CSVData::from_file(input_path)?;
+    
+    println!("Loaded CSV with {} columns and {} rows", data.headers.len(), data.rows.len());
+    
+    for (i, header) in data.headers.iter().enumerate() {
+        if let Some(stats) = data.column_stats(i) {
+            println!("\nColumn '{}':", header);
+            println!("  Numeric values: {}", stats.numeric_count);
+            println!("  String values: {}", stats.string_count);
+            if let Some(num_stats) = stats.numeric_stats {
+                println!("  Min: {:.2}, Max: {:.2}", num_stats.min, num_stats.max);
+                println!("  Mean: {:.2}, Median: {:.2}", num_stats.mean, num_stats.median);
+            }
+        }
+    }
+    
+    if let Some(output) = output_path {
+        let filtered = data.filter_rows(|row| {
+            row.iter().any(|cell| !cell.is_empty())
+        });
+        
+        let mut file = File::create(output)?;
+        writeln!(file, "{}", data.headers.join(","))?;
+        for row in filtered {
+            writeln!(file, "{}", row.join(","))?;
+        }
+        println!("\nFiltered data written to: {}", output);
+    }
+    
+    Ok(())
+}
+
+fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    
+    if args.len() < 2 {
+        eprintln!("Usage: {} <input_csv> [output_csv]", args[0]);
+        std::process::exit(1);
+    }
+    
+    let input_file = &args[1];
+    let output_file = if args.len() > 2 { Some(args[2].as_str()) } else { None };
+    
+    if let Err(e) = process_csv_file(input_file, output_file) {
+        eprintln!("Error processing CSV: {}", e);
+        std::process::exit(1);
+    }
 }

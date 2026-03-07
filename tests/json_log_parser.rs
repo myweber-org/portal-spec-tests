@@ -338,3 +338,192 @@ mod tests {
         assert_eq!(results[0].message, "Request received");
     }
 }
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct LogEntry {
+    timestamp: String,
+    level: String,
+    service: String,
+    message: String,
+    metadata: Option<HashMap<String, String>>,
+}
+
+struct LogAnalyzer {
+    entries: Vec<LogEntry>,
+    level_counts: HashMap<String, usize>,
+    service_counts: HashMap<String, usize>,
+}
+
+impl LogAnalyzer {
+    fn new() -> Self {
+        LogAnalyzer {
+            entries: Vec::new(),
+            level_counts: HashMap::new(),
+            service_counts: HashMap::new(),
+        }
+    }
+
+    fn load_from_file<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn std::error::Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+
+        for line in reader.lines() {
+            let line = line?;
+            if line.trim().is_empty() {
+                continue;
+            }
+
+            match serde_json::from_str::<LogEntry>(&line) {
+                Ok(entry) => {
+                    self.process_entry(entry);
+                }
+                Err(e) => eprintln!("Failed to parse line: {}. Error: {}", line, e),
+            }
+        }
+
+        Ok(())
+    }
+
+    fn process_entry(&mut self, entry: LogEntry) {
+        *self.level_counts.entry(entry.level.clone()).or_insert(0) += 1;
+        *self.service_counts.entry(entry.service.clone()).or_insert(0) += 1;
+        self.entries.push(entry);
+    }
+
+    fn filter_by_level(&self, level: &str) -> Vec<&LogEntry> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.level.eq_ignore_ascii_case(level))
+            .collect()
+    }
+
+    fn filter_by_service(&self, service: &str) -> Vec<&LogEntry> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.service.eq_ignore_ascii_case(service))
+            .collect()
+    }
+
+    fn generate_summary(&self) -> String {
+        let total_entries = self.entries.len();
+        let mut summary = format!("Total log entries: {}\n", total_entries);
+
+        summary.push_str("\nLog level distribution:\n");
+        for (level, count) in &self.level_counts {
+            let percentage = (*count as f64 / total_entries as f64) * 100.0;
+            summary.push_str(&format!("  {}: {} ({:.1}%)\n", level, count, percentage));
+        }
+
+        summary.push_str("\nService distribution:\n");
+        for (service, count) in &self.service_counts {
+            let percentage = (*count as f64 / total_entries as f64) * 100.0;
+            summary.push_str(&format!("  {}: {} ({:.1}%)\n", service, count, percentage));
+        }
+
+        summary
+    }
+
+    fn find_errors_with_metadata(&self) -> Vec<&LogEntry> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.level == "ERROR" && entry.metadata.is_some())
+            .collect()
+    }
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut analyzer = LogAnalyzer::new();
+    
+    analyzer.load_from_file("logs.jsonl")?;
+    
+    println!("{}", analyzer.generate_summary());
+    
+    let errors = analyzer.filter_by_level("ERROR");
+    println!("\nFound {} ERROR entries", errors.len());
+    
+    let api_entries = analyzer.filter_by_service("api");
+    println!("Found {} API service entries", api_entries.len());
+    
+    let errors_with_metadata = analyzer.find_errors_with_metadata();
+    println!("Found {} ERROR entries with metadata", errors_with_metadata.len());
+    
+    if !errors_with_metadata.is_empty() {
+        println!("\nSample error with metadata:");
+        let sample = &errors_with_metadata[0];
+        println!("Timestamp: {}", sample.timestamp);
+        println!("Message: {}", sample.message);
+        if let Some(metadata) = &sample.metadata {
+            println!("Metadata: {:?}", metadata);
+        }
+    }
+    
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_log_analyzer() {
+        let mut analyzer = LogAnalyzer::new();
+        
+        let entry1 = LogEntry {
+            timestamp: "2024-01-15T10:30:00Z".to_string(),
+            level: "INFO".to_string(),
+            service: "api".to_string(),
+            message: "Request processed".to_string(),
+            metadata: None,
+        };
+        
+        let entry2 = LogEntry {
+            timestamp: "2024-01-15T10:31:00Z".to_string(),
+            level: "ERROR".to_string(),
+            service: "database".to_string(),
+            message: "Connection failed".to_string(),
+            metadata: Some({
+                let mut map = HashMap::new();
+                map.insert("error_code".to_string(), "DB_CONN_001".to_string());
+                map.insert("retry_count".to_string(), "3".to_string());
+                map
+            }),
+        };
+        
+        analyzer.process_entry(entry1);
+        analyzer.process_entry(entry2);
+        
+        assert_eq!(analyzer.entries.len(), 2);
+        assert_eq!(analyzer.level_counts.get("INFO"), Some(&1));
+        assert_eq!(analyzer.level_counts.get("ERROR"), Some(&1));
+        assert_eq!(analyzer.service_counts.get("api"), Some(&1));
+        assert_eq!(analyzer.service_counts.get("database"), Some(&1));
+        
+        let errors = analyzer.filter_by_level("ERROR");
+        assert_eq!(errors.len(), 1);
+        
+        let errors_with_metadata = analyzer.find_errors_with_metadata();
+        assert_eq!(errors_with_metadata.len(), 1);
+    }
+
+    #[test]
+    fn test_load_from_file() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        let log_data = r#"{"timestamp":"2024-01-15T10:30:00Z","level":"INFO","service":"api","message":"Request processed","metadata":null}
+{"timestamp":"2024-01-15T10:31:00Z","level":"ERROR","service":"database","message":"Connection failed","metadata":{"error_code":"DB_CONN_001"}}"#;
+        
+        writeln!(temp_file, "{}", log_data).unwrap();
+        
+        let mut analyzer = LogAnalyzer::new();
+        let result = analyzer.load_from_file(temp_file.path());
+        
+        assert!(result.is_ok());
+        assert_eq!(analyzer.entries.len(), 2);
+    }
+}

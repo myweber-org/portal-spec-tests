@@ -236,4 +236,128 @@ mod tests {
         let result = parse_csv_file(temp_file.path());
         assert!(result.is_err());
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+pub struct CsvConfig {
+    delimiter: char,
+    selected_columns: Vec<usize>,
+    skip_header: bool,
+}
+
+impl Default for CsvConfig {
+    fn default() -> Self {
+        CsvConfig {
+            delimiter: ',',
+            selected_columns: Vec::new(),
+            skip_header: false,
+        }
+    }
+}
+
+pub struct CsvProcessor {
+    config: CsvConfig,
+}
+
+impl CsvProcessor {
+    pub fn new(config: CsvConfig) -> Self {
+        CsvProcessor { config }
+    }
+
+    pub fn process_file<P: AsRef<Path>>(&self, path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut results = Vec::new();
+        let mut line_number = 0;
+
+        for line in reader.lines() {
+            let line = line?;
+            line_number += 1;
+
+            if self.config.skip_header && line_number == 1 {
+                continue;
+            }
+
+            let parsed_row = self.parse_line(&line);
+            let filtered_row = self.filter_columns(parsed_row);
+            results.push(filtered_row);
+        }
+
+        Ok(results)
+    }
+
+    fn parse_line(&self, line: &str) -> Vec<String> {
+        line.split(self.config.delimiter)
+            .map(|s| s.trim().to_string())
+            .collect()
+    }
+
+    fn filter_columns(&self, row: Vec<String>) -> Vec<String> {
+        if self.config.selected_columns.is_empty() {
+            return row;
+        }
+
+        self.config
+            .selected_columns
+            .iter()
+            .filter_map(|&idx| row.get(idx).cloned())
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_basic_parsing() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,city").unwrap();
+        writeln!(temp_file, "Alice,30,New York").unwrap();
+        writeln!(temp_file, "Bob,25,London").unwrap();
+
+        let config = CsvConfig::default();
+        let processor = CsvProcessor::new(config);
+        let result = processor.process_file(temp_file.path()).unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], vec!["Alice", "30", "New York"]);
+    }
+
+    #[test]
+    fn test_column_selection() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "A,B,C,D").unwrap();
+        writeln!(temp_file, "1,2,3,4").unwrap();
+
+        let config = CsvConfig {
+            selected_columns: vec![0, 2],
+            ..Default::default()
+        };
+        let processor = CsvProcessor::new(config);
+        let result = processor.process_file(temp_file.path()).unwrap();
+
+        assert_eq!(result[0], vec!["1", "3"]);
+    }
+
+    #[test]
+    fn test_skip_header() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "header").unwrap();
+        writeln!(temp_file, "data").unwrap();
+
+        let config = CsvConfig {
+            skip_header: true,
+            ..Default::default()
+        };
+        let processor = CsvProcessor::new(config);
+        let result = processor.process_file(temp_file.path()).unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], vec!["data"]);
+    }
 }

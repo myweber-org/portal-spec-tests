@@ -216,3 +216,51 @@ mod tests {
         assert!(result.is_err());
     }
 }
+use reqwest;
+use serde::Deserialize;
+use std::error::Error;
+
+#[derive(Deserialize, Debug)]
+struct WeatherData {
+    main: MainData,
+    name: String,
+}
+
+#[derive(Deserialize, Debug)]
+struct MainData {
+    temp: f64,
+    humidity: u8,
+}
+
+async fn fetch_weather(api_key: &str, city: &str) -> Result<WeatherData, Box<dyn Error>> {
+    let url = format!(
+        "https://api.openweathermap.org/data/2.5/weather?q={}&appid={}&units=metric",
+        city, api_key
+    );
+    
+    let response = reqwest::get(&url).await?;
+    
+    if !response.status().is_success() {
+        return Err(format!("API request failed with status: {}", response.status()).into());
+    }
+    
+    let weather: WeatherData = response.json().await?;
+    Ok(weather)
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
+    let api_key = "YOUR_API_KEY_HERE";
+    let city = "London";
+    
+    match fetch_weather(api_key, city).await {
+        Ok(data) => {
+            println!("Weather in {}:", data.name);
+            println!("Temperature: {:.1}°C", data.main.temp);
+            println!("Humidity: {}%", data.main.humidity);
+        }
+        Err(e) => eprintln!("Error fetching weather data: {}", e),
+    }
+    
+    Ok(())
+}

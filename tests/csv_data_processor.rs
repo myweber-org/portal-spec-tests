@@ -337,4 +337,151 @@ mod tests {
         assert_eq!(processor.filter_by_category("A").len(), 1);
         assert_eq!(processor.get_active_records().len(), 1);
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+
+pub struct CsvProcessor {
+    headers: Vec<String>,
+    data: Vec<Vec<String>>,
+}
+
+impl CsvProcessor {
+    pub fn from_file(path: &str) -> Result<Self, Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut lines = reader.lines();
+
+        let headers = if let Some(first_line) = lines.next() {
+            first_line?
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .collect()
+        } else {
+            return Err("Empty CSV file".into());
+        };
+
+        let mut data = Vec::new();
+        for line in lines {
+            let record: Vec<String> = line?
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .collect();
+            if record.len() == headers.len() {
+                data.push(record);
+            }
+        }
+
+        Ok(CsvProcessor { headers, data })
+    }
+
+    pub fn filter_by_column(&self, column_name: &str, predicate: impl Fn(&str) -> bool) -> Vec<Vec<String>> {
+        let column_index = self.headers.iter().position(|h| h == column_name);
+        
+        column_index.map_or_else(Vec::new, |idx| {
+            self.data
+                .iter()
+                .filter(|row| predicate(&row[idx]))
+                .cloned()
+                .collect()
+        })
+    }
+
+    pub fn aggregate_numeric_column(&self, column_name: &str) -> Option<f64> {
+        let column_index = self.headers.iter().position(|h| h == column_name)?;
+        
+        let sum: f64 = self.data
+            .iter()
+            .filter_map(|row| row[column_index].parse::<f64>().ok())
+            .sum();
+        
+        Some(sum)
+    }
+
+    pub fn get_column_stats(&self, column_name: &str) -> Option<(f64, f64, f64)> {
+        let column_index = self.headers.iter().position(|h| h == column_name)?;
+        
+        let values: Vec<f64> = self.data
+            .iter()
+            .filter_map(|row| row[column_index].parse::<f64>().ok())
+            .collect();
+        
+        if values.is_empty() {
+            return None;
+        }
+        
+        let count = values.len() as f64;
+        let sum: f64 = values.iter().sum();
+        let mean = sum / count;
+        
+        let variance: f64 = values
+            .iter()
+            .map(|v| (v - mean).powi(2))
+            .sum::<f64>() / count;
+        
+        Some((mean, variance, variance.sqrt()))
+    }
+
+    pub fn row_count(&self) -> usize {
+        self.data.len()
+    }
+
+    pub fn column_count(&self) -> usize {
+        self.headers.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    fn create_test_csv() -> NamedTempFile {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "name,age,salary").unwrap();
+        writeln!(file, "Alice,30,50000").unwrap();
+        writeln!(file, "Bob,25,45000").unwrap();
+        writeln!(file, "Charlie,35,60000").unwrap();
+        writeln!(file, "Diana,28,55000").unwrap();
+        file
+    }
+
+    #[test]
+    fn test_csv_loading() {
+        let file = create_test_csv();
+        let processor = CsvProcessor::from_file(file.path().to_str().unwrap()).unwrap();
+        
+        assert_eq!(processor.row_count(), 4);
+        assert_eq!(processor.column_count(), 3);
+        assert_eq!(processor.headers, vec!["name", "age", "salary"]);
+    }
+
+    #[test]
+    fn test_filter_by_column() {
+        let file = create_test_csv();
+        let processor = CsvProcessor::from_file(file.path().to_str().unwrap()).unwrap();
+        
+        let filtered = processor.filter_by_column("age", |age| age.parse::<i32>().unwrap() > 30);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0][0], "Charlie");
+    }
+
+    #[test]
+    fn test_aggregate_column() {
+        let file = create_test_csv();
+        let processor = CsvProcessor::from_file(file.path().to_str().unwrap()).unwrap();
+        
+        let total_salary = processor.aggregate_numeric_column("salary").unwrap();
+        assert_eq!(total_salary, 210000.0);
+    }
+
+    #[test]
+    fn test_column_stats() {
+        let file = create_test_csv();
+        let processor = CsvProcessor::from_file(file.path().to_str().unwrap()).unwrap();
+        
+        let stats = processor.get_column_stats("age").unwrap();
+        assert!((stats.0 - 29.5).abs() < 0.001);
+    }
 }

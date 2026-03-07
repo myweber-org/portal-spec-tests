@@ -1,60 +1,75 @@
-use serde_json::{Map, Value};
-use std::env;
+
+use std::collections::HashMap;
 use std::fs;
-use std::process;
+use std::path::Path;
 
-fn main() {
-    let args: Vec<String> = env::args().collect();
-    if args.len() < 3 {
-        eprintln!("Usage: {} <output_file> <input_file1> [input_file2 ...]", args[0]);
-        process::exit(1);
-    }
+type JsonValue = serde_json::Value;
 
-    let output_path = &args[1];
-    let input_paths = &args[2..];
+pub fn merge_json_files(file_paths: &[&str]) -> Result<JsonValue, Box<dyn std::error::Error>> {
+    let mut merged_map = HashMap::new();
 
-    let mut merged_map = Map::new();
+    for path_str in file_paths {
+        let path = Path::new(path_str);
+        if !path.exists() {
+            return Err(format!("File not found: {}", path_str).into());
+        }
 
-    for path in input_paths {
-        let content = match fs::read_to_string(path) {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("Failed to read file {}: {}", path, e);
-                process::exit(1);
-            }
-        };
+        let content = fs::read_to_string(path)?;
+        let json_data: JsonValue = serde_json::from_str(&content)?;
 
-        let json_value: Value = match serde_json::from_str(&content) {
-            Ok(v) => v,
-            Err(e) => {
-                eprintln!("Failed to parse JSON from {}: {}", path, e);
-                process::exit(1);
-            }
-        };
-
-        if let Value::Object(map) = json_value {
+        if let JsonValue::Object(map) = json_data {
             for (key, value) in map {
+                if merged_map.contains_key(&key) {
+                    eprintln!("Warning: Duplicate key '{}' found in {}", key, path_str);
+                }
                 merged_map.insert(key, value);
             }
         } else {
-            eprintln!("File {} does not contain a JSON object", path);
-            process::exit(1);
+            return Err("Each JSON file must contain an object at the root".into());
         }
     }
 
-    let merged_json = Value::Object(merged_map);
-    let json_string = match serde_json::to_string_pretty(&merged_json) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("Failed to serialize merged JSON: {}", e);
-            process::exit(1);
-        }
-    };
+    let merged_json = JsonValue::Object(
+        merged_map
+            .into_iter()
+            .map(|(k, v)| (k, v))
+            .collect()
+    );
 
-    if let Err(e) = fs::write(output_path, json_string) {
-        eprintln!("Failed to write output file {}: {}", output_path, e);
-        process::exit(1);
+    Ok(merged_json)
+}
+
+pub fn write_merged_json(output_path: &str, json_value: &JsonValue) -> Result<(), Box<dyn std::error::Error>> {
+    let json_string = serde_json::to_string_pretty(json_value)?;
+    fs::write(output_path, json_string)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_merge_json_files() {
+        let file1_content = r#"{"name": "test", "count": 42}"#;
+        let file2_content = r#"{"enabled": true, "tags": ["a", "b"]}"#;
+
+        let file1 = NamedTempFile::new().unwrap();
+        let file2 = NamedTempFile::new().unwrap();
+
+        fs::write(file1.path(), file1_content).unwrap();
+        fs::write(file2.path(), file2_content).unwrap();
+
+        let paths = [
+            file1.path().to_str().unwrap(),
+            file2.path().to_str().unwrap(),
+        ];
+
+        let result = merge_json_files(&paths).unwrap();
+        assert!(result.get("name").is_some());
+        assert!(result.get("enabled").is_some());
+        assert_eq!(result["count"], 42);
+        assert_eq!(result["enabled"], true);
     }
-
-    println!("Successfully merged {} files into {}", input_paths.len(), output_path);
 }

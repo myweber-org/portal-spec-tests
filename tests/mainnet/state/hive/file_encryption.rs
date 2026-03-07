@@ -534,3 +534,85 @@ mod tests {
         Ok(())
     }
 }
+use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
+use rand::RngCore;
+use std::fs;
+use std::io::{Read, Write};
+
+type Aes256CbcEnc = cbc::Encryptor<aes::Aes256>;
+type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
+
+const KEY_SIZE: usize = 32;
+const IV_SIZE: usize = 16;
+
+pub fn encrypt_file(input_path: &str, output_path: &str, key: &[u8; KEY_SIZE]) -> Result<(), String> {
+    let mut file = fs::File::open(input_path).map_err(|e| format!("Failed to open input file: {}", e))?;
+    let mut plaintext = Vec::new();
+    file.read_to_end(&mut plaintext).map_err(|e| format!("Failed to read file: {}", e))?;
+
+    let mut iv = [0u8; IV_SIZE];
+    rand::thread_rng().fill_bytes(&mut iv);
+
+    let ciphertext = Aes256CbcEnc::new(key.into(), &iv.into())
+        .encrypt_padded_vec_mut::<Pkcs7>(&plaintext);
+
+    let mut output = fs::File::create(output_path).map_err(|e| format!("Failed to create output file: {}", e))?;
+    output.write_all(&iv).map_err(|e| format!("Failed to write IV: {}", e))?;
+    output.write_all(&ciphertext).map_err(|e| format!("Failed to write ciphertext: {}", e))?;
+
+    Ok(())
+}
+
+pub fn decrypt_file(input_path: &str, output_path: &str, key: &[u8; KEY_SIZE]) -> Result<(), String> {
+    let mut file = fs::File::open(input_path).map_err(|e| format!("Failed to open input file: {}", e))?;
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer).map_err(|e| format!("Failed to read file: {}", e))?;
+
+    if buffer.len() < IV_SIZE {
+        return Err("File too short to contain IV".to_string());
+    }
+
+    let (iv, ciphertext) = buffer.split_at(IV_SIZE);
+    let iv_array: [u8; IV_SIZE] = iv.try_into().unwrap();
+
+    let plaintext = Aes256CbcDec::new(key.into(), &iv_array.into())
+        .decrypt_padded_vec_mut::<Pkcs7>(ciphertext)
+        .map_err(|e| format!("Decryption failed: {}", e))?;
+
+    fs::write(output_path, plaintext).map_err(|e| format!("Failed to write output file: {}", e))?;
+
+    Ok(())
+}
+
+pub fn generate_key() -> [u8; KEY_SIZE] {
+    let mut key = [0u8; KEY_SIZE];
+    rand::thread_rng().fill_bytes(&mut key);
+    key
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn test_encryption_decryption() {
+        let test_data = b"Hello, this is a secret message!";
+        let input_file = "test_input.txt";
+        let encrypted_file = "test_encrypted.bin";
+        let decrypted_file = "test_decrypted.txt";
+
+        fs::write(input_file, test_data).unwrap();
+        let key = generate_key();
+
+        encrypt_file(input_file, encrypted_file, &key).expect("Encryption failed");
+        decrypt_file(encrypted_file, decrypted_file, &key).expect("Decryption failed");
+
+        let decrypted_data = fs::read(decrypted_file).unwrap();
+        assert_eq!(test_data.to_vec(), decrypted_data);
+
+        fs::remove_file(input_file).ok();
+        fs::remove_file(encrypted_file).ok();
+        fs::remove_file(decrypted_file).ok();
+    }
+}

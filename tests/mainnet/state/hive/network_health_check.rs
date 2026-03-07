@@ -86,4 +86,75 @@ mod tests {
         let rate = result.unwrap();
         println!("Localhost connectivity: {:.1}%", rate);
     }
+}use std::net::{TcpStream, ToSocketAddrs};
+use std::time::Duration;
+use std::process::Command;
+
+pub struct NetworkCheck {
+    timeout: Duration,
+}
+
+impl NetworkCheck {
+    pub fn new(timeout_secs: u64) -> Self {
+        NetworkCheck {
+            timeout: Duration::from_secs(timeout_secs),
+        }
+    }
+
+    pub fn ping_host(&self, host: &str) -> bool {
+        let output = if cfg!(target_os = "windows") {
+            Command::new("cmd")
+                .args(["/C", "ping", "-n", "1", "-w", "1000", host])
+                .output()
+        } else {
+            Command::new("ping")
+                .args(["-c", "1", "-W", "1", host])
+                .output()
+        };
+
+        match output {
+            Ok(output) => output.status.success(),
+            Err(_) => false,
+        }
+    }
+
+    pub fn check_port(&self, addr: &str, port: u16) -> bool {
+        let socket_addr = format!("{}:{}", addr, port);
+        match socket_addr.to_socket_addrs() {
+            Ok(mut addrs) => {
+                if let Some(addr) = addrs.next() {
+                    TcpStream::connect_timeout(&addr, self.timeout).is_ok()
+                } else {
+                    false
+                }
+            }
+            Err(_) => false,
+        }
+    }
+
+    pub fn scan_ports(&self, addr: &str, ports: &[u16]) -> Vec<u16> {
+        ports
+            .iter()
+            .filter(|&&port| self.check_port(addr, port))
+            .cloned()
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_network_check_creation() {
+        let checker = NetworkCheck::new(5);
+        assert_eq!(checker.timeout, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn test_port_check_localhost() {
+        let checker = NetworkCheck::new(2);
+        // Test with a port that should be closed
+        assert!(!checker.check_port("localhost", 9999));
+    }
 }

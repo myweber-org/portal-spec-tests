@@ -247,4 +247,59 @@ mod tests {
         
         assert!(generator.generate().is_err());
     }
+}use rand::Rng;
+
+pub fn generate_password(length: usize, use_uppercase: bool, use_numbers: bool, use_special: bool) -> String {
+    let mut charset = String::from("abcdefghijklmnopqrstuvwxyz");
+    let uppercase = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    let numbers = "0123456789";
+    let special = "!@#$%^&*()_+-=[]{}|;:,.<>?";
+
+    if use_uppercase {
+        charset.push_str(uppercase);
+    }
+    if use_numbers {
+        charset.push_str(numbers);
+    }
+    if use_special {
+        charset.push_str(special);
+    }
+
+    let charset_bytes = charset.as_bytes();
+    let mut rng = rand::thread_rng();
+    let password: String = (0..length)
+        .map(|_| {
+            let idx = rng.gen_range(0..charset_bytes.len());
+            charset_bytes[idx] as char
+        })
+        .collect();
+
+    password
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_password_length() {
+        let password = generate_password(12, true, true, true);
+        assert_eq!(password.len(), 12);
+    }
+
+    #[test]
+    fn test_lowercase_only() {
+        let password = generate_password(8, false, false, false);
+        assert!(password.chars().all(|c| c.is_lowercase()));
+    }
+
+    #[test]
+    fn test_character_set_inclusion() {
+        let password = generate_password(20, true, true, true);
+        let has_uppercase = password.chars().any(|c| c.is_uppercase());
+        let has_digit = password.chars().any(|c| c.is_digit(10));
+        let has_special = password.chars().any(|c| "!@#$%^&*()_+-=[]{}|;:,.<>?".contains(c));
+        
+        assert!(has_uppercase || has_digit || has_special);
+    }
 }

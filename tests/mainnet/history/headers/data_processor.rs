@@ -335,4 +335,96 @@ impl ValidationRule {
             required,
         }
     }
+}use std::collections::HashMap;
+
+pub struct DataProcessor {
+    data: Vec<HashMap<String, f64>>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            data: Vec::new(),
+        }
+    }
+
+    pub fn add_record(&mut self, record: HashMap<String, f64>) {
+        self.data.push(record);
+    }
+
+    pub fn filter_by_threshold(&self, field: &str, threshold: f64) -> Vec<HashMap<String, f64>> {
+        self.data
+            .iter()
+            .filter(|record| {
+                record
+                    .get(field)
+                    .map_or(false, |&value| value >= threshold)
+            })
+            .cloned()
+            .collect()
+    }
+
+    pub fn aggregate_by_field(&self, group_field: &str, sum_field: &str) -> HashMap<String, f64> {
+        let mut result = HashMap::new();
+        
+        for record in &self.data {
+            if let Some(group_value) = record.get(group_field) {
+                let group_key = group_value.to_string();
+                let sum_value = record.get(sum_field).unwrap_or(&0.0);
+                
+                *result.entry(group_key).or_insert(0.0) += sum_value;
+            }
+        }
+        
+        result
+    }
+
+    pub fn calculate_average(&self, field: &str) -> Option<f64> {
+        if self.data.is_empty() {
+            return None;
+        }
+        
+        let sum: f64 = self.data
+            .iter()
+            .filter_map(|record| record.get(field))
+            .sum();
+        
+        Some(sum / self.data.len() as f64)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_filter_and_aggregate() {
+        let mut processor = DataProcessor::new();
+        
+        let mut record1 = HashMap::new();
+        record1.insert("category".to_string(), 1.0);
+        record1.insert("value".to_string(), 100.0);
+        
+        let mut record2 = HashMap::new();
+        record2.insert("category".to_string(), 1.0);
+        record2.insert("value".to_string(), 200.0);
+        
+        let mut record3 = HashMap::new();
+        record3.insert("category".to_string(), 2.0);
+        record3.insert("value".to_string(), 50.0);
+        
+        processor.add_record(record1);
+        processor.add_record(record2);
+        processor.add_record(record3);
+        
+        let filtered = processor.filter_by_threshold("value", 150.0);
+        assert_eq!(filtered.len(), 1);
+        
+        let aggregated = processor.aggregate_by_field("category", "value");
+        assert_eq!(aggregated.get("1"), Some(&300.0));
+        assert_eq!(aggregated.get("2"), Some(&50.0));
+        
+        let avg = processor.calculate_average("value").unwrap();
+        assert!((avg - 116.666).abs() < 0.001);
+    }
 }

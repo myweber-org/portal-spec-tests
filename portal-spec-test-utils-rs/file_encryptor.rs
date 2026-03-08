@@ -193,3 +193,56 @@ mod tests {
         assert_eq!(decrypted, data);
     }
 }
+use std::fs;
+use std::io::{self, Read, Write};
+use std::path::Path;
+
+pub fn xor_encrypt_file(input_path: &str, output_path: &str, key: &[u8]) -> io::Result<()> {
+    let input_data = fs::read(input_path)?;
+    let encrypted_data: Vec<u8> = input_data
+        .iter()
+        .enumerate()
+        .map(|(i, &byte)| byte ^ key[i % key.len()])
+        .collect();
+    
+    fs::write(output_path, encrypted_data)?;
+    Ok(())
+}
+
+pub fn xor_decrypt_file(input_path: &str, output_path: &str, key: &[u8]) -> io::Result<()> {
+    xor_encrypt_file(input_path, output_path, key)
+}
+
+pub fn process_file() -> io::Result<()> {
+    let input_file = "sensitive.txt";
+    let encrypted_file = "encrypted.bin";
+    let decrypted_file = "decrypted.txt";
+    let key = b"secret_key_123";
+
+    if !Path::new(input_file).exists() {
+        let mut file = fs::File::create(input_file)?;
+        file.write_all(b"This is confidential data that needs protection.")?;
+        println!("Created sample input file: {}", input_file);
+    }
+
+    xor_encrypt_file(input_file, encrypted_file, key)?;
+    println!("File encrypted successfully: {}", encrypted_file);
+
+    xor_decrypt_file(encrypted_file, decrypted_file, key)?;
+    println!("File decrypted successfully: {}", decrypted_file);
+
+    let original = fs::read_to_string(input_file)?;
+    let restored = fs::read_to_string(decrypted_file)?;
+    
+    assert_eq!(original, restored);
+    println!("Encryption/decryption verified successfully");
+    
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = process_file() {
+        eprintln!("Error: {}", e);
+        std::process::exit(1);
+    }
+}

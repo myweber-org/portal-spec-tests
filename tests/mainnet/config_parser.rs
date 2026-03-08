@@ -93,4 +93,103 @@ mod tests {
         assert_eq!(config.get_or_default("EXISTING", "default"), "value");
         assert_eq!(config.get_or_default("MISSING", "default_value"), "default_value");
     }
+}use std::collections::HashMap;
+use std::fs;
+use std::io;
+
+#[derive(Debug)]
+pub struct Config {
+    values: HashMap<String, String>,
+}
+
+impl Config {
+    pub fn new() -> Self {
+        Config {
+            values: HashMap::new(),
+        }
+    }
+
+    pub fn from_file(path: &str) -> Result<Self, io::Error> {
+        let content = fs::read_to_string(path)?;
+        let mut config = Config::new();
+
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+
+            if let Some((key, value)) = trimmed.split_once('=') {
+                let key = key.trim().to_string();
+                let value = value.trim().to_string();
+                config.values.insert(key, value);
+            }
+        }
+
+        Ok(config)
+    }
+
+    pub fn get(&self, key: &str) -> Option<&String> {
+        self.values.get(key)
+    }
+
+    pub fn get_or_default(&self, key: &str, default: &str) -> String {
+        self.values
+            .get(key)
+            .map(|s| s.as_str())
+            .unwrap_or(default)
+            .to_string()
+    }
+
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.values.contains_key(key)
+    }
+
+    pub fn set(&mut self, key: &str, value: &str) {
+        self.values.insert(key.to_string(), value.to_string());
+    }
+
+    pub fn remove(&mut self, key: &str) -> Option<String> {
+        self.values.remove(key)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_empty_config() {
+        let config = Config::new();
+        assert_eq!(config.get("missing"), None);
+        assert_eq!(config.get_or_default("missing", "default"), "default");
+    }
+
+    #[test]
+    fn test_from_file() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "host=localhost").unwrap();
+        writeln!(temp_file, "port=8080").unwrap();
+        writeln!(temp_file, "# This is a comment").unwrap();
+        writeln!(temp_file, "").unwrap();
+        writeln!(temp_file, "timeout=30").unwrap();
+
+        let config = Config::from_file(temp_file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.get("host"), Some(&"localhost".to_string()));
+        assert_eq!(config.get("port"), Some(&"8080".to_string()));
+        assert_eq!(config.get("timeout"), Some(&"30".to_string()));
+        assert_eq!(config.get("missing"), None);
+    }
+
+    #[test]
+    fn test_set_and_remove() {
+        let mut config = Config::new();
+        config.set("key1", "value1");
+        assert_eq!(config.get("key1"), Some(&"value1".to_string()));
+
+        config.remove("key1");
+        assert_eq!(config.get("key1"), None);
+    }
 }

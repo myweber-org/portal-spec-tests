@@ -1,300 +1,313 @@
-use serde_json::{Value, json};
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::error::Error;
+use std::fmt;
 
-pub fn validate_json_schema(data: &str, schema: &Value) -> Result<bool, Box<dyn Error>> {
-    let parsed_data: Value = serde_json::from_str(data)?;
-    validate_value(&parsed_data, schema)
+#[derive(Debug, PartialEq)]
+pub enum JsonValue {
+    Null,
+    Bool(bool),
+    Number(f64),
+    String(String),
+    Array(Vec<JsonValue>),
+    Object(HashMap<String, JsonValue>),
 }
 
-fn validate_value(data: &Value, schema: &Value) -> Result<bool, Box<dyn Error>> {
-    match schema.get("type").and_then(|t| t.as_str()) {
-        Some("object") => validate_object(data, schema),
-        Some("array") => validate_array(data, schema),
-        Some("string") => validate_string(data, schema),
-        Some("number") => validate_number(data, schema),
-        Some("boolean") => validate_boolean(data, schema),
-        Some("null") => validate_null(data),
-        _ => Ok(true),
+#[derive(Debug)]
+pub struct JsonParseError {
+    message: String,
+    position: usize,
+}
+
+impl fmt::Display for JsonParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "JSON parse error at position {}: {}", self.position, self.message)
     }
 }
 
-fn validate_object(data: &Value, schema: &Value) -> Result<bool, Box<dyn Error>> {
-    if !data.is_object() {
-        return Ok(false);
-    }
+impl Error for JsonParseError {}
 
-    let obj = data.as_object().unwrap();
-    let required_fields: HashSet<String> = schema
-        .get("required")
-        .and_then(|r| r.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-        .unwrap_or_default();
+pub struct JsonParser {
+    input: Vec<char>,
+    position: usize,
+}
 
-    for field in &required_fields {
-        if !obj.contains_key(field) {
-            return Ok(false);
+impl JsonParser {
+    pub fn new(input: &str) -> Self {
+        Self {
+            input: input.chars().collect(),
+            position: 0,
         }
     }
 
-    if let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) {
-        for (key, prop_schema) in properties {
-            if let Some(value) = obj.get(key) {
-                if !validate_value(value, prop_schema)? {
-                    return Ok(false);
+    pub fn parse(&mut self) -> Result<JsonValue, JsonParseError> {
+        self.skip_whitespace();
+        let result = self.parse_value()?;
+        self.skip_whitespace();
+        
+        if self.position < self.input.len() {
+            return Err(JsonParseError {
+                message: "Unexpected trailing characters".to_string(),
+                position: self.position,
+            });
+        }
+        
+        Ok(result)
+    }
+
+    fn parse_value(&mut self) -> Result<JsonValue, JsonParseError> {
+        match self.peek_char() {
+            Some('n') => self.parse_null(),
+            Some('t') | Some('f') => self.parse_bool(),
+            Some('"') => self.parse_string(),
+            Some('[') => self.parse_array(),
+            Some('{') => self.parse_object(),
+            Some(c) if c.is_digit(10) || c == '-' => self.parse_number(),
+            _ => Err(JsonParseError {
+                message: "Unexpected character".to_string(),
+                position: self.position,
+            }),
+        }
+    }
+
+    fn parse_null(&mut self) -> Result<JsonValue, JsonParseError> {
+        if self.consume_str("null") {
+            Ok(JsonValue::Null)
+        } else {
+            Err(JsonParseError {
+                message: "Expected 'null'".to_string(),
+                position: self.position,
+            })
+        }
+    }
+
+    fn parse_bool(&mut self) -> Result<JsonValue, JsonParseError> {
+        if self.consume_str("true") {
+            Ok(JsonValue::Bool(true))
+        } else if self.consume_str("false") {
+            Ok(JsonValue::Bool(false))
+        } else {
+            Err(JsonParseError {
+                message: "Expected boolean value".to_string(),
+                position: self.position,
+            })
+        }
+    }
+
+    fn parse_string(&mut self) -> Result<JsonValue, JsonParseError> {
+        self.consume_char(); // Skip opening quote
+        
+        let mut result = String::new();
+        while let Some(c) = self.peek_char() {
+            if c == '"' {
+                self.consume_char(); // Skip closing quote
+                return Ok(JsonValue::String(result));
+            }
+            
+            if c == '\\' {
+                self.consume_char();
+                if let Some(escaped) = self.peek_char() {
+                    match escaped {
+                        '"' => result.push('"'),
+                        '\\' => result.push('\\'),
+                        '/' => result.push('/'),
+                        'b' => result.push('\x08'),
+                        'f' => result.push('\x0c'),
+                        'n' => result.push('\n'),
+                        'r' => result.push('\r'),
+                        't' => result.push('\t'),
+                        _ => return Err(JsonParseError {
+                            message: format!("Invalid escape sequence: \\{}", escaped),
+                            position: self.position - 1,
+                        }),
+                    }
+                    self.consume_char();
+                }
+            } else {
+                result.push(c);
+                self.consume_char();
+            }
+        }
+        
+        Err(JsonParseError {
+            message: "Unterminated string".to_string(),
+            position: self.position,
+        })
+    }
+
+    fn parse_number(&mut self) -> Result<JsonValue, JsonParseError> {
+        let start = self.position;
+        let mut has_dot = false;
+        
+        if self.peek_char() == Some('-') {
+            self.consume_char();
+        }
+        
+        while let Some(c) = self.peek_char() {
+            if c.is_digit(10) {
+                self.consume_char();
+            } else if c == '.' && !has_dot {
+                has_dot = true;
+                self.consume_char();
+            } else {
+                break;
+            }
+        }
+        
+        let number_str: String = self.input[start..self.position].iter().collect();
+        match number_str.parse::<f64>() {
+            Ok(num) => Ok(JsonValue::Number(num)),
+            Err(_) => Err(JsonParseError {
+                message: "Invalid number format".to_string(),
+                position: start,
+            }),
+        }
+    }
+
+    fn parse_array(&mut self) -> Result<JsonValue, JsonParseError> {
+        self.consume_char(); // Skip '['
+        self.skip_whitespace();
+        
+        let mut array = Vec::new();
+        
+        if self.peek_char() == Some(']') {
+            self.consume_char();
+            return Ok(JsonValue::Array(array));
+        }
+        
+        loop {
+            let value = self.parse_value()?;
+            array.push(value);
+            
+            self.skip_whitespace();
+            
+            match self.peek_char() {
+                Some(',') => {
+                    self.consume_char();
+                    self.skip_whitespace();
+                }
+                Some(']') => {
+                    self.consume_char();
+                    break;
+                }
+                _ => {
+                    return Err(JsonParseError {
+                        message: "Expected ',' or ']' in array".to_string(),
+                        position: self.position,
+                    });
                 }
             }
         }
+        
+        Ok(JsonValue::Array(array))
     }
 
-    Ok(true)
-}
-
-fn validate_array(data: &Value, schema: &Value) -> Result<bool, Box<dyn Error>> {
-    if !data.is_array() {
-        return Ok(false);
-    }
-
-    let arr = data.as_array().unwrap();
-    if let Some(min_items) = schema.get("minItems").and_then(|m| m.as_u64()) {
-        if arr.len() < min_items as usize {
-            return Ok(false);
+    fn parse_object(&mut self) -> Result<JsonValue, JsonParseError> {
+        self.consume_char(); // Skip '{'
+        self.skip_whitespace();
+        
+        let mut object = HashMap::new();
+        
+        if self.peek_char() == Some('}') {
+            self.consume_char();
+            return Ok(JsonValue::Object(object));
         }
-    }
-
-    if let Some(max_items) = schema.get("maxItems").and_then(|m| m.as_u64()) {
-        if arr.len() > max_items as usize {
-            return Ok(false);
-        }
-    }
-
-    if let Some(item_schema) = schema.get("items") {
-        for item in arr {
-            if !validate_value(item, item_schema)? {
-                return Ok(false);
+        
+        loop {
+            self.skip_whitespace();
+            
+            if self.peek_char() != Some('"') {
+                return Err(JsonParseError {
+                    message: "Expected string key in object".to_string(),
+                    position: self.position,
+                });
             }
-        }
-    }
-
-    Ok(true)
-}
-
-fn validate_string(data: &Value, schema: &Value) -> Result<bool, Box<dyn Error>> {
-    if !data.is_string() {
-        return Ok(false);
-    }
-
-    let s = data.as_str().unwrap();
-    if let Some(min_len) = schema.get("minLength").and_then(|m| m.as_u64()) {
-        if s.len() < min_len as usize {
-            return Ok(false);
-        }
-    }
-
-    if let Some(max_len) = schema.get("maxLength").and_then(|m| m.as_u64()) {
-        if s.len() > max_len as usize {
-            return Ok(false);
-        }
-    }
-
-    if let Some(pattern) = schema.get("pattern").and_then(|p| p.as_str()) {
-        let re = regex::Regex::new(pattern)?;
-        if !re.is_match(s) {
-            return Ok(false);
-        }
-    }
-
-    Ok(true)
-}
-
-fn validate_number(data: &Value, schema: &Value) -> Result<bool, Box<dyn Error>> {
-    if !data.is_number() {
-        return Ok(false);
-    }
-
-    let num = data.as_f64().unwrap();
-    if let Some(minimum) = schema.get("minimum").and_then(|m| m.as_f64()) {
-        if num < minimum {
-            return Ok(false);
-        }
-    }
-
-    if let Some(maximum) = schema.get("maximum").and_then(|m| m.as_f64()) {
-        if num > maximum {
-            return Ok(false);
-        }
-    }
-
-    Ok(true)
-}
-
-fn validate_boolean(data: &Value, _schema: &Value) -> Result<bool, Box<dyn Error>> {
-    Ok(data.is_boolean())
-}
-
-fn validate_null(data: &Value) -> Result<bool, Box<dyn Error>> {
-    Ok(data.is_null())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_object_validation() {
-        let schema = json!({
-            "type": "object",
-            "required": ["name", "age"],
-            "properties": {
-                "name": {"type": "string", "minLength": 1},
-                "age": {"type": "number", "minimum": 0}
+            
+            let key = match self.parse_string()? {
+                JsonValue::String(s) => s,
+                _ => unreachable!(),
+            };
+            
+            self.skip_whitespace();
+            
+            if self.peek_char() != Some(':') {
+                return Err(JsonParseError {
+                    message: "Expected ':' after object key".to_string(),
+                    position: self.position,
+                });
             }
-        });
-
-        let valid_data = r#"{"name": "Alice", "age": 30}"#;
-        let invalid_data = r#"{"name": "", "age": -5}"#;
-
-        assert!(validate_json_schema(valid_data, &schema).unwrap());
-        assert!(!validate_json_schema(invalid_data, &schema).unwrap());
-    }
-
-    #[test]
-    fn test_array_validation() {
-        let schema = json!({
-            "type": "array",
-            "minItems": 1,
-            "maxItems": 3,
-            "items": {"type": "string"}
-        });
-
-        let valid_data = r#"["a", "b"]"#;
-        let invalid_data = r#"[]"#;
-
-        assert!(validate_json_schema(valid_data, &schema).unwrap());
-        assert!(!validate_json_schema(invalid_data, &schema).unwrap());
-    }
-}use serde_json::{Value, Map};
-use std::collections::HashSet;
-
-pub struct JsonValidator {
-    required_fields: HashSet<String>,
-    allowed_types: Map<String, String>,
-}
-
-impl JsonValidator {
-    pub fn new() -> Self {
-        JsonValidator {
-            required_fields: HashSet::new(),
-            allowed_types: Map::new(),
-        }
-    }
-
-    pub fn add_required_field(&mut self, field: &str) {
-        self.required_fields.insert(field.to_string());
-    }
-
-    pub fn define_field_type(&mut self, field: &str, type_name: &str) {
-        self.allowed_types.insert(field.to_string(), type_name.to_string());
-    }
-
-    pub fn validate(&self, json_data: &Value) -> Result<(), String> {
-        if !json_data.is_object() {
-            return Err("Input must be a JSON object".to_string());
-        }
-
-        let obj = json_data.as_object().unwrap();
-
-        for field in &self.required_fields {
-            if !obj.contains_key(field) {
-                return Err(format!("Missing required field: {}", field));
-            }
-        }
-
-        for (field, value) in obj {
-            if let Some(expected_type) = self.allowed_types.get(field) {
-                if !self.check_type(value, expected_type) {
-                    return Err(format!("Field '{}' must be of type {}", field, expected_type));
+            
+            self.consume_char(); // Skip ':'
+            self.skip_whitespace();
+            
+            let value = self.parse_value()?;
+            object.insert(key, value);
+            
+            self.skip_whitespace();
+            
+            match self.peek_char() {
+                Some(',') => {
+                    self.consume_char();
+                    self.skip_whitespace();
+                }
+                Some('}') => {
+                    self.consume_char();
+                    break;
+                }
+                _ => {
+                    return Err(JsonParseError {
+                        message: "Expected ',' or '}' in object".to_string(),
+                        position: self.position,
+                    });
                 }
             }
         }
-
-        Ok(())
+        
+        Ok(JsonValue::Object(object))
     }
 
-    fn check_type(&self, value: &Value, expected_type: &str) -> bool {
-        match expected_type {
-            "string" => value.is_string(),
-            "number" => value.is_number(),
-            "boolean" => value.is_boolean(),
-            "array" => value.is_array(),
-            "object" => value.is_object(),
-            "null" => value.is_null(),
-            _ => false,
+    fn peek_char(&self) -> Option<char> {
+        self.input.get(self.position).copied()
+    }
+
+    fn consume_char(&mut self) -> Option<char> {
+        if self.position < self.input.len() {
+            let c = self.input[self.position];
+            self.position += 1;
+            Some(c)
+        } else {
+            None
+        }
+    }
+
+    fn consume_str(&mut self, s: &str) -> bool {
+        let chars: Vec<char> = s.chars().collect();
+        if self.position + chars.len() <= self.input.len() {
+            for (i, &expected) in chars.iter().enumerate() {
+                if self.input[self.position + i] != expected {
+                    return false;
+                }
+            }
+            self.position += chars.len();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn skip_whitespace(&mut self) {
+        while let Some(c) = self.peek_char() {
+            if c.is_whitespace() {
+                self.consume_char();
+            } else {
+                break;
+            }
         }
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn test_basic_validation() {
-        let mut validator = JsonValidator::new();
-        validator.add_required_field("name");
-        validator.define_field_type("name", "string");
-        validator.define_field_type("age", "number");
-
-        let valid_data = json!({
-            "name": "John",
-            "age": 30
-        });
-
-        let invalid_data = json!({
-            "name": 123,
-            "age": "thirty"
-        });
-
-        assert!(validator.validate(&valid_data).is_ok());
-        assert!(validator.validate(&invalid_data).is_err());
-    }
-
-    #[test]
-    fn test_missing_required_field() {
-        let mut validator = JsonValidator::new();
-        validator.add_required_field("id");
-
-        let data = json!({
-            "name": "test"
-        });
-
-        let result = validator.validate(&data);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Missing required field"));
-    }
-}use serde_json::Value;
-use jsonschema::JSONSchema;
-
-pub fn validate_json(schema: &str, data: &str) -> Result<(), String> {
-    let schema_value: Value = serde_json::from_str(schema)
-        .map_err(|e| format!("Invalid schema: {}", e))?;
-    
-    let data_value: Value = serde_json::from_str(data)
-        .map_err(|e| format!("Invalid JSON data: {}", e))?;
-    
-    let compiled_schema = JSONSchema::compile(&schema_value)
-        .map_err(|e| format!("Schema compilation failed: {}", e))?;
-    
-    match compiled_schema.validate(&data_value) {
-        Ok(_) => Ok(()),
-        Err(errors) => {
-            let error_messages: Vec<String> = errors
-                .map(|e| format!("Validation error: {}", e))
-                .collect();
-            Err(error_messages.join(", "))
-        }
-    }
+pub fn validate_json(input: &str) -> Result<JsonValue, JsonParseError> {
+    let mut parser = JsonParser::new(input);
+    parser.parse()
 }
 
 #[cfg(test)]
@@ -303,32 +316,29 @@ mod tests {
 
     #[test]
     fn test_valid_json() {
-        let schema = r#"{
-            "type": "object",
-            "properties": {
-                "name": {"type": "string"},
-                "age": {"type": "number"}
-            },
-            "required": ["name"]
-        }"#;
-        
-        let valid_data = r#"{"name": "Alice", "age": 30}"#;
-        
-        assert!(validate_json(schema, valid_data).is_ok());
+        let json = r#"{"name": "test", "value": 42.5, "active": true, "tags": ["rust", "json"]}"#;
+        let result = validate_json(json);
+        assert!(result.is_ok());
     }
 
     #[test]
     fn test_invalid_json() {
-        let schema = r#"{
-            "type": "object",
-            "properties": {
-                "name": {"type": "string"}
-            },
-            "required": ["name"]
-        }"#;
-        
-        let invalid_data = r#"{"age": 30}"#;
-        
-        assert!(validate_json(schema, invalid_data).is_err());
+        let json = r#"{"name": test}"#;
+        let result = validate_json(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_empty_object() {
+        let json = r#"{}"#;
+        let result = validate_json(json);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_escape_sequences() {
+        let json = r#"{"text": "line1\nline2\t\"quoted\""}"#;
+        let result = validate_json(json);
+        assert!(result.is_ok());
     }
 }

@@ -367,3 +367,143 @@ mod tests {
         Ok(())
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader, Write};
+use std::path::Path;
+
+#[derive(Debug, Clone)]
+pub struct CsvRecord {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub category: String,
+}
+
+impl CsvRecord {
+    pub fn new(id: u32, name: String, value: f64, category: String) -> Self {
+        Self {
+            id,
+            name,
+            value,
+            category,
+        }
+    }
+
+    pub fn is_valid(&self) -> bool {
+        !self.name.trim().is_empty()
+            && self.value >= 0.0
+            && !self.category.trim().is_empty()
+            && self.id > 0
+    }
+
+    pub fn transform_value(&mut self, multiplier: f64) {
+        self.value *= multiplier;
+    }
+}
+
+pub struct CsvProcessor {
+    records: Vec<CsvRecord>,
+}
+
+impl CsvProcessor {
+    pub fn new() -> Self {
+        Self {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_file<P: AsRef<Path>>(&mut self, path: P) -> Result<usize, Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        
+        let mut count = 0;
+        for (line_num, line) in reader.lines().enumerate() {
+            let line = line?;
+            
+            if line_num == 0 {
+                continue;
+            }
+            
+            let parts: Vec<&str> = line.split(',').collect();
+            if parts.len() != 4 {
+                continue;
+            }
+            
+            let id = parts[0].parse::<u32>().unwrap_or(0);
+            let name = parts[1].to_string();
+            let value = parts[2].parse::<f64>().unwrap_or(0.0);
+            let category = parts[3].to_string();
+            
+            let record = CsvRecord::new(id, name, value, category);
+            if record.is_valid() {
+                self.records.push(record);
+                count += 1;
+            }
+        }
+        
+        Ok(count)
+    }
+
+    pub fn filter_by_category(&self, category: &str) -> Vec<&CsvRecord> {
+        self.records
+            .iter()
+            .filter(|record| record.category == category)
+            .collect()
+    }
+
+    pub fn calculate_total_value(&self) -> f64 {
+        self.records.iter().map(|record| record.value).sum()
+    }
+
+    pub fn transform_all_values(&mut self, multiplier: f64) {
+        for record in &mut self.records {
+            record.transform_value(multiplier);
+        }
+    }
+
+    pub fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn Error>> {
+        let mut file = File::create(path)?;
+        
+        writeln!(file, "id,name,value,category")?;
+        
+        for record in &self.records {
+            writeln!(
+                file,
+                "{},{},{},{}",
+                record.id, record.name, record.value, record.category
+            )?;
+        }
+        
+        Ok(())
+    }
+
+    pub fn get_statistics(&self) -> (f64, f64, f64) {
+        if self.records.is_empty() {
+            return (0.0, 0.0, 0.0);
+        }
+        
+        let values: Vec<f64> = self.records.iter().map(|r| r.value).collect();
+        let min = values.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+        let max = values.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+        let avg = values.iter().sum::<f64>() / values.len() as f64;
+        
+        (min, max, avg)
+    }
+}
+
+pub fn process_csv_data(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
+    let mut processor = CsvProcessor::new();
+    
+    let loaded_count = processor.load_from_file(input_path)?;
+    println!("Loaded {} valid records", loaded_count);
+    
+    processor.transform_all_values(1.1);
+    
+    let stats = processor.get_statistics();
+    println!("Statistics - Min: {:.2}, Max: {:.2}, Avg: {:.2}", stats.0, stats.1, stats.2);
+    
+    processor.save_to_file(output_path)?;
+    
+    Ok(())
+}

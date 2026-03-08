@@ -242,4 +242,69 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(result.unwrap().scheme, "myapp");
     }
+}use regex::Regex;
+use std::collections::HashMap;
+
+pub struct UrlParser;
+
+impl UrlParser {
+    pub fn parse_domain(url: &str) -> Option<String> {
+        let re = Regex::new(r"^(?:https?://)?([^/?#]+)").unwrap();
+        re.captures(url)
+            .and_then(|cap| cap.get(1))
+            .map(|m| m.as_str().to_string())
+    }
+
+    pub fn parse_query_params(url: &str) -> HashMap<String, String> {
+        let mut params = HashMap::new();
+        let query_start = url.find('?');
+        
+        if let Some(start) = query_start {
+            let query_str = &url[start + 1..];
+            for pair in query_str.split('&') {
+                let mut parts = pair.splitn(2, '=');
+                if let (Some(key), Some(value)) = (parts.next(), parts.next()) {
+                    params.insert(key.to_string(), value.to_string());
+                }
+            }
+        }
+        params
+    }
+
+    pub fn is_valid_url(url: &str) -> bool {
+        let re = Regex::new(r"^https?://[^\s/$.?#].[^\s]*$").unwrap();
+        re.is_match(url)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_domain() {
+        let url = "https://www.example.com/path?query=value";
+        assert_eq!(UrlParser::parse_domain(url), Some("www.example.com".to_string()));
+        
+        let url_no_protocol = "example.com/resource";
+        assert_eq!(UrlParser::parse_domain(url_no_protocol), Some("example.com".to_string()));
+    }
+
+    #[test]
+    fn test_parse_query_params() {
+        let url = "https://api.service.com/endpoint?key1=value1&key2=value2";
+        let params = UrlParser::parse_query_params(url);
+        
+        assert_eq!(params.get("key1"), Some(&"value1".to_string()));
+        assert_eq!(params.get("key2"), Some(&"value2".to_string()));
+        assert_eq!(params.len(), 2);
+    }
+
+    #[test]
+    fn test_is_valid_url() {
+        assert!(UrlParser::is_valid_url("http://valid.com"));
+        assert!(UrlParser::is_valid_url("https://secure.site.org/path"));
+        assert!(!UrlParser::is_valid_url("invalid-url"));
+        assert!(!UrlParser::is_valid_url("ftp://protocol.com"));
+    }
 }

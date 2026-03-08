@@ -534,4 +534,92 @@ mod tests {
 
         assert_eq!(result, expected);
     }
+}use std::collections::HashMap;
+use std::fs::{self, File};
+use std::io::{BufReader, BufWriter, Write};
+use std::path::Path;
+
+type JsonValue = serde_json::Value;
+
+pub fn merge_json_files(input_paths: &[&str], output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let mut merged_array = Vec::new();
+    let mut seen_keys = HashMap::new();
+
+    for path_str in input_paths {
+        let path = Path::new(path_str);
+        if !path.exists() {
+            eprintln!("Warning: File {} not found, skipping.", path_str);
+            continue;
+        }
+
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let json_content: JsonValue = serde_json::from_reader(reader)?;
+
+        match json_content {
+            JsonValue::Array(arr) => {
+                for item in arr {
+                    if let Some(obj) = item.as_object() {
+                        if let Some(id) = obj.get("id").and_then(|v| v.as_str()) {
+                            if !seen_keys.contains_key(id) {
+                                seen_keys.insert(id.to_string(), true);
+                                merged_array.push(item);
+                            }
+                        } else {
+                            merged_array.push(item);
+                        }
+                    } else {
+                        merged_array.push(item);
+                    }
+                }
+            }
+            JsonValue::Object(_) => {
+                merged_array.push(json_content);
+            }
+            _ => {
+                eprintln!("Warning: File {} does not contain JSON object or array.", path_str);
+            }
+        }
+    }
+
+    let output_file = File::create(output_path)?;
+    let mut writer = BufWriter::new(output_file);
+    serde_json::to_writer_pretty(&mut writer, &merged_array)?;
+    writer.flush()?;
+
+    println!("Successfully merged {} items into {}", merged_array.len(), output_path);
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_merge_json_files() {
+        let json1 = r#"[{"id": "a", "value": 1}, {"id": "b", "value": 2}]"#;
+        let json2 = r#"[{"id": "b", "value": 3}, {"id": "c", "value": 4}]"#;
+
+        let mut file1 = NamedTempFile::new().unwrap();
+        let mut file2 = NamedTempFile::new().unwrap();
+        file1.write_all(json1.as_bytes()).unwrap();
+        file2.write_all(json2.as_bytes()).unwrap();
+
+        let output_file = NamedTempFile::new().unwrap();
+        let output_path = output_file.path().to_str().unwrap();
+
+        let inputs = vec![
+            file1.path().to_str().unwrap(),
+            file2.path().to_str().unwrap(),
+        ];
+
+        let result = merge_json_files(&inputs, output_path);
+        assert!(result.is_ok());
+
+        let output_content = fs::read_to_string(output_path).unwrap();
+        let parsed: JsonValue = serde_json::from_str(&output_content).unwrap();
+        assert_eq!(parsed.as_array().unwrap().len(), 3);
+    }
 }

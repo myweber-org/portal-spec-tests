@@ -62,4 +62,87 @@ mod tests {
         assert!(!UrlParser::is_valid_url("not-a-url"));
         assert!(!UrlParser::is_valid_url("ftp://example.com"));
     }
+}use std::collections::HashMap;
+
+pub struct QueryParser;
+
+impl QueryParser {
+    pub fn parse(query: &str) -> HashMap<String, String> {
+        let mut params = HashMap::new();
+        
+        if query.is_empty() {
+            return params;
+        }
+
+        for pair in query.split('&') {
+            let mut parts = pair.splitn(2, '=');
+            if let (Some(key), Some(value)) = (parts.next(), parts.next()) {
+                if !key.is_empty() {
+                    params.insert(key.to_string(), value.to_string());
+                }
+            }
+        }
+        
+        params
+    }
+    
+    pub fn build(params: &HashMap<String, String>) -> String {
+        let mut query_parts: Vec<String> = Vec::new();
+        
+        for (key, value) in params {
+            if !key.is_empty() {
+                query_parts.push(format!("{}={}", key, value));
+            }
+        }
+        
+        query_parts.join("&")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_empty() {
+        let result = QueryParser::parse("");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_parse_single_param() {
+        let result = QueryParser::parse("name=john");
+        assert_eq!(result.get("name"), Some(&"john".to_string()));
+    }
+
+    #[test]
+    fn test_parse_multiple_params() {
+        let result = QueryParser::parse("name=john&age=30&city=nyc");
+        assert_eq!(result.get("name"), Some(&"john".to_string()));
+        assert_eq!(result.get("age"), Some(&"30".to_string()));
+        assert_eq!(result.get("city"), Some(&"nyc".to_string()));
+    }
+
+    #[test]
+    fn test_build_empty() {
+        let params: HashMap<String, String> = HashMap::new();
+        let result = QueryParser::build(&params);
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_build_single_param() {
+        let mut params = HashMap::new();
+        params.insert("name".to_string(), "john".to_string());
+        let result = QueryParser::build(&params);
+        assert!(result == "name=john");
+    }
+
+    #[test]
+    fn test_round_trip() {
+        let original = "name=john&age=30&city=nyc";
+        let parsed = QueryParser::parse(original);
+        let rebuilt = QueryParser::build(&parsed);
+        assert_eq!(rebuilt, original);
+    }
 }

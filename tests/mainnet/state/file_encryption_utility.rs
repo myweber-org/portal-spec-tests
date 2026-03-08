@@ -100,4 +100,67 @@ mod tests {
             
         assert_eq!(decrypted_content, original_content);
     }
+}use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce,
+};
+use std::error::Error;
+
+pub struct EncryptionResult {
+    pub ciphertext: Vec<u8>,
+    pub nonce: [u8; 12],
+}
+
+pub fn encrypt_data(plaintext: &[u8], key: &[u8; 32]) -> Result<EncryptionResult, Box<dyn Error>> {
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+    let nonce_bytes: [u8; 12] = OsRng.fill(&mut [0u8; 12])?;
+    let nonce = Nonce::from_slice(&nonce_bytes);
+    
+    let ciphertext = cipher.encrypt(nonce, plaintext)?;
+    
+    Ok(EncryptionResult {
+        ciphertext,
+        nonce: nonce_bytes,
+    })
+}
+
+pub fn decrypt_data(
+    ciphertext: &[u8],
+    key: &[u8; 32],
+    nonce: &[u8; 12],
+) -> Result<Vec<u8>, Box<dyn Error>> {
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+    let nonce = Nonce::from_slice(nonce);
+    
+    let plaintext = cipher.decrypt(nonce, ciphertext)?;
+    Ok(plaintext)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hex::encode;
+
+    #[test]
+    fn test_encryption_roundtrip() {
+        let key = [0x42; 32];
+        let plaintext = b"Secret message for encryption test";
+        
+        let encrypted = encrypt_data(plaintext, &key).unwrap();
+        let decrypted = decrypt_data(&encrypted.ciphertext, &key, &encrypted.nonce).unwrap();
+        
+        assert_eq!(plaintext.to_vec(), decrypted);
+    }
+
+    #[test]
+    fn test_different_nonces_produce_different_ciphertexts() {
+        let key = [0x99; 32];
+        let plaintext = b"Same plaintext, different nonces";
+        
+        let enc1 = encrypt_data(plaintext, &key).unwrap();
+        let enc2 = encrypt_data(plaintext, &key).unwrap();
+        
+        assert_ne!(enc1.nonce, enc2.nonce);
+        assert_ne!(enc1.ciphertext, enc2.ciphertext);
+    }
 }

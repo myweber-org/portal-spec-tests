@@ -623,3 +623,62 @@ mod tests {
         assert_eq!(parsed.as_array().unwrap().len(), 3);
     }
 }
+use std::collections::HashMap;
+use serde_json::{Value, Map};
+
+pub fn merge_json(base: &mut Value, update: &Value, resolve_conflict: fn(&str, &Value, &Value) -> Value) {
+    match (base, update) {
+        (Value::Object(base_map), Value::Object(update_map)) => {
+            for (key, update_val) in update_map {
+                if let Some(base_val) = base_map.get_mut(key) {
+                    if base_val.is_object() && update_val.is_object() {
+                        merge_json(base_val, update_val, resolve_conflict);
+                    } else if base_val != update_val {
+                        let resolved = resolve_conflict(key, base_val, update_val);
+                        base_map.insert(key.clone(), resolved);
+                    }
+                } else {
+                    base_map.insert(key.clone(), update_val.clone());
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+pub fn default_resolver(key: &str, _old: &Value, new: &Value) -> Value {
+    println!("Conflict on key '{}', using new value", key);
+    new.clone()
+}
+
+pub fn merge_multiple(json_objects: Vec<Value>) -> Value {
+    let mut result = Value::Object(Map::new());
+    for obj in json_objects {
+        merge_json(&mut result, &obj, default_resolver);
+    }
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_basic_merge() {
+        let mut base = json!({"a": 1, "b": {"c": 2}});
+        let update = json!({"b": {"d": 3}, "e": 4});
+        merge_json(&mut base, &update, default_resolver);
+        assert_eq!(base, json!({"a": 1, "b": {"c": 2, "d": 3}, "e": 4}));
+    }
+
+    #[test]
+    fn test_conflict_resolution() {
+        let mut base = json!({"version": "1.0"});
+        let update = json!({"version": "2.0"});
+        merge_json(&mut base, &update, |key, old, new| {
+            json!([old, new])
+        });
+        assert_eq!(base["version"], json!(["1.0", "2.0"]));
+    }
+}

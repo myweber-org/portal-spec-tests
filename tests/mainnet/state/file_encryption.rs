@@ -127,3 +127,63 @@ mod tests {
         assert_eq!(test_data.to_vec(), result);
     }
 }
+use std::fs;
+use std::io::{self, Read, Write};
+use std::path::Path;
+
+pub fn xor_cipher(data: &mut [u8], key: &[u8]) {
+    for (i, byte) in data.iter_mut().enumerate() {
+        *byte ^= key[i % key.len()];
+    }
+}
+
+pub fn encrypt_file(input_path: &Path, output_path: &Path, key: &str) -> io::Result<()> {
+    let mut content = fs::read(input_path)?;
+    xor_cipher(&mut content, key.as_bytes());
+    fs::write(output_path, content)
+}
+
+pub fn decrypt_file(input_path: &Path, output_path: &Path, key: &str) -> io::Result<()> {
+    encrypt_file(input_path, output_path, key)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_xor_cipher_symmetry() {
+        let key = "secret";
+        let mut data = b"Hello, World!".to_vec();
+        let original = data.clone();
+
+        xor_cipher(&mut data, key.as_bytes());
+        assert_ne!(data, original);
+
+        xor_cipher(&mut data, key.as_bytes());
+        assert_eq!(data, original);
+    }
+
+    #[test]
+    fn test_file_encryption() -> io::Result<()> {
+        let key = "test_key";
+        let original_content = b"Sample file content for encryption test";
+
+        let input_file = NamedTempFile::new()?;
+        let output_file = NamedTempFile::new()?;
+        let decrypted_file = NamedTempFile::new()?;
+
+        fs::write(input_file.path(), original_content)?;
+
+        encrypt_file(input_file.path(), output_file.path(), key)?;
+        let encrypted_content = fs::read(output_file.path())?;
+        assert_ne!(encrypted_content, original_content);
+
+        decrypt_file(output_file.path(), decrypted_file.path(), key)?;
+        let decrypted_content = fs::read(decrypted_file.path())?;
+        assert_eq!(decrypted_content, original_content);
+
+        Ok(())
+    }
+}

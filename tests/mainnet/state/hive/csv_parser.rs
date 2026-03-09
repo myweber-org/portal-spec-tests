@@ -112,4 +112,78 @@ mod tests {
         assert_eq!(result[0], vec!["a", "b", "c"]);
         assert_eq!(result[1], vec!["d", "e", "f"]);
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+
+#[derive(Debug)]
+pub struct CsvRecord {
+    pub fields: Vec<String>,
+}
+
+pub struct CsvParser {
+    delimiter: char,
+    has_header: bool,
+}
+
+impl CsvParser {
+    pub fn new(delimiter: char, has_header: bool) -> Self {
+        CsvParser {
+            delimiter,
+            has_header,
+        }
+    }
+
+    pub fn parse_file(&self, file_path: &str) -> Result<Vec<CsvRecord>, Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        let mut records = Vec::new();
+        let mut lines = reader.lines().enumerate();
+
+        if self.has_header {
+            lines.next();
+        }
+
+        for (line_num, line) in lines {
+            let line = line?;
+            let record = self.parse_line(&line, line_num + 1)?;
+            records.push(record);
+        }
+
+        Ok(records)
+    }
+
+    fn parse_line(&self, line: &str, line_number: usize) -> Result<CsvRecord, Box<dyn Error>> {
+        let fields: Vec<String> = line
+            .split(self.delimiter)
+            .map(|s| s.trim().to_string())
+            .collect();
+
+        if fields.is_empty() {
+            return Err(format!("Line {} is empty", line_number).into());
+        }
+
+        Ok(CsvRecord { fields })
+    }
+}
+
+pub fn validate_csv_records(records: &[CsvRecord]) -> Result<(), Box<dyn Error>> {
+    if records.is_empty() {
+        return Err("No records found".into());
+    }
+
+    let expected_len = records[0].fields.len();
+    for (idx, record) in records.iter().enumerate() {
+        if record.fields.len() != expected_len {
+            return Err(format!(
+                "Record {} has {} fields, expected {}",
+                idx,
+                record.fields.len(),
+                expected_len
+            )
+            .into());
+        }
+    }
+
+    Ok(())
 }

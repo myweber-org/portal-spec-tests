@@ -66,4 +66,47 @@ mod tests {
         
         assert!(result.is_err());
     }
+}use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Nonce,
+};
+use std::fs::{self, File};
+use std::io::{Read, Write};
+
+pub fn encrypt_file(input_path: &str, output_path: &str, key: &[u8; 32]) -> Result<(), Box<dyn std::error::Error>> {
+    let cipher = Aes256Gcm::new_from_slice(key)?;
+    let nonce = Nonce::from_slice(b"unique_nonce_");
+
+    let mut file = File::open(input_path)?;
+    let mut plaintext = Vec::new();
+    file.read_to_end(&mut plaintext)?;
+
+    let ciphertext = cipher.encrypt(nonce, plaintext.as_ref())?;
+
+    let mut output_file = File::create(output_path)?;
+    output_file.write_all(&ciphertext)?;
+
+    Ok(())
+}
+
+pub fn decrypt_file(input_path: &str, output_path: &str, key: &[u8; 32]) -> Result<(), Box<dyn std::error::Error>> {
+    let cipher = Aes256Gcm::new_from_slice(key)?;
+    let nonce = Nonce::from_slice(b"unique_nonce_");
+
+    let mut file = File::open(input_path)?;
+    let mut ciphertext = Vec::new();
+    file.read_to_end(&mut ciphertext)?;
+
+    let plaintext = cipher.decrypt(nonce, ciphertext.as_ref())?;
+
+    let mut output_file = File::create(output_path)?;
+    output_file.write_all(&plaintext)?;
+
+    Ok(())
+}
+
+pub fn generate_key() -> [u8; 32] {
+    let mut key = [0u8; 32];
+    OsRng.fill_bytes(&mut key);
+    key
 }

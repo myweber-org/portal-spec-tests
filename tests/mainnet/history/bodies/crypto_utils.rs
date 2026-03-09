@@ -1,44 +1,21 @@
-use aes_gcm::{
-    aead::{Aead, KeyInit, OsRng},
-    Aes256Gcm, Key, Nonce,
-};
-use anyhow::{Context, Result};
+use bcrypt::{hash, verify, DEFAULT_COST};
+use rand::{thread_rng, Rng};
+use rand::distributions::Alphanumeric;
 
-pub fn encrypt_data(plaintext: &[u8], key: &[u8]) -> Result<Vec<u8>> {
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
-    let nonce = Nonce::generate(&mut OsRng);
-    
-    let ciphertext = cipher
-        .encrypt(&nonce, plaintext)
-        .context("Encryption failed")?;
-    
-    let mut result = Vec::with_capacity(nonce.len() + ciphertext.len());
-    result.extend_from_slice(nonce.as_slice());
-    result.extend_from_slice(&ciphertext);
-    
-    Ok(result)
+pub fn generate_salt(length: usize) -> String {
+    thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(length)
+        .map(char::from)
+        .collect()
 }
 
-pub fn decrypt_data(ciphertext: &[u8], key: &[u8]) -> Result<Vec<u8>> {
-    if ciphertext.len() < 12 {
-        anyhow::bail!("Ciphertext too short");
-    }
-    
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
-    let (nonce_slice, encrypted_data) = ciphertext.split_at(12);
-    let nonce = Nonce::from_slice(nonce_slice);
-    
-    let plaintext = cipher
-        .decrypt(nonce, encrypted_data)
-        .context("Decryption failed")?;
-    
-    Ok(plaintext)
+pub fn hash_password(password: &str) -> Result<String, bcrypt::BcryptError> {
+    hash(password, DEFAULT_COST)
 }
 
-pub fn generate_key() -> [u8; 32] {
-    let mut key = [0u8; 32];
-    OsRng.fill_bytes(&mut key);
-    key
+pub fn verify_password(password: &str, hash: &str) -> Result<bool, bcrypt::BcryptError> {
+    verify(password, hash)
 }
 
 #[cfg(test)]
@@ -46,41 +23,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_encryption_roundtrip() {
-        let key = generate_key();
-        let original_data = b"Secret message for encryption test";
-        
-        let encrypted = encrypt_data(original_data, &key).unwrap();
-        let decrypted = decrypt_data(&encrypted, &key).unwrap();
-        
-        assert_eq!(original_data.to_vec(), decrypted);
+    fn test_generate_salt() {
+        let salt = generate_salt(16);
+        assert_eq!(salt.len(), 16);
+        assert!(salt.chars().all(|c| c.is_ascii_alphanumeric()));
     }
 
     #[test]
-    fn test_wrong_key_fails() {
-        let key1 = generate_key();
-        let key2 = generate_key();
-        let data = b"Test data";
+    fn test_password_hashing() {
+        let password = "secure_password_123";
+        let hash_result = hash_password(password);
+        assert!(hash_result.is_ok());
         
-        let encrypted = encrypt_data(data, &key1).unwrap();
-        let result = decrypt_data(&encrypted, &key2);
+        let hash = hash_result.unwrap();
+        let verify_result = verify_password(password, &hash);
+        assert_eq!(verify_result, Ok(true));
         
-        assert!(result.is_err());
+        let wrong_password = "wrong_password";
+        let wrong_verify_result = verify_password(wrong_password, &hash);
+        assert_eq!(wrong_verify_result, Ok(false));
     }
-}
-use rand::{thread_rng, Rng};
-use rand::distributions::Alphanumeric;
-
-pub fn generate_token(length: usize) -> String {
-    let rng = thread_rng();
-    rng.sample_iter(&Alphanumeric)
-        .take(length)
-        .map(char::from)
-        .collect()
-}
-
-pub fn generate_secure_token() -> String {
-    let mut buffer = [0u8; 32];
-    thread_rng().fill(&mut buffer);
-    hex::encode(buffer)
 }

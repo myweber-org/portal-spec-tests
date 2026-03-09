@@ -1139,3 +1139,183 @@ pub fn parse_json(json_str: &str) -> Result<JsonValue, String> {
     let mut parser = JsonParser::new(json_str);
     parser.parse()
 }
+use nom::{
+    branch::alt,
+    bytes::complete::{tag, take_while},
+    character::complete::{char, digit1, multispace0},
+    combinator::{map, opt, recognize},
+    multi::separated_list0,
+    sequence::{delimited, pair, preceded, separated_pair, terminated},
+    IResult,
+};
+
+#[derive(Debug, PartialEq)]
+pub enum JsonValue {
+    Null,
+    Bool(bool),
+    Number(f64),
+    String(String),
+    Array(Vec<JsonValue>),
+    Object(Vec<(String, JsonValue)>),
+}
+
+fn parse_null(input: &str) -> IResult<&str, JsonValue> {
+    map(tag("null"), |_| JsonValue::Null)(input)
+}
+
+fn parse_bool(input: &str) -> IResult<&str, JsonValue> {
+    alt((
+        map(tag("true"), |_| JsonValue::Bool(true)),
+        map(tag("false"), |_| JsonValue::Bool(false)),
+    ))(input)
+}
+
+fn parse_number(input: &str) -> IResult<&str, JsonValue> {
+    map(
+        recognize(pair(
+            opt(char('-')),
+            pair(
+                digit1,
+                opt(pair(
+                    char('.'),
+                    digit1,
+                )),
+            ),
+        )),
+        |s: &str| JsonValue::Number(s.parse().unwrap()),
+    )(input)
+}
+
+fn parse_string(input: &str) -> IResult<&str, JsonValue> {
+    map(
+        delimited(
+            char('"'),
+            take_while(|c| c != '"'),
+            char('"'),
+        ),
+        |s: &str| JsonValue::String(s.to_string()),
+    )(input)
+}
+
+fn parse_array(input: &str) -> IResult<&str, JsonValue> {
+    map(
+        delimited(
+            char('['),
+            separated_list0(
+                char(','),
+                preceded(multispace0, parse_value),
+            ),
+            char(']'),
+        ),
+        JsonValue::Array,
+    )(input)
+}
+
+fn parse_object(input: &str) -> IResult<&str, JsonValue> {
+    map(
+        delimited(
+            char('{'),
+            separated_list0(
+                char(','),
+                preceded(
+                    multispace0,
+                    separated_pair(
+                        parse_string,
+                        preceded(multispace0, char(':')),
+                        preceded(multispace0, parse_value),
+                    ),
+                ),
+            ),
+            char('}'),
+        ),
+        |pairs: Vec<(JsonValue, JsonValue)>| {
+            JsonValue::Object(
+                pairs
+                    .into_iter()
+                    .map(|(k, v)| {
+                        if let JsonValue::String(key) = k {
+                            (key, v)
+                        } else {
+                            panic!("Key must be string")
+                        }
+                    })
+                    .collect(),
+            )
+        },
+    )(input)
+}
+
+fn parse_value(input: &str) -> IResult<&str, JsonValue> {
+    preceded(
+        multispace0,
+        alt((
+            parse_null,
+            parse_bool,
+            parse_number,
+            parse_string,
+            parse_array,
+            parse_object,
+        )),
+    )(input)
+}
+
+pub fn parse_json(input: &str) -> Result<JsonValue, String> {
+    match terminated(parse_value, multispace0)(input) {
+        Ok((remaining, value)) if remaining.is_empty() => Ok(value),
+        Ok((remaining, _)) => Err(format!("Unexpected trailing characters: {}", remaining)),
+        Err(e) => Err(format!("Parse error: {:?}", e)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_null() {
+        assert_eq!(parse_json("null").unwrap(), JsonValue::Null);
+    }
+
+    #[test]
+    fn test_parse_bool() {
+        assert_eq!(parse_json("true").unwrap(), JsonValue::Bool(true));
+        assert_eq!(parse_json("false").unwrap(), JsonValue::Bool(false));
+    }
+
+    #[test]
+    fn test_parse_number() {
+        assert_eq!(parse_json("42").unwrap(), JsonValue::Number(42.0));
+        assert_eq!(parse_json("-3.14").unwrap(), JsonValue::Number(-3.14));
+    }
+
+    #[test]
+    fn test_parse_string() {
+        assert_eq!(
+            parse_json(r#""hello""#).unwrap(),
+            JsonValue::String("hello".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_array() {
+        assert_eq!(
+            parse_json(r#"[1, "two", true]"#).unwrap(),
+            JsonValue::Array(vec![
+                JsonValue::Number(1.0),
+                JsonValue::String("two".to_string()),
+                JsonValue::Bool(true),
+            ])
+        );
+    }
+
+    #[test]
+    fn test_parse_object() {
+        assert_eq!(
+            parse_json(r#"{"key": "value", "num": 42}"#).unwrap(),
+            JsonValue::Object(vec![
+                ("key".to_string(), JsonValue::String("value".to_string())),
+                ("num".to_string(), JsonValue::Number(42.0)),
+            ])
+        );
+    }
+}

@@ -40,3 +40,19 @@ mod tests {
         assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
     }
 }
+use rand::Rng;
+use rand::distributions::Alphanumeric;
+
+pub fn generate_password(length: usize) -> String {
+    let rng = rand::thread_rng();
+    rng.sample_iter(&Alphanumeric)
+        .take(length)
+        .map(char::from)
+        .collect()
+}
+
+pub fn generate_secure_token() -> String {
+    let mut buffer = [0u8; 32];
+    rand::thread_rng().fill(&mut buffer);
+    hex::encode(buffer)
+}

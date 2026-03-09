@@ -175,3 +175,51 @@ mod tests {
         assert_eq!(decrypted_content, original_content);
     }
 }
+use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce,
+};
+use std::fs;
+use std::io::{self, Write};
+
+pub fn encrypt_file(input_path: &str, output_path: &str) -> io::Result<()> {
+    let plaintext = fs::read(input_path)?;
+    
+    let key = Aes256Gcm::generate_key(&mut OsRng);
+    let cipher = Aes256Gcm::new(&key);
+    let nonce = Nonce::from_slice(b"unique_nonce_");
+    
+    let ciphertext = cipher
+        .encrypt(nonce, plaintext.as_ref())
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    
+    let mut output = fs::File::create(output_path)?;
+    output.write_all(&key)?;
+    output.write_all(&ciphertext)?;
+    
+    println!("Encryption successful. Key saved with ciphertext.");
+    Ok(())
+}
+
+pub fn decrypt_file(input_path: &str, output_path: &str) -> io::Result<()> {
+    let data = fs::read(input_path)?;
+    if data.len() < 32 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "File too short to contain key and ciphertext",
+        ));
+    }
+    
+    let (key_bytes, ciphertext) = data.split_at(32);
+    let key = Key::<Aes256Gcm>::from_slice(key_bytes);
+    let cipher = Aes256Gcm::new(key);
+    let nonce = Nonce::from_slice(b"unique_nonce_");
+    
+    let plaintext = cipher
+        .decrypt(nonce, ciphertext)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    
+    fs::write(output_path, plaintext)?;
+    println!("Decryption successful.");
+    Ok(())
+}

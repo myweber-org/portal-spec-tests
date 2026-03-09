@@ -179,4 +179,92 @@ pub fn list_interfaces() -> Result<(), Box<dyn Error>> {
         println!("  {}: {}", device.name, device.desc.unwrap_or_default());
     }
     Ok(())
+}use pcap::{Capture, Device};
+use std::error::Error;
+
+pub struct PacketAnalyzer {
+    capture: Capture<pcap::Active>,
+}
+
+impl PacketAnalyzer {
+    pub fn new(interface_name: &str) -> Result<Self, Box<dyn Error>> {
+        let device = Device::list()?
+            .into_iter()
+            .find(|dev| dev.name == interface_name)
+            .ok_or_else(|| format!("Interface {} not found", interface_name))?;
+
+        let capture = Capture::from_device(device)?
+            .promisc(true)
+            .snaplen(65535)
+            .timeout(1000)
+            .open()?;
+
+        Ok(PacketAnalyzer { capture })
+    }
+
+    pub fn start_capture(&mut self, packet_count: i32) -> Result<(), Box<dyn Error>> {
+        println!("Starting packet capture on interface...");
+        
+        let mut packet_counter = 0;
+        while let Ok(packet) = self.capture.next_packet() {
+            Self::analyze_packet(&packet);
+            packet_counter += 1;
+            
+            if packet_count > 0 && packet_counter >= packet_count {
+                break;
+            }
+        }
+        
+        println!("Captured {} packets", packet_counter);
+        Ok(())
+    }
+
+    fn analyze_packet(packet: &pcap::Packet) {
+        let header = packet.header;
+        let data = packet.data;
+        
+        println!("Packet captured:");
+        println!("  Timestamp: {}.{}", header.ts.tv_sec, header.ts.tv_usec);
+        println!("  Length: {} bytes", header.len);
+        println!("  Captured length: {} bytes", header.caplen);
+        
+        if data.len() >= 14 {
+            let dest_mac = &data[0..6];
+            let src_mac = &data[6..12];
+            let ethertype = u16::from_be_bytes([data[12], data[13]]);
+            
+            println!("  Ethernet:");
+            println!("    Destination: {:02x?}", dest_mac);
+            println!("    Source: {:02x?}", src_mac);
+            println!("    EtherType: 0x{:04x}", ethertype);
+        }
+        
+        if data.len() > 34 {
+            let ip_header_len = (data[14] & 0x0F) as usize * 4;
+            if ip_header_len >= 20 {
+                let protocol = data[23];
+                let src_ip = &data[26..30];
+                let dst_ip = &data[30..34];
+                
+                println!("  IP:");
+                println!("    Protocol: {}", protocol);
+                println!("    Source: {}.{}.{}.{}", src_ip[0], src_ip[1], src_ip[2], src_ip[3]);
+                println!("    Destination: {}.{}.{}.{}", dst_ip[0], dst_ip[1], dst_ip[2], dst_ip[3]);
+            }
+        }
+        
+        println!("  Raw data (first 64 bytes): {:02x?}", &data[..data.len().min(64)]);
+        println!("---");
+    }
+}
+
+pub fn list_interfaces() -> Result<(), Box<dyn Error>> {
+    println!("Available network interfaces:");
+    for device in Device::list()? {
+        println!("  {}", device.name);
+        if let Some(desc) = device.desc {
+            println!("    Description: {}", desc);
+        }
+    }
+    Ok(())
 }

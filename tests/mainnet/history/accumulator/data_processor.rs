@@ -1,83 +1,78 @@
-
 use std::error::Error;
 use std::fs::File;
+use std::io::{BufRead, BufReader};
 use std::path::Path;
 
-pub struct DataSet {
-    values: Vec<f64>,
+pub struct DataProcessor {
+    delimiter: char,
+    has_header: bool,
 }
 
-impl DataSet {
-    pub fn new() -> Self {
-        DataSet { values: Vec::new() }
+impl DataProcessor {
+    pub fn new(delimiter: char, has_header: bool) -> Self {
+        DataProcessor {
+            delimiter,
+            has_header,
+        }
     }
 
-    pub fn from_csv<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn Error>> {
-        let file = File::open(path)?;
-        let mut rdr = csv::Reader::from_reader(file);
-        let mut values = Vec::new();
+    pub fn process_csv<P: AsRef<Path>>(&self, file_path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        let mut records = Vec::new();
+        let mut lines = reader.lines();
 
-        for result in rdr.records() {
-            let record = result?;
-            if let Some(field) = record.get(0) {
-                if let Ok(value) = field.parse::<f64>() {
-                    values.push(value);
-                }
+        if self.has_header {
+            lines.next();
+        }
+
+        for line_result in lines {
+            let line = line_result?;
+            let fields: Vec<String> = line
+                .split(self.delimiter)
+                .map(|s| s.trim().to_string())
+                .collect();
+            
+            if !fields.is_empty() {
+                records.push(fields);
             }
         }
 
-        Ok(DataSet { values })
+        Ok(records)
     }
 
-    pub fn add_value(&mut self, value: f64) {
-        self.values.push(value);
-    }
-
-    pub fn calculate_mean(&self) -> Option<f64> {
-        if self.values.is_empty() {
-            return None;
+    pub fn validate_numeric_fields(&self, data: &[Vec<String>], column_index: usize) -> Result<Vec<f64>, String> {
+        let mut numeric_values = Vec::new();
+        
+        for (row_num, row) in data.iter().enumerate() {
+            if column_index >= row.len() {
+                return Err(format!("Row {}: Column index out of bounds", row_num));
+            }
+            
+            match row[column_index].parse::<f64>() {
+                Ok(value) => numeric_values.push(value),
+                Err(_) => return Err(format!("Row {}: Invalid numeric value '{}'", row_num, row[column_index])),
+            }
         }
-        let sum: f64 = self.values.iter().sum();
-        Some(sum / self.values.len() as f64)
+        
+        Ok(numeric_values)
     }
 
-    pub fn calculate_standard_deviation(&self) -> Option<f64> {
-        if self.values.len() < 2 {
-            return None;
+    pub fn calculate_statistics(&self, values: &[f64]) -> (f64, f64, f64) {
+        if values.is_empty() {
+            return (0.0, 0.0, 0.0);
         }
-        let mean = self.calculate_mean()?;
-        let variance: f64 = self.values
-            .iter()
+
+        let sum: f64 = values.iter().sum();
+        let mean = sum / values.len() as f64;
+        
+        let variance: f64 = values.iter()
             .map(|&x| (x - mean).powi(2))
-            .sum::<f64>() / (self.values.len() - 1) as f64;
-        Some(variance.sqrt())
-    }
-
-    pub fn get_summary(&self) -> DataSummary {
-        DataSummary {
-            count: self.values.len(),
-            mean: self.calculate_mean(),
-            std_dev: self.calculate_standard_deviation(),
-        }
-    }
-}
-
-pub struct DataSummary {
-    pub count: usize,
-    pub mean: Option<f64>,
-    pub std_dev: Option<f64>,
-}
-
-impl std::fmt::Display for DataSummary {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Count: {}", self.count)?;
-        if let Some(mean) = self.mean {
-            write!(f, ", Mean: {:.4}", mean)?;
-        }
-        if let Some(std_dev) = self.std_dev {
-            write!(f, ", Std Dev: {:.4}", std_dev)?;
-        }
-        Ok(())
+            .sum::<f64>() / values.len() as f64;
+        
+        let std_dev = variance.sqrt();
+        
+        (mean, variance, std_dev)
     }
 }
 
@@ -88,35 +83,40 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_empty_dataset() {
-        let dataset = DataSet::new();
-        assert_eq!(dataset.calculate_mean(), None);
-        assert_eq!(dataset.calculate_standard_deviation(), None);
+    fn test_csv_processing() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,salary").unwrap();
+        writeln!(temp_file, "Alice,30,50000.5").unwrap();
+        writeln!(temp_file, "Bob,25,45000.0").unwrap();
+        
+        let processor = DataProcessor::new(',', true);
+        let result = processor.process_csv(temp_file.path()).unwrap();
+        
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], vec!["Alice", "30", "50000.5"]);
     }
 
     #[test]
-    fn test_basic_statistics() {
-        let mut dataset = DataSet::new();
-        dataset.add_value(10.0);
-        dataset.add_value(20.0);
-        dataset.add_value(30.0);
+    fn test_numeric_validation() {
+        let data = vec![
+            vec!["10.5".to_string(), "text".to_string()],
+            vec!["20.0".to_string(), "more".to_string()],
+        ];
         
-        assert_eq!(dataset.calculate_mean(), Some(20.0));
-        assert!(dataset.calculate_standard_deviation().unwrap() > 0.0);
+        let processor = DataProcessor::new(',', false);
+        let numeric_values = processor.validate_numeric_fields(&data, 0).unwrap();
+        
+        assert_eq!(numeric_values, vec![10.5, 20.0]);
     }
 
     #[test]
-    fn test_csv_parsing() -> Result<(), Box<dyn Error>> {
-        let mut temp_file = NamedTempFile::new()?;
-        writeln!(temp_file, "value")?;
-        writeln!(temp_file, "5.5")?;
-        writeln!(temp_file, "10.2")?;
-        writeln!(temp_file, "15.8")?;
+    fn test_statistics_calculation() {
+        let values = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let processor = DataProcessor::new(',', false);
+        let (mean, variance, std_dev) = processor.calculate_statistics(&values);
         
-        let dataset = DataSet::from_csv(temp_file.path())?;
-        assert_eq!(dataset.values.len(), 3);
-        assert!(dataset.calculate_mean().unwrap() > 0.0);
-        
-        Ok(())
+        assert_eq!(mean, 3.0);
+        assert_eq!(variance, 2.0);
+        assert_eq!(std_dev, 2.0_f64.sqrt());
     }
 }

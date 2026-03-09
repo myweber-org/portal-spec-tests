@@ -969,4 +969,145 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     Ok(())
+}use std::collections::HashMap;
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+
+#[derive(Debug, Clone)]
+pub struct Record {
+    pub id: u32,
+    pub category: String,
+    pub value: f64,
+    pub active: bool,
+}
+
+pub struct DataProcessor {
+    records: Vec<Record>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        
+        for (index, line) in reader.lines().enumerate() {
+            if index == 0 {
+                continue;
+            }
+            
+            let line = line?;
+            let parts: Vec<&str> = line.split(',').collect();
+            
+            if parts.len() >= 4 {
+                let record = Record {
+                    id: parts[0].parse()?,
+                    category: parts[1].to_string(),
+                    value: parts[2].parse()?,
+                    active: parts[3].parse().unwrap_or(false),
+                };
+                self.records.push(record);
+            }
+        }
+        
+        Ok(())
+    }
+
+    pub fn filter_by_category(&self, category: &str) -> Vec<Record> {
+        self.records
+            .iter()
+            .filter(|r| r.category == category)
+            .cloned()
+            .collect()
+    }
+
+    pub fn filter_active(&self) -> Vec<Record> {
+        self.records
+            .iter()
+            .filter(|r| r.active)
+            .cloned()
+            .collect()
+    }
+
+    pub fn calculate_average(&self) -> f64 {
+        if self.records.is_empty() {
+            return 0.0;
+        }
+        
+        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        sum / self.records.len() as f64
+    }
+
+    pub fn group_by_category(&self) -> HashMap<String, Vec<Record>> {
+        let mut groups: HashMap<String, Vec<Record>> = HashMap::new();
+        
+        for record in &self.records {
+            groups
+                .entry(record.category.clone())
+                .or_insert_with(Vec::new)
+                .push(record.clone());
+        }
+        
+        groups
+    }
+
+    pub fn find_max_value(&self) -> Option<&Record> {
+        self.records.iter().max_by(|a, b| {
+            a.value.partial_cmp(&b.value).unwrap()
+        })
+    }
+
+    pub fn get_statistics(&self) -> Statistics {
+        let count = self.records.len();
+        let active_count = self.records.iter().filter(|r| r.active).count();
+        let average = self.calculate_average();
+        
+        let min_value = self.records.iter()
+            .map(|r| r.value)
+            .min_by(|a, b| a.partial_cmp(b).unwrap())
+            .unwrap_or(0.0);
+            
+        let max_value = self.records.iter()
+            .map(|r| r.value)
+            .max_by(|a, b| a.partial_cmp(b).unwrap())
+            .unwrap_or(0.0);
+
+        Statistics {
+            total_records: count,
+            active_records: active_count,
+            average_value: average,
+            min_value,
+            max_value,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Statistics {
+    pub total_records: usize,
+    pub active_records: usize,
+    pub average_value: f64,
+    pub min_value: f64,
+    pub max_value: f64,
+}
+
+pub fn process_data_file(file_path: &str) -> Result<Statistics, Box<dyn Error>> {
+    let mut processor = DataProcessor::new();
+    processor.load_from_csv(file_path)?;
+    
+    let stats = processor.get_statistics();
+    
+    println!("Processing complete:");
+    println!("Total records: {}", stats.total_records);
+    println!("Active records: {}", stats.active_records);
+    println!("Average value: {:.2}", stats.average_value);
+    println!("Value range: {:.2} - {:.2}", stats.min_value, stats.max_value);
+    
+    Ok(stats)
 }

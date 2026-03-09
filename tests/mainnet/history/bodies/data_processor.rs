@@ -1,136 +1,128 @@
 
 use std::collections::HashMap;
-use std::error::Error;
-use std::fmt;
-
-#[derive(Debug, Clone)]
-pub struct DataRecord {
-    pub id: u32,
-    pub name: String,
-    pub value: f64,
-    pub category: String,
-}
-
-#[derive(Debug)]
-pub enum DataError {
-    InvalidId,
-    InvalidValue,
-    EmptyName,
-    UnknownCategory,
-    DuplicateRecord,
-}
-
-impl fmt::Display for DataError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            DataError::InvalidId => write!(f, "ID must be greater than 0"),
-            DataError::InvalidValue => write!(f, "Value must be between 0.0 and 1000.0"),
-            DataError::EmptyName => write!(f, "Name cannot be empty"),
-            DataError::UnknownCategory => write!(f, "Category not recognized"),
-            DataError::DuplicateRecord => write!(f, "Record with this ID already exists"),
-        }
-    }
-}
-
-impl Error for DataError {}
 
 pub struct DataProcessor {
-    records: HashMap<u32, DataRecord>,
-    categories: Vec<String>,
+    data: HashMap<String, Vec<f64>>,
+    validation_rules: HashMap<String, ValidationRule>,
+}
+
+pub struct ValidationRule {
+    min_value: Option<f64>,
+    max_value: Option<f64>,
+    required: bool,
 }
 
 impl DataProcessor {
-    pub fn new(allowed_categories: Vec<String>) -> Self {
+    pub fn new() -> Self {
         DataProcessor {
-            records: HashMap::new(),
-            categories: allowed_categories,
+            data: HashMap::new(),
+            validation_rules: HashMap::new(),
         }
     }
 
-    pub fn validate_record(&self, record: &DataRecord) -> Result<(), DataError> {
-        if record.id == 0 {
-            return Err(DataError::InvalidId);
+    pub fn add_dataset(&mut self, name: String, values: Vec<f64>) -> Result<(), String> {
+        if self.data.contains_key(&name) {
+            return Err(format!("Dataset '{}' already exists", name));
         }
-
-        if record.name.trim().is_empty() {
-            return Err(DataError::EmptyName);
+        
+        if let Some(rule) = self.validation_rules.get(&name) {
+            if rule.required && values.is_empty() {
+                return Err(format!("Dataset '{}' cannot be empty", name));
+            }
+            
+            for &value in &values {
+                if let Some(min) = rule.min_value {
+                    if value < min {
+                        return Err(format!("Value {} below minimum {}", value, min));
+                    }
+                }
+                
+                if let Some(max) = rule.max_value {
+                    if value > max {
+                        return Err(format!("Value {} above maximum {}", value, max));
+                    }
+                }
+            }
         }
-
-        if record.value < 0.0 || record.value > 1000.0 {
-            return Err(DataError::InvalidValue);
-        }
-
-        if !self.categories.contains(&record.category) {
-            return Err(DataError::UnknownCategory);
-        }
-
+        
+        self.data.insert(name, values);
         Ok(())
     }
 
-    pub fn add_record(&mut self, record: DataRecord) -> Result<(), DataError> {
-        self.validate_record(&record)?;
-
-        if self.records.contains_key(&record.id) {
-            return Err(DataError::DuplicateRecord);
-        }
-
-        self.records.insert(record.id, record);
-        Ok(())
+    pub fn set_validation_rule(&mut self, dataset_name: String, rule: ValidationRule) {
+        self.validation_rules.insert(dataset_name, rule);
     }
 
-    pub fn get_record(&self, id: u32) -> Option<&DataRecord> {
-        self.records.get(&id)
+    pub fn calculate_statistics(&self, dataset_name: &str) -> Option<Statistics> {
+        self.data.get(dataset_name).map(|values| {
+            let count = values.len();
+            let sum: f64 = values.iter().sum();
+            let mean = if count > 0 { sum / count as f64 } else { 0.0 };
+            
+            let variance = if count > 1 {
+                let squared_diff: f64 = values.iter()
+                    .map(|&x| (x - mean).powi(2))
+                    .sum();
+                squared_diff / (count - 1) as f64
+            } else {
+                0.0
+            };
+            
+            Statistics {
+                count,
+                sum,
+                mean,
+                variance,
+                std_dev: variance.sqrt(),
+            }
+        })
     }
 
-    pub fn calculate_average(&self) -> f64 {
-        if self.records.is_empty() {
-            return 0.0;
-        }
-
-        let sum: f64 = self.records.values().map(|r| r.value).sum();
-        sum / self.records.len() as f64
-    }
-
-    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
-        self.records
-            .values()
-            .filter(|r| r.category == category)
-            .collect()
-    }
-
-    pub fn transform_values<F>(&mut self, transform_fn: F)
+    pub fn transform_data<F>(&mut self, dataset_name: &str, transform_fn: F) -> Result<(), String>
     where
         F: Fn(f64) -> f64,
     {
-        for record in self.records.values_mut() {
-            record.value = transform_fn(record.value);
+        if let Some(values) = self.data.get_mut(dataset_name) {
+            for value in values {
+                *value = transform_fn(*value);
+            }
+            Ok(())
+        } else {
+            Err(format!("Dataset '{}' not found", dataset_name))
         }
     }
 
-    pub fn get_statistics(&self) -> HashMap<String, f64> {
-        let mut stats = HashMap::new();
+    pub fn merge_datasets(&mut self, target_name: String, source_names: Vec<&str>) -> Result<(), String> {
+        let mut merged_data = Vec::new();
         
-        if self.records.is_empty() {
-            return stats;
+        for &source_name in &source_names {
+            if let Some(data) = self.data.get(source_name) {
+                merged_data.extend(data.clone());
+            } else {
+                return Err(format!("Source dataset '{}' not found", source_name));
+            }
         }
+        
+        self.data.insert(target_name, merged_data);
+        Ok(())
+    }
+}
 
-        let values: Vec<f64> = self.records.values().map(|r| r.value).collect();
-        
-        stats.insert("average".to_string(), self.calculate_average());
-        stats.insert("min".to_string(), *values.iter().fold(&f64::INFINITY, |a, b| a.min(b)));
-        stats.insert("max".to_string(), *values.iter().fold(&f64::NEG_INFINITY, |a, b| a.max(b)));
-        
-        let variance: f64 = values.iter()
-            .map(|v| {
-                let diff = v - stats["average"];
-                diff * diff
-            })
-            .sum::<f64>() / values.len() as f64;
-        
-        stats.insert("variance".to_string(), variance);
-        stats.insert("std_dev".to_string(), variance.sqrt());
+pub struct Statistics {
+    pub count: usize,
+    pub sum: f64,
+    pub mean: f64,
+    pub variance: f64,
+    pub std_dev: f64,
+}
 
-        stats
+impl ValidationRule {
+    pub fn new(min: Option<f64>, max: Option<f64>, required: bool) -> Self {
+        ValidationRule {
+            min_value: min,
+            max_value: max,
+            required,
+        }
     }
 }
 
@@ -139,50 +131,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_valid_record() {
-        let categories = vec!["A".to_string(), "B".to_string()];
-        let processor = DataProcessor::new(categories);
+    fn test_add_and_validate_dataset() {
+        let mut processor = DataProcessor::new();
         
-        let record = DataRecord {
-            id: 1,
-            name: "Test".to_string(),
-            value: 100.0,
-            category: "A".to_string(),
-        };
-
-        assert!(processor.validate_record(&record).is_ok());
+        let rule = ValidationRule::new(Some(0.0), Some(100.0), true);
+        processor.set_validation_rule("scores".to_string(), rule);
+        
+        let result = processor.add_dataset("scores".to_string(), vec![85.5, 92.0, 78.3]);
+        assert!(result.is_ok());
+        
+        let invalid_result = processor.add_dataset("scores".to_string(), vec![120.0]);
+        assert!(invalid_result.is_err());
     }
 
     #[test]
-    fn test_invalid_category() {
-        let categories = vec!["A".to_string(), "B".to_string()];
-        let processor = DataProcessor::new(categories);
+    fn test_statistics_calculation() {
+        let mut processor = DataProcessor::new();
+        processor.add_dataset("test".to_string(), vec![1.0, 2.0, 3.0, 4.0, 5.0]).unwrap();
         
-        let record = DataRecord {
-            id: 1,
-            name: "Test".to_string(),
-            value: 100.0,
-            category: "C".to_string(),
-        };
-
-        assert!(matches!(processor.validate_record(&record), Err(DataError::UnknownCategory)));
-    }
-
-    #[test]
-    fn test_calculate_average() {
-        let categories = vec!["A".to_string()];
-        let mut processor = DataProcessor::new(categories);
-        
-        let records = vec![
-            DataRecord { id: 1, name: "R1".to_string(), value: 10.0, category: "A".to_string() },
-            DataRecord { id: 2, name: "R2".to_string(), value: 20.0, category: "A".to_string() },
-            DataRecord { id: 3, name: "R3".to_string(), value: 30.0, category: "A".to_string() },
-        ];
-
-        for record in records {
-            processor.add_record(record).unwrap();
-        }
-
-        assert_eq!(processor.calculate_average(), 20.0);
+        let stats = processor.calculate_statistics("test").unwrap();
+        assert_eq!(stats.count, 5);
+        assert_eq!(stats.sum, 15.0);
+        assert_eq!(stats.mean, 3.0);
     }
 }

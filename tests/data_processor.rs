@@ -489,3 +489,110 @@ mod tests {
         processor.normalize_data();
     }
 }
+use std::collections::HashMap;
+
+pub struct DataProcessor {
+    validation_rules: HashMap<String, Box<dyn Fn(&str) -> bool>>,
+    transformation_pipeline: Vec<Box<dyn Fn(String) -> String>>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            validation_rules: HashMap::new(),
+            transformation_pipeline: Vec::new(),
+        }
+    }
+
+    pub fn add_validation_rule(&mut self, field: &str, validator: Box<dyn Fn(&str) -> bool>) {
+        self.validation_rules.insert(field.to_string(), validator);
+    }
+
+    pub fn add_transformation(&mut self, transformer: Box<dyn Fn(String) -> String>) {
+        self.transformation_pipeline.push(transformer);
+    }
+
+    pub fn process_record(&self, record: &mut HashMap<String, String>) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        for (field, validator) in &self.validation_rules {
+            if let Some(value) = record.get(field) {
+                if !validator(value) {
+                    errors.push(format!("Validation failed for field: {}", field));
+                }
+            } else {
+                errors.push(format!("Missing required field: {}", field));
+            }
+        }
+
+        if !errors.is_empty() {
+            return Err(errors);
+        }
+
+        for transformer in &self.transformation_pipeline {
+            for (_, value) in record.iter_mut() {
+                *value = transformer(value.clone());
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn batch_process(
+        &self,
+        records: &mut [HashMap<String, String>],
+    ) -> Vec<Result<(), Vec<String>>> {
+        records
+            .iter_mut()
+            .map(|record| self.process_record(record))
+            .collect()
+    }
+}
+
+pub fn create_email_validator() -> Box<dyn Fn(&str) -> bool> {
+    Box::new(|email: &str| {
+        email.contains('@') && email.contains('.') && email.len() > 5
+    })
+}
+
+pub fn create_uppercase_transformer() -> Box<dyn Fn(String) -> String> {
+    Box::new(|s: String| s.to_uppercase())
+}
+
+pub fn create_trim_transformer() -> Box<dyn Fn(String) -> String> {
+    Box::new(|s: String| s.trim().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_data_processor() {
+        let mut processor = DataProcessor::new();
+        processor.add_validation_rule("email", create_email_validator());
+        processor.add_transformation(create_trim_transformer());
+        processor.add_transformation(create_uppercase_transformer());
+
+        let mut record = HashMap::new();
+        record.insert("email".to_string(), "  test@example.com  ".to_string());
+        record.insert("name".to_string(), "john doe".to_string());
+
+        let result = processor.process_record(&mut record);
+        assert!(result.is_ok());
+        assert_eq!(record.get("email").unwrap(), "TEST@EXAMPLE.COM");
+        assert_eq!(record.get("name").unwrap(), "JOHN DOE");
+    }
+
+    #[test]
+    fn test_validation_failure() {
+        let mut processor = DataProcessor::new();
+        processor.add_validation_rule("email", create_email_validator());
+
+        let mut record = HashMap::new();
+        record.insert("email".to_string(), "invalid-email".to_string());
+
+        let result = processor.process_record(&mut record);
+        assert!(result.is_err());
+    }
+}

@@ -572,4 +572,323 @@ mod tests {
         let expected = JsonValue::Object(expected_map);
         assert_eq!(parser.parse(), Ok(expected));
     }
+}use std::collections::HashMap;
+
+#[derive(Debug, PartialEq)]
+pub enum JsonValue {
+    Null,
+    Bool(bool),
+    Number(f64),
+    String(String),
+    Array(Vec<JsonValue>),
+    Object(HashMap<String, JsonValue>),
+}
+
+#[derive(Debug)]
+pub struct ParseError {
+    message: String,
+    position: usize,
+}
+
+pub fn parse_json(input: &str) -> Result<JsonValue, ParseError> {
+    let chars: Vec<char> = input.chars().collect();
+    let mut index = 0;
+    parse_value(&chars, &mut index)
+}
+
+fn parse_value(chars: &[char], index: &mut usize) -> Result<JsonValue, ParseError> {
+    skip_whitespace(chars, index);
+    
+    if *index >= chars.len() {
+        return Err(ParseError {
+            message: "Unexpected end of input".to_string(),
+            position: *index,
+        });
+    }
+    
+    match chars[*index] {
+        'n' => parse_literal(chars, index, "null", JsonValue::Null),
+        't' => parse_literal(chars, index, "true", JsonValue::Bool(true)),
+        'f' => parse_literal(chars, index, "false", JsonValue::Bool(false)),
+        '"' => parse_string(chars, index),
+        '[' => parse_array(chars, index),
+        '{' => parse_object(chars, index),
+        '-' | '0'..='9' => parse_number(chars, index),
+        _ => Err(ParseError {
+            message: format!("Unexpected character: {}", chars[*index]),
+            position: *index,
+        }),
+    }
+}
+
+fn parse_literal(
+    chars: &[char],
+    index: &mut usize,
+    literal: &str,
+    value: JsonValue,
+) -> Result<JsonValue, ParseError> {
+    for expected_char in literal.chars() {
+        if *index >= chars.len() || chars[*index] != expected_char {
+            return Err(ParseError {
+                message: format!("Expected '{}'", literal),
+                position: *index,
+            });
+        }
+        *index += 1;
+    }
+    Ok(value)
+}
+
+fn parse_string(chars: &[char], index: &mut usize) -> Result<JsonValue, ParseError> {
+    *index += 1; // Skip opening quote
+    let mut result = String::new();
+    
+    while *index < chars.len() && chars[*index] != '"' {
+        if chars[*index] == '\\' {
+            *index += 1;
+            if *index >= chars.len() {
+                return Err(ParseError {
+                    message: "Unterminated escape sequence".to_string(),
+                    position: *index,
+                });
+            }
+            match chars[*index] {
+                '"' => result.push('"'),
+                '\\' => result.push('\\'),
+                '/' => result.push('/'),
+                'b' => result.push('\x08'),
+                'f' => result.push('\x0c'),
+                'n' => result.push('\n'),
+                'r' => result.push('\r'),
+                't' => result.push('\t'),
+                _ => return Err(ParseError {
+                    message: format!("Invalid escape character: {}", chars[*index]),
+                    position: *index,
+                }),
+            }
+        } else {
+            result.push(chars[*index]);
+        }
+        *index += 1;
+    }
+    
+    if *index >= chars.len() || chars[*index] != '"' {
+        return Err(ParseError {
+            message: "Unterminated string".to_string(),
+            position: *index,
+        });
+    }
+    
+    *index += 1; // Skip closing quote
+    Ok(JsonValue::String(result))
+}
+
+fn parse_number(chars: &[char], index: &mut usize) -> Result<JsonValue, ParseError> {
+    let start = *index;
+    let mut has_dot = false;
+    let mut has_exponent = false;
+    
+    if chars[*index] == '-' {
+        *index += 1;
+    }
+    
+    while *index < chars.len() && chars[*index].is_ascii_digit() {
+        *index += 1;
+    }
+    
+    if *index < chars.len() && chars[*index] == '.' {
+        has_dot = true;
+        *index += 1;
+        while *index < chars.len() && chars[*index].is_ascii_digit() {
+            *index += 1;
+        }
+    }
+    
+    if *index < chars.len() && (chars[*index] == 'e' || chars[*index] == 'E') {
+        has_exponent = true;
+        *index += 1;
+        if *index < chars.len() && (chars[*index] == '+' || chars[*index] == '-') {
+            *index += 1;
+        }
+        while *index < chars.len() && chars[*index].is_ascii_digit() {
+            *index += 1;
+        }
+    }
+    
+    let num_str: String = chars[start..*index].iter().collect();
+    match num_str.parse::<f64>() {
+        Ok(num) => Ok(JsonValue::Number(num)),
+        Err(_) => Err(ParseError {
+            message: format!("Invalid number: {}", num_str),
+            position: start,
+        }),
+    }
+}
+
+fn parse_array(chars: &[char], index: &mut usize) -> Result<JsonValue, ParseError> {
+    *index += 1; // Skip '['
+    skip_whitespace(chars, index);
+    
+    let mut array = Vec::new();
+    
+    if *index < chars.len() && chars[*index] == ']' {
+        *index += 1;
+        return Ok(JsonValue::Array(array));
+    }
+    
+    loop {
+        let value = parse_value(chars, index)?;
+        array.push(value);
+        
+        skip_whitespace(chars, index);
+        if *index >= chars.len() {
+            return Err(ParseError {
+                message: "Unterminated array".to_string(),
+                position: *index,
+            });
+        }
+        
+        if chars[*index] == ']' {
+            *index += 1;
+            break;
+        } else if chars[*index] == ',' {
+            *index += 1;
+            skip_whitespace(chars, index);
+        } else {
+            return Err(ParseError {
+                message: format!("Expected ',' or ']', found '{}'", chars[*index]),
+                position: *index,
+            });
+        }
+    }
+    
+    Ok(JsonValue::Array(array))
+}
+
+fn parse_object(chars: &[char], index: &mut usize) -> Result<JsonValue, ParseError> {
+    *index += 1; // Skip '{'
+    skip_whitespace(chars, index);
+    
+    let mut object = HashMap::new();
+    
+    if *index < chars.len() && chars[*index] == '}' {
+        *index += 1;
+        return Ok(JsonValue::Object(object));
+    }
+    
+    loop {
+        skip_whitespace(chars, index);
+        if *index >= chars.len() || chars[*index] != '"' {
+            return Err(ParseError {
+                message: "Expected string key".to_string(),
+                position: *index,
+            });
+        }
+        
+        let key = match parse_string(chars, index)? {
+            JsonValue::String(s) => s,
+            _ => unreachable!(),
+        };
+        
+        skip_whitespace(chars, index);
+        if *index >= chars.len() || chars[*index] != ':' {
+            return Err(ParseError {
+                message: "Expected ':'".to_string(),
+                position: *index,
+            });
+        }
+        *index += 1;
+        
+        let value = parse_value(chars, index)?;
+        object.insert(key, value);
+        
+        skip_whitespace(chars, index);
+        if *index >= chars.len() {
+            return Err(ParseError {
+                message: "Unterminated object".to_string(),
+                position: *index,
+            });
+        }
+        
+        if chars[*index] == '}' {
+            *index += 1;
+            break;
+        } else if chars[*index] == ',' {
+            *index += 1;
+            skip_whitespace(chars, index);
+        } else {
+            return Err(ParseError {
+                message: format!("Expected ',' or '}}', found '{}'", chars[*index]),
+                position: *index,
+            });
+        }
+    }
+    
+    Ok(JsonValue::Object(object))
+}
+
+fn skip_whitespace(chars: &[char], index: &mut usize) {
+    while *index < chars.len() && chars[*index].is_whitespace() {
+        *index += 1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_parse_null() {
+        assert_eq!(parse_json("null").unwrap(), JsonValue::Null);
+    }
+    
+    #[test]
+    fn test_parse_boolean() {
+        assert_eq!(parse_json("true").unwrap(), JsonValue::Bool(true));
+        assert_eq!(parse_json("false").unwrap(), JsonValue::Bool(false));
+    }
+    
+    #[test]
+    fn test_parse_number() {
+        assert_eq!(parse_json("42").unwrap(), JsonValue::Number(42.0));
+        assert_eq!(parse_json("-3.14").unwrap(), JsonValue::Number(-3.14));
+        assert_eq!(parse_json("1.23e-4").unwrap(), JsonValue::Number(1.23e-4));
+    }
+    
+    #[test]
+    fn test_parse_string() {
+        assert_eq!(
+            parse_json(r#""hello""#).unwrap(),
+            JsonValue::String("hello".to_string())
+        );
+        assert_eq!(
+            parse_json(r#""escape\nsequence""#).unwrap(),
+            JsonValue::String("escape\nsequence".to_string())
+        );
+    }
+    
+    #[test]
+    fn test_parse_array() {
+        let result = parse_json("[1, 2, 3]").unwrap();
+        if let JsonValue::Array(arr) = result {
+            assert_eq!(arr.len(), 3);
+            assert_eq!(arr[0], JsonValue::Number(1.0));
+            assert_eq!(arr[1], JsonValue::Number(2.0));
+            assert_eq!(arr[2], JsonValue::Number(3.0));
+        } else {
+            panic!("Expected array");
+        }
+    }
+    
+    #[test]
+    fn test_parse_object() {
+        let result = parse_json(r#"{"key": "value", "num": 42}"#).unwrap();
+        if let JsonValue::Object(obj) = result {
+            assert_eq!(obj.len(), 2);
+            assert_eq!(obj.get("key"), Some(&JsonValue::String("value".to_string())));
+            assert_eq!(obj.get("num"), Some(&JsonValue::Number(42.0)));
+        } else {
+            panic!("Expected object");
+        }
+    }
 }

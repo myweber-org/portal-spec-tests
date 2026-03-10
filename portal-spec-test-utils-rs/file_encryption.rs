@@ -730,3 +730,64 @@ fn main() -> io::Result<()> {
     println!("File processed successfully with XOR key 0x{:02X}", DEFAULT_KEY);
     Ok(())
 }
+use std::fs;
+use std::io::{self, Read, Write};
+
+pub fn xor_encrypt_file(input_path: &str, output_path: &str, key: &[u8]) -> io::Result<()> {
+    let mut input_file = fs::File::open(input_path)?;
+    let mut buffer = Vec::new();
+    input_file.read_to_end(&mut buffer)?;
+
+    let encrypted_data: Vec<u8> = buffer
+        .iter()
+        .enumerate()
+        .map(|(i, &byte)| byte ^ key[i % key.len()])
+        .collect();
+
+    let mut output_file = fs::File::create(output_path)?;
+    output_file.write_all(&encrypted_data)?;
+
+    Ok(())
+}
+
+pub fn xor_decrypt_file(input_path: &str, output_path: &str, key: &[u8]) -> io::Result<()> {
+    xor_encrypt_file(input_path, output_path, key)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_xor_encryption() {
+        let key = b"secret_key";
+        let original_data = b"Hello, Rust encryption!";
+
+        let input_file = NamedTempFile::new().unwrap();
+        let output_file = NamedTempFile::new().unwrap();
+
+        fs::write(input_file.path(), original_data).unwrap();
+
+        xor_encrypt_file(
+            input_file.path().to_str().unwrap(),
+            output_file.path().to_str().unwrap(),
+            key,
+        )
+        .unwrap();
+
+        let encrypted_data = fs::read(output_file.path()).unwrap();
+        assert_ne!(encrypted_data, original_data);
+
+        let decrypt_file = NamedTempFile::new().unwrap();
+        xor_decrypt_file(
+            output_file.path().to_str().unwrap(),
+            decrypt_file.path().to_str().unwrap(),
+            key,
+        )
+        .unwrap();
+
+        let decrypted_data = fs::read(decrypt_file.path()).unwrap();
+        assert_eq!(decrypted_data, original_data);
+    }
+}

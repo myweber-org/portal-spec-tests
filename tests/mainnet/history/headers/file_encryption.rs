@@ -93,3 +93,94 @@ pub fn decrypt_file(input_path: &str, output_path: &str) -> Result<(), Box<dyn s
 
     Ok(())
 }
+use std::fs;
+use std::io::{self, Read, Write};
+use std::path::Path;
+
+pub struct XorCipher {
+    key: Vec<u8>,
+    key_index: usize,
+}
+
+impl XorCipher {
+    pub fn new(key: &str) -> Self {
+        XorCipher {
+            key: key.as_bytes().to_vec(),
+            key_index: 0,
+        }
+    }
+
+    fn next_key_byte(&mut self) -> u8 {
+        let byte = self.key[self.key_index];
+        self.key_index = (self.key_index + 1) % self.key.len();
+        byte
+    }
+
+    pub fn process_bytes(&mut self, data: &mut [u8]) {
+        for byte in data.iter_mut() {
+            *byte ^= self.next_key_byte();
+        }
+    }
+}
+
+pub fn encrypt_file(input_path: &Path, output_path: &Path, key: &str) -> io::Result<()> {
+    let mut cipher = XorCipher::new(key);
+    let mut input_file = fs::File::open(input_path)?;
+    let mut buffer = Vec::new();
+    input_file.read_to_end(&mut buffer)?;
+
+    cipher.process_bytes(&mut buffer);
+
+    let mut output_file = fs::File::create(output_path)?;
+    output_file.write_all(&buffer)?;
+
+    Ok(())
+}
+
+pub fn decrypt_file(input_path: &Path, output_path: &Path, key: &str) -> io::Result<()> {
+    encrypt_file(input_path, output_path, key)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_xor_cipher_symmetry() {
+        let key = "secret_key";
+        let original_data = b"Hello, World! This is a test message.";
+        let mut cipher1 = XorCipher::new(key);
+        let mut cipher2 = XorCipher::new(key);
+
+        let mut encrypted = original_data.to_vec();
+        cipher1.process_bytes(&mut encrypted);
+
+        let mut decrypted = encrypted.clone();
+        cipher2.process_bytes(&mut decrypted);
+
+        assert_eq!(original_data, decrypted.as_slice());
+    }
+
+    #[test]
+    fn test_file_encryption() -> io::Result<()> {
+        let key = "test_password";
+        let original_content = b"Confidential data that needs protection.";
+
+        let mut input_file = NamedTempFile::new()?;
+        input_file.write_all(original_content)?;
+        let input_path = input_file.path();
+
+        let output_path = input_path.with_extension("enc");
+        let decrypted_path = input_path.with_extension("dec");
+
+        encrypt_file(input_path, &output_path, key)?;
+        decrypt_file(&output_path, &decrypted_path, key)?;
+
+        let decrypted_content = fs::read(decrypted_path)?;
+        assert_eq!(original_content, decrypted_content.as_slice());
+
+        Ok(())
+    }
+}

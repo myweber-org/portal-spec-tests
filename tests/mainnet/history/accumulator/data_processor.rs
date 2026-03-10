@@ -1,78 +1,108 @@
+
 use std::error::Error;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub value: f64,
+    pub category: String,
+    pub timestamp: u64,
+}
+
 pub struct DataProcessor {
-    delimiter: char,
-    has_header: bool,
+    records: Vec<DataRecord>,
 }
 
 impl DataProcessor {
-    pub fn new(delimiter: char, has_header: bool) -> Self {
+    pub fn new() -> Self {
         DataProcessor {
-            delimiter,
-            has_header,
+            records: Vec::new(),
         }
     }
 
-    pub fn process_csv<P: AsRef<Path>>(&self, file_path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
-        let file = File::open(file_path)?;
+    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<usize, Box<dyn Error>> {
+        let file = File::open(path)?;
         let reader = BufReader::new(file);
-        let mut records = Vec::new();
-        let mut lines = reader.lines();
+        let mut count = 0;
 
-        if self.has_header {
-            lines.next();
-        }
-
-        for line_result in lines {
-            let line = line_result?;
-            let fields: Vec<String> = line
-                .split(self.delimiter)
-                .map(|s| s.trim().to_string())
-                .collect();
+        for (line_num, line) in reader.lines().enumerate() {
+            let line = line?;
             
-            if !fields.is_empty() {
-                records.push(fields);
+            if line_num == 0 {
+                continue;
             }
+
+            let parts: Vec<&str> = line.split(',').collect();
+            if parts.len() != 4 {
+                continue;
+            }
+
+            let id = match parts[0].parse::<u32>() {
+                Ok(val) => val,
+                Err(_) => continue,
+            };
+
+            let value = match parts[1].parse::<f64>() {
+                Ok(val) => val,
+                Err(_) => continue,
+            };
+
+            let category = parts[2].to_string();
+            
+            let timestamp = match parts[3].parse::<u64>() {
+                Ok(val) => val,
+                Err(_) => continue,
+            };
+
+            let record = DataRecord {
+                id,
+                value,
+                category,
+                timestamp,
+            };
+
+            self.records.push(record);
+            count += 1;
         }
 
-        Ok(records)
+        Ok(count)
     }
 
-    pub fn validate_numeric_fields(&self, data: &[Vec<String>], column_index: usize) -> Result<Vec<f64>, String> {
-        let mut numeric_values = Vec::new();
-        
-        for (row_num, row) in data.iter().enumerate() {
-            if column_index >= row.len() {
-                return Err(format!("Row {}: Column index out of bounds", row_num));
-            }
-            
-            match row[column_index].parse::<f64>() {
-                Ok(value) => numeric_values.push(value),
-                Err(_) => return Err(format!("Row {}: Invalid numeric value '{}'", row_num, row[column_index])),
-            }
-        }
-        
-        Ok(numeric_values)
+    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
+        self.records
+            .iter()
+            .filter(|record| record.category == category)
+            .collect()
     }
 
-    pub fn calculate_statistics(&self, values: &[f64]) -> (f64, f64, f64) {
-        if values.is_empty() {
-            return (0.0, 0.0, 0.0);
+    pub fn calculate_average(&self) -> Option<f64> {
+        if self.records.is_empty() {
+            return None;
         }
 
-        let sum: f64 = values.iter().sum();
-        let mean = sum / values.len() as f64;
-        
-        let variance: f64 = values.iter()
-            .map(|&x| (x - mean).powi(2))
-            .sum::<f64>() / values.len() as f64;
-        
-        let std_dev = variance.sqrt();
-        
-        (mean, variance, std_dev)
+        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        Some(sum / self.records.len() as f64)
+    }
+
+    pub fn find_max_value(&self) -> Option<&DataRecord> {
+        self.records
+            .iter()
+            .max_by(|a, b| a.value.partial_cmp(&b.value).unwrap())
+    }
+
+    pub fn sort_by_timestamp(&mut self) {
+        self.records.sort_by_key(|r| r.timestamp);
+    }
+
+    pub fn get_record_count(&self) -> usize {
+        self.records.len()
+    }
+
+    pub fn clear(&mut self) {
+        self.records.clear();
     }
 }
 
@@ -83,40 +113,29 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_csv_processing() {
+    fn test_data_processor() {
+        let mut processor = DataProcessor::new();
+        assert_eq!(processor.get_record_count(), 0);
+
         let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "name,age,salary").unwrap();
-        writeln!(temp_file, "Alice,30,50000.5").unwrap();
-        writeln!(temp_file, "Bob,25,45000.0").unwrap();
-        
-        let processor = DataProcessor::new(',', true);
-        let result = processor.process_csv(temp_file.path()).unwrap();
-        
-        assert_eq!(result.len(), 2);
-        assert_eq!(result[0], vec!["Alice", "30", "50000.5"]);
-    }
+        writeln!(temp_file, "id,value,category,timestamp").unwrap();
+        writeln!(temp_file, "1,25.5,alpha,1625097600").unwrap();
+        writeln!(temp_file, "2,30.2,beta,1625184000").unwrap();
+        writeln!(temp_file, "3,15.8,alpha,1625270400").unwrap();
 
-    #[test]
-    fn test_numeric_validation() {
-        let data = vec![
-            vec!["10.5".to_string(), "text".to_string()],
-            vec!["20.0".to_string(), "more".to_string()],
-        ];
-        
-        let processor = DataProcessor::new(',', false);
-        let numeric_values = processor.validate_numeric_fields(&data, 0).unwrap();
-        
-        assert_eq!(numeric_values, vec![10.5, 20.0]);
-    }
+        let result = processor.load_from_csv(temp_file.path());
+        assert!(result.is_ok());
+        assert_eq!(processor.get_record_count(), 3);
 
-    #[test]
-    fn test_statistics_calculation() {
-        let values = vec![1.0, 2.0, 3.0, 4.0, 5.0];
-        let processor = DataProcessor::new(',', false);
-        let (mean, variance, std_dev) = processor.calculate_statistics(&values);
-        
-        assert_eq!(mean, 3.0);
-        assert_eq!(variance, 2.0);
-        assert_eq!(std_dev, 2.0_f64.sqrt());
+        let alpha_records = processor.filter_by_category("alpha");
+        assert_eq!(alpha_records.len(), 2);
+
+        let average = processor.calculate_average();
+        assert!(average.is_some());
+        assert!((average.unwrap() - 23.83333).abs() < 0.0001);
+
+        let max_record = processor.find_max_value();
+        assert!(max_record.is_some());
+        assert_eq!(max_record.unwrap().id, 2);
     }
 }

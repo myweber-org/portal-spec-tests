@@ -459,4 +459,32 @@ mod tests {
 
         assert_eq!(result, expected);
     }
+}use serde_json::{json, Value};
+use std::fs;
+use std::io;
+use std::path::Path;
+
+pub fn merge_json_files<P: AsRef<Path>>(paths: &[P]) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut merged_array = Vec::new();
+
+    for path in paths {
+        let content = fs::read_to_string(path)?;
+        let parsed: Value = serde_json::from_str(&content)?;
+        
+        if let Value::Array(arr) = parsed {
+            merged_array.extend(arr);
+        } else {
+            merged_array.push(parsed);
+        }
+    }
+
+    Ok(json!(merged_array))
+}
+
+pub fn merge_and_write<P: AsRef<Path>>(input_paths: &[P], output_path: P) -> io::Result<()> {
+    let merged = merge_json_files(input_paths)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    
+    let json_string = serde_json::to_string_pretty(&merged)?;
+    fs::write(output_path, json_string)
 }

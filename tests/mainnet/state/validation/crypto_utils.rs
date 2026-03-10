@@ -91,3 +91,27 @@ mod tests {
         assert!(token.chars().all(|c| c.is_ascii_alphanumeric()));
     }
 }
+use rand::{thread_rng, Rng};
+use rand::distributions::Alphanumeric;
+
+pub fn generate_password(length: usize) -> String {
+    let mut rng = thread_rng();
+    (0..length)
+        .map(|_| rng.sample(Alphanumeric) as char)
+        .collect()
+}
+
+pub fn generate_secure_token() -> String {
+    let mut rng = thread_rng();
+    let token: String = (0..32)
+        .map(|_| format!("{:02x}", rng.gen::<u8>()))
+        .collect();
+    token
+}
+
+pub fn generate_numeric_code(digits: u32) -> String {
+    let mut rng = thread_rng();
+    let max = 10u32.pow(digits);
+    let code = rng.gen_range(0..max);
+    format!("{:0width$}", code, width = digits as usize)
+}

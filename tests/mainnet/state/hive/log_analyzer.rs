@@ -13,7 +13,7 @@ impl LogAnalyzer {
     pub fn new() -> Self {
         LogAnalyzer {
             error_pattern: Regex::new(r"ERROR").unwrap(),
-            warning_pattern: Regex::new(r"WARN").unwrap(),
+            warning_pattern: Regex::new(r"WARNING").unwrap(),
             info_pattern: Regex::new(r"INFO").unwrap(),
         }
     }
@@ -26,29 +26,33 @@ impl LogAnalyzer {
         let mut stats = HashMap::new();
         
         for line in reader.lines() {
-            let line_content = line.map_err(|e| format!("Failed to read line: {}", e))?;
+            let line = line.map_err(|e| format!("Failed to read line: {}", e))?;
             
-            if self.error_pattern.is_match(&line_content) {
+            if self.error_pattern.is_match(&line) {
                 *stats.entry("ERROR".to_string()).or_insert(0) += 1;
-            } else if self.warning_pattern.is_match(&line_content) {
-                *stats.entry("WARN".to_string()).or_insert(0) += 1;
-            } else if self.info_pattern.is_match(&line_content) {
+            } else if self.warning_pattern.is_match(&line) {
+                *stats.entry("WARNING".to_string()).or_insert(0) += 1;
+            } else if self.info_pattern.is_match(&line) {
                 *stats.entry("INFO".to_string()).or_insert(0) += 1;
             }
         }
         
         Ok(stats)
     }
-
-    pub fn generate_summary(&self, stats: &HashMap<String, usize>) -> String {
-        let total: usize = stats.values().sum();
-        let error_count = stats.get("ERROR").unwrap_or(&0);
-        let warning_count = stats.get("WARN").unwrap_or(&0);
+    
+    pub fn generate_report(&self, stats: &HashMap<String, usize>) -> String {
+        let mut report = String::new();
+        report.push_str("Log Analysis Report\n");
+        report.push_str("===================\n");
         
-        format!(
-            "Log Summary: Total entries: {}, Errors: {}, Warnings: {}",
-            total, error_count, warning_count
-        )
+        for (level, count) in stats {
+            report.push_str(&format!("{}: {}\n", level, count));
+        }
+        
+        let total: usize = stats.values().sum();
+        report.push_str(&format!("\nTotal log entries: {}", total));
+        
+        report
     }
 }
 
@@ -64,19 +68,18 @@ mod tests {
         
         let mut temp_file = NamedTempFile::new().unwrap();
         writeln!(temp_file, "2024-01-15 INFO: Application started").unwrap();
-        writeln!(temp_file, "2024-01-15 WARN: Low disk space").unwrap();
+        writeln!(temp_file, "2024-01-15 WARNING: High memory usage").unwrap();
         writeln!(temp_file, "2024-01-15 ERROR: Database connection failed").unwrap();
         writeln!(temp_file, "2024-01-15 INFO: User login successful").unwrap();
         
         let stats = analyzer.analyze_log_file(temp_file.path().to_str().unwrap()).unwrap();
         
         assert_eq!(stats.get("INFO"), Some(&2));
-        assert_eq!(stats.get("WARN"), Some(&1));
+        assert_eq!(stats.get("WARNING"), Some(&1));
         assert_eq!(stats.get("ERROR"), Some(&1));
         
-        let summary = analyzer.generate_summary(&stats);
-        assert!(summary.contains("Total entries: 4"));
-        assert!(summary.contains("Errors: 1"));
-        assert!(summary.contains("Warnings: 1"));
+        let report = analyzer.generate_report(&stats);
+        assert!(report.contains("INFO: 2"));
+        assert!(report.contains("Total log entries: 4"));
     }
 }

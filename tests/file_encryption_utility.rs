@@ -999,4 +999,108 @@ pub fn decrypt_file(input_path: &Path, output_path: &Path, password: &str) -> Re
         .map_err(|e| format!("Failed to write output file: {}", e))?;
     
     Ok(())
+}use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce
+};
+use argon2::{
+    password_hash::{
+        rand_core::OsRng,
+        PasswordHasher, SaltString
+    },
+    Argon2
+};
+use std::fs;
+use std::io::{self, Write};
+
+const NONCE_SIZE: usize = 12;
+
+pub fn encrypt_file(input_path: &str, output_path: &str, password: &str) -> io::Result<()> {
+    let plaintext = fs::read(input_path)?;
+    
+    let salt = SaltString::generate(&mut OsRng);
+    let argon2 = Argon2::default();
+    let password_hash = argon2.hash_password(password.as_bytes(), &salt)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+    
+    let key = Key::<Aes256Gcm>::from_slice(&password_hash.hash.unwrap().as_bytes()[..32]);
+    let cipher = Aes256Gcm::new(key);
+    
+    let mut nonce_bytes = [0u8; NONCE_SIZE];
+    OsRng.fill_bytes(&mut nonce_bytes);
+    let nonce = Nonce::from_slice(&nonce_bytes);
+    
+    let ciphertext = cipher.encrypt(nonce, plaintext.as_ref())
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+    
+    let mut output_data = Vec::new();
+    output_data.extend_from_slice(salt.as_str().as_bytes());
+    output_data.push(b'|');
+    output_data.extend_from_slice(&nonce_bytes);
+    output_data.push(b'|');
+    output_data.extend_from_slice(&ciphertext);
+    
+    fs::write(output_path, output_data)
+}
+
+pub fn decrypt_file(input_path: &str, output_path: &str, password: &str) -> io::Result<()> {
+    let encrypted_data = fs::read(input_path)?;
+    let parts: Vec<&[u8]> = encrypted_data.split(|&b| b == b'|').collect();
+    
+    if parts.len() != 3 {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "Invalid encrypted file format"));
+    }
+    
+    let salt_str = std::str::from_utf8(parts[0])
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+    let salt = SaltString::new(salt_str)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+    
+    let argon2 = Argon2::default();
+    let password_hash = argon2.hash_password(password.as_bytes(), &salt)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+    
+    let key = Key::<Aes256Gcm>::from_slice(&password_hash.hash.unwrap().as_bytes()[..32]);
+    let cipher = Aes256Gcm::new(key);
+    
+    let nonce = Nonce::from_slice(parts[1]);
+    let ciphertext = parts[2];
+    
+    let plaintext = cipher.decrypt(nonce, ciphertext)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+    
+    fs::write(output_path, plaintext)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_encryption_roundtrip() {
+        let original_content = b"Test data for encryption roundtrip";
+        let password = "secure_password_123";
+        
+        let input_file = NamedTempFile::new().unwrap();
+        let encrypted_file = NamedTempFile::new().unwrap();
+        let decrypted_file = NamedTempFile::new().unwrap();
+        
+        fs::write(input_file.path(), original_content).unwrap();
+        
+        encrypt_file(
+            input_file.path().to_str().unwrap(),
+            encrypted_file.path().to_str().unwrap(),
+            password
+        ).unwrap();
+        
+        decrypt_file(
+            encrypted_file.path().to_str().unwrap(),
+            decrypted_file.path().to_str().unwrap(),
+            password
+        ).unwrap();
+        
+        let decrypted_content = fs::read(decrypted_file.path()).unwrap();
+        assert_eq!(original_content.to_vec(), decrypted_content);
+    }
 }

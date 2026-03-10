@@ -92,4 +92,67 @@ pub fn decrypt_file(input_path: &str, output_path: &str) -> Result<(), Box<dyn s
 
     fs::write(output_path, plaintext)?;
     Ok(())
+}use std::fs;
+use std::io::{self, Read, Write};
+
+const KEY: &[u8] = b"secret-encryption-key-2024";
+
+fn xor_cipher(data: &[u8], key: &[u8]) -> Vec<u8> {
+    data.iter()
+        .enumerate()
+        .map(|(i, &byte)| byte ^ key[i % key.len()])
+        .collect()
+}
+
+fn encode_base64(data: &[u8]) -> String {
+    base64::encode(data)
+}
+
+fn decode_base64(encoded: &str) -> Result<Vec<u8>, base64::DecodeError> {
+    base64::decode(encoded)
+}
+
+pub fn encrypt_file(input_path: &str, output_path: &str) -> io::Result<()> {
+    let mut file = fs::File::open(input_path)?;
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer)?;
+    
+    let encrypted = xor_cipher(&buffer, KEY);
+    let encoded = encode_base64(&encrypted);
+    
+    fs::write(output_path, encoded)
+}
+
+pub fn decrypt_file(input_path: &str, output_path: &str) -> io::Result<()> {
+    let encoded = fs::read_to_string(input_path)?;
+    let encrypted = decode_base64(&encoded).map_err(|e| {
+        io::Error::new(io::ErrorKind::InvalidData, e.to_string())
+    })?;
+    
+    let decrypted = xor_cipher(&encrypted, KEY);
+    fs::write(output_path, decrypted)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_encryption_roundtrip() {
+        let test_data = b"Hello, this is a secret message!";
+        let temp_input = NamedTempFile::new().unwrap();
+        let temp_encrypted = NamedTempFile::new().unwrap();
+        let temp_decrypted = NamedTempFile::new().unwrap();
+
+        fs::write(temp_input.path(), test_data).unwrap();
+        
+        encrypt_file(temp_input.path().to_str().unwrap(), 
+                    temp_encrypted.path().to_str().unwrap()).unwrap();
+        decrypt_file(temp_encrypted.path().to_str().unwrap(),
+                    temp_decrypted.path().to_str().unwrap()).unwrap();
+        
+        let result = fs::read(temp_decrypted.path()).unwrap();
+        assert_eq!(test_data.to_vec(), result);
+    }
 }

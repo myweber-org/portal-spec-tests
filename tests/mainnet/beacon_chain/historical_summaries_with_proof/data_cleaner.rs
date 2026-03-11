@@ -90,3 +90,60 @@ mod tests {
         assert_eq!(result, vec!["apple", "banana"]);
     }
 }
+use regex::Regex;
+use std::collections::HashSet;
+
+pub fn clean_and_normalize(input: &str, stopwords: Option<HashSet<&str>>) -> String {
+    let re = Regex::new(r"[^\w\s]").unwrap();
+    let mut cleaned = re.replace_all(input, "").to_lowercase();
+    
+    cleaned = cleaned.trim().to_string();
+    
+    if let Some(stopword_set) = stopwords {
+        let words: Vec<&str> = cleaned.split_whitespace().collect();
+        let filtered: Vec<&str> = words
+            .iter()
+            .filter(|&&word| !stopword_set.contains(word))
+            .copied()
+            .collect();
+        cleaned = filtered.join(" ");
+    }
+    
+    cleaned
+}
+
+pub fn generate_slug(input: &str) -> String {
+    let cleaned = clean_and_normalize(input, None);
+    cleaned.replace(' ', "-")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+    
+    #[test]
+    fn test_basic_cleaning() {
+        let input = "Hello, World! This is a TEST.";
+        let result = clean_and_normalize(input, None);
+        assert_eq!(result, "hello world this is a test");
+    }
+    
+    #[test]
+    fn test_with_stopwords() {
+        let input = "the quick brown fox jumps over the lazy dog";
+        let mut stopwords = HashSet::new();
+        stopwords.insert("the");
+        stopwords.insert("over");
+        
+        let result = clean_and_normalize(input, Some(stopwords));
+        assert_eq!(result, "quick brown fox jumps lazy dog");
+    }
+    
+    #[test]
+    fn test_slug_generation() {
+        let input = "Rust Programming Language";
+        let result = generate_slug(input);
+        assert_eq!(result, "rust-programming-language");
+    }
+}

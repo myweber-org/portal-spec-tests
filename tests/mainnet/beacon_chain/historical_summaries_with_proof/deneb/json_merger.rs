@@ -204,3 +204,62 @@ mod tests {
         assert_eq!(result["key"], "second");
     }
 }
+use serde_json::{Map, Value};
+use std::env;
+use std::fs::File;
+use std::io::{BufReader, Write};
+use std::path::Path;
+
+fn merge_json_objects(base: &mut Map<String, Value>, addition: Map<String, Value>) {
+    for (key, value) in addition {
+        if let Some(existing) = base.get_mut(&key) {
+            if existing.is_object() && value.is_object() {
+                if let (Some(existing_obj), Some(new_obj)) = (existing.as_object_mut(), value.as_object()) {
+                    let mut new_map = new_obj.clone();
+                    merge_json_objects(existing_obj, new_map);
+                }
+            } else {
+                base.insert(key, value);
+            }
+        } else {
+            base.insert(key, value);
+        }
+    }
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<String> = env::args().collect();
+    if args.len() < 3 {
+        eprintln!("Usage: {} <output_file> <input_file1> [input_file2 ...]", args[0]);
+        std::process::exit(1);
+    }
+
+    let output_path = &args[1];
+    let input_files = &args[2..];
+
+    let mut merged_data = Map::new();
+
+    for file_path in input_files {
+        let path = Path::new(file_path);
+        if !path.exists() {
+            eprintln!("Warning: File '{}' not found, skipping.", file_path);
+            continue;
+        }
+
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let json_data: Value = serde_json::from_reader(reader)?;
+
+        if let Value::Object(obj) = json_data {
+            merge_json_objects(&mut merged_data, obj);
+        } else {
+            eprintln!("Warning: '{}' does not contain a JSON object, skipping.", file_path);
+        }
+    }
+
+    let output_file = File::create(output_path)?;
+    serde_json::to_writer_pretty(output_file, &Value::Object(merged_data))?;
+
+    println!("Successfully merged {} files into '{}'", input_files.len(), output_path);
+    Ok(())
+}

@@ -157,4 +157,67 @@ mod tests {
         let invalid_data = r#"{"age": 30}"#;
         assert!(validate_json(schema, invalid_data).is_err());
     }
+}use serde_json::{Result, Value};
+use std::collections::HashSet;
+
+pub fn is_valid_json(json_str: &str) -> bool {
+    serde_json::from_str::<Value>(json_str).is_ok()
+}
+
+pub fn validate_json_structure(json_str: &str, required_keys: &[&str]) -> Result<bool> {
+    let parsed: Value = serde_json::from_str(json_str)?;
+    
+    if let Value::Object(map) = parsed {
+        let keys: HashSet<String> = map.keys().cloned().collect();
+        let required_set: HashSet<&str> = required_keys.iter().cloned().collect();
+        
+        return Ok(required_set.is_subset(&keys.iter().map(|s| s.as_str()).collect()));
+    }
+    
+    Ok(false)
+}
+
+pub fn extract_string_field(json_str: &str, field: &str) -> Result<Option<String>> {
+    let parsed: Value = serde_json::from_str(json_str)?;
+    
+    if let Value::Object(map) = parsed {
+        if let Some(value) = map.get(field) {
+            if let Value::String(s) = value {
+                return Ok(Some(s.clone()));
+            }
+        }
+    }
+    
+    Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_json() {
+        let valid_json = r#"{"name": "test", "value": 42}"#;
+        assert!(is_valid_json(valid_json));
+    }
+
+    #[test]
+    fn test_invalid_json() {
+        let invalid_json = r#"{"name": test}"#;
+        assert!(!is_valid_json(invalid_json));
+    }
+
+    #[test]
+    fn test_validate_structure() {
+        let json = r#"{"id": 1, "name": "item"}"#;
+        let required = vec!["id", "name"];
+        assert!(validate_json_structure(json, &required).unwrap());
+    }
+
+    #[test]
+    fn test_extract_field() {
+        let json = r#"{"title": "example", "count": 5}"#;
+        let result = extract_string_field(json, "title").unwrap();
+        assert_eq!(result, Some("example".to_string()));
+    }
 }

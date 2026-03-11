@@ -282,4 +282,145 @@ impl PartialOrd for LogLevel {
         };
         Some(self_val.cmp(&other_val))
     }
+}use serde_json::Value;
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug)]
+pub struct LogEntry {
+    pub timestamp: Option<String>,
+    pub level: Option<String>,
+    pub message: Option<String>,
+    pub fields: HashMap<String, Value>,
+}
+
+pub struct LogParser {
+    filter_level: Option<String>,
+    required_fields: Vec<String>,
+}
+
+impl LogParser {
+    pub fn new() -> Self {
+        LogParser {
+            filter_level: None,
+            required_fields: Vec::new(),
+        }
+    }
+
+    pub fn set_level_filter(&mut self, level: &str) -> &mut Self {
+        self.filter_level = Some(level.to_lowercase());
+        self
+    }
+
+    pub fn add_required_field(&mut self, field: &str) -> &mut Self {
+        self.required_fields.push(field.to_string());
+        self
+    }
+
+    pub fn parse_file<P: AsRef<Path>>(&self, path: P) -> Result<Vec<LogEntry>, Box<dyn std::error::Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut entries = Vec::new();
+
+        for line in reader.lines() {
+            let line = line?;
+            if let Ok(entry) = self.parse_line(&line) {
+                entries.push(entry);
+            }
+        }
+
+        Ok(entries)
+    }
+
+    fn parse_line(&self, line: &str) -> Result<LogEntry, Box<dyn std::error::Error>> {
+        let json_value: Value = serde_json::from_str(line)?;
+        let mut fields = HashMap::new();
+        let mut timestamp = None;
+        let mut level = None;
+        let mut message = None;
+
+        if let Value::Object(map) = json_value {
+            for (key, value) in map {
+                match key.as_str() {
+                    "timestamp" | "time" | "@timestamp" => {
+                        if let Value::String(s) = value {
+                            timestamp = Some(s);
+                        }
+                    }
+                    "level" | "severity" | "log_level" => {
+                        if let Value::String(s) = value {
+                            level = Some(s.to_lowercase());
+                        }
+                    }
+                    "message" | "msg" | "text" => {
+                        if let Value::String(s) = value {
+                            message = Some(s);
+                        }
+                    }
+                    _ => {
+                        fields.insert(key, value);
+                    }
+                }
+            }
+        }
+
+        if let Some(filter) = &self.filter_level {
+            if let Some(entry_level) = &level {
+                if entry_level != filter {
+                    return Err("Level filter mismatch".into());
+                }
+            }
+        }
+
+        for field in &self.required_fields {
+            if !fields.contains_key(field) {
+                return Err(format!("Missing required field: {}", field).into());
+            }
+        }
+
+        Ok(LogEntry {
+            timestamp,
+            level,
+            message,
+            fields,
+        })
+    }
+
+    pub fn extract_field_values(&self, entries: &[LogEntry], field_name: &str) -> Vec<Value> {
+        entries
+            .iter()
+            .filter_map(|entry| entry.fields.get(field_name).cloned())
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parser_with_level_filter() {
+        let log_line = r#"{"timestamp":"2023-10-01T12:00:00Z","level":"error","message":"Something failed","user_id":12345}"#;
+        
+        let mut parser = LogParser::new();
+        parser.set_level_filter("error");
+        
+        let entry = parser.parse_line(log_line).unwrap();
+        assert_eq!(entry.level.unwrap(), "error");
+        assert_eq!(entry.message.unwrap(), "Something failed");
+        assert_eq!(entry.fields.get("user_id").unwrap().as_i64().unwrap(), 12345);
+    }
+
+    #[test]
+    fn test_required_field_validation() {
+        let log_line = r#"{"level":"info","message":"Processing"}"#;
+        
+        let mut parser = LogParser::new();
+        parser.add_required_field("user_id");
+        
+        let result = parser.parse_line(log_line);
+        assert!(result.is_err());
+    }
 }

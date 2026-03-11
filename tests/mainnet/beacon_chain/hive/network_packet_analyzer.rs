@@ -1,85 +1,129 @@
+use std::collections::HashMap;
+use std::net::Ipv4Addr;
 
-use pcap::{Capture, Device};
-use std::error::Error;
+#[derive(Debug, Clone)]
+pub struct NetworkPacket {
+    source_ip: Ipv4Addr,
+    destination_ip: Ipv4Addr,
+    protocol: u8,
+    payload: Vec<u8>,
+    timestamp: u64,
+}
 
+#[derive(Debug)]
 pub struct PacketAnalyzer {
-    capture: Capture<pcap::Active>,
+    packet_count: usize,
+    protocol_stats: HashMap<u8, usize>,
+    ip_traffic: HashMap<Ipv4Addr, usize>,
 }
 
 impl PacketAnalyzer {
-    pub fn new(interface: &str) -> Result<Self, Box<dyn Error>> {
-        let device = Device::list()?
-            .into_iter()
-            .find(|dev| dev.name == interface)
-            .ok_or_else(|| format!("Interface {} not found", interface))?;
-
-        let capture = Capture::from_device(device)?
-            .promisc(true)
-            .snaplen(65535)
-            .timeout(1000)
-            .open()?;
-
-        Ok(PacketAnalyzer { capture })
+    pub fn new() -> Self {
+        PacketAnalyzer {
+            packet_count: 0,
+            protocol_stats: HashMap::new(),
+            ip_traffic: HashMap::new(),
+        }
     }
 
-    pub fn start_capture(&mut self, packet_count: i32) -> Result<(), Box<dyn Error>> {
-        println!("Starting packet capture on interface...");
+    pub fn process_packet(&mut self, packet: &NetworkPacket) {
+        self.packet_count += 1;
 
-        let mut packet_counter = 0;
-        while let Ok(packet) = self.capture.next_packet() {
-            println!("Packet {} captured:", packet_counter + 1);
-            println!("  Timestamp: {:?}", packet.header.ts);
-            println!("  Length: {} bytes", packet.header.len);
-            println!("  Captured length: {} bytes", packet.header.caplen);
-
-            self.analyze_packet(&packet.data);
-
-            packet_counter += 1;
-            if packet_count > 0 && packet_counter >= packet_count {
-                break;
-            }
-        }
-
-        println!("Captured {} packets", packet_counter);
-        Ok(())
+        *self.protocol_stats.entry(packet.protocol).or_insert(0) += 1;
+        *self.ip_traffic.entry(packet.source_ip).or_insert(0) += 1;
+        *self.ip_traffic.entry(packet.destination_ip).or_insert(0) += 1;
     }
 
-    fn analyze_packet(&self, data: &[u8]) {
-        if data.len() >= 14 {
-            let eth_type = u16::from_be_bytes([data[12], data[13]]);
-            match eth_type {
-                0x0800 => println!("  Protocol: IPv4"),
-                0x0806 => println!("  Protocol: ARP"),
-                0x86DD => println!("  Protocol: IPv6"),
-                _ => println!("  Protocol: Unknown (0x{:04x})", eth_type),
-            }
-
-            if eth_type == 0x0800 && data.len() >= 34 {
-                let protocol = data[23];
-                match protocol {
-                    1 => println!("  Transport: ICMP"),
-                    6 => println!("  Transport: TCP"),
-                    17 => println!("  Transport: UDP"),
-                    _ => println!("  Transport: Unknown ({})", protocol),
-                }
-
-                let src_ip = format!("{}.{}.{}.{}", data[26], data[27], data[28], data[29]);
-                let dst_ip = format!("{}.{}.{}.{}", data[30], data[31], data[32], data[33]);
-                println!("  Source IP: {}", src_ip);
-                println!("  Destination IP: {}", dst_ip);
-            }
+    pub fn get_statistics(&self) -> PacketStatistics {
+        PacketStatistics {
+            total_packets: self.packet_count,
+            top_protocol: self.find_top_protocol(),
+            busiest_ip: self.find_busiest_ip(),
+            unique_ips: self.ip_traffic.len(),
         }
-        println!();
+    }
+
+    fn find_top_protocol(&self) -> Option<(u8, usize)> {
+        self.protocol_stats
+            .iter()
+            .max_by_key(|(_, &count)| count)
+            .map(|(&protocol, &count)| (protocol, count))
+    }
+
+    fn find_busiest_ip(&self) -> Option<(Ipv4Addr, usize)> {
+        self.ip_traffic
+            .iter()
+            .max_by_key(|(_, &count)| count)
+            .map(|(&ip, &count)| (ip, count))
     }
 }
 
-pub fn list_interfaces() -> Result<(), Box<dyn Error>> {
-    println!("Available network interfaces:");
-    for device in Device::list()? {
-        println!("  - {}", device.name);
-        if let Some(desc) = device.desc {
-            println!("    Description: {}", desc);
+#[derive(Debug)]
+pub struct PacketStatistics {
+    pub total_packets: usize,
+    pub top_protocol: Option<(u8, usize)>,
+    pub busiest_ip: Option<(Ipv4Addr, usize)>,
+    pub unique_ips: usize,
+}
+
+impl NetworkPacket {
+    pub fn new(
+        source_ip: Ipv4Addr,
+        destination_ip: Ipv4Addr,
+        protocol: u8,
+        payload: Vec<u8>,
+        timestamp: u64,
+    ) -> Self {
+        NetworkPacket {
+            source_ip,
+            destination_ip,
+            protocol,
+            payload,
+            timestamp,
         }
     }
-    Ok(())
+
+    pub fn is_valid(&self) -> bool {
+        !self.payload.is_empty() && self.timestamp > 0
+    }
+
+    pub fn payload_size(&self) -> usize {
+        self.payload.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_packet_analyzer() {
+        let mut analyzer = PacketAnalyzer::new();
+
+        let packet1 = NetworkPacket::new(
+            Ipv4Addr::new(192, 168, 1, 1),
+            Ipv4Addr::new(192, 168, 1, 2),
+            6,
+            vec![1, 2, 3, 4, 5],
+            1234567890,
+        );
+
+        let packet2 = NetworkPacket::new(
+            Ipv4Addr::new(192, 168, 1, 2),
+            Ipv4Addr::new(192, 168, 1, 3),
+            17,
+            vec![6, 7, 8, 9, 10],
+            1234567891,
+        );
+
+        analyzer.process_packet(&packet1);
+        analyzer.process_packet(&packet2);
+
+        let stats = analyzer.get_statistics();
+
+        assert_eq!(stats.total_packets, 2);
+        assert_eq!(stats.unique_ips, 3);
+        assert!(packet1.is_valid());
+        assert_eq!(packet2.payload_size(), 5);
+    }
 }

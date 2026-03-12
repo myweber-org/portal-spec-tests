@@ -232,3 +232,160 @@ mod tests {
         assert!(result.is_err());
     }
 }
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DataRecord {
+    pub id: u32,
+    pub value: f64,
+    pub category: String,
+}
+
+#[derive(Debug)]
+pub enum ProcessingError {
+    InvalidValue,
+    InvalidCategory,
+    ValidationFailed,
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProcessingError::InvalidValue => write!(f, "Invalid numeric value"),
+            ProcessingError::InvalidCategory => write!(f, "Invalid category string"),
+            ProcessingError::ValidationFailed => write!(f, "Data validation failed"),
+        }
+    }
+}
+
+impl Error for ProcessingError {}
+
+pub struct DataProcessor {
+    threshold: f64,
+    allowed_categories: Vec<String>,
+}
+
+impl DataProcessor {
+    pub fn new(threshold: f64, allowed_categories: Vec<String>) -> Self {
+        DataProcessor {
+            threshold,
+            allowed_categories,
+        }
+    }
+
+    pub fn validate_record(&self, record: &DataRecord) -> Result<(), ProcessingError> {
+        if record.value.is_nan() || record.value.is_infinite() {
+            return Err(ProcessingError::InvalidValue);
+        }
+
+        if record.value < 0.0 || record.value > self.threshold {
+            return Err(ProcessingError::InvalidValue);
+        }
+
+        if !self.allowed_categories.contains(&record.category) {
+            return Err(ProcessingError::InvalidCategory);
+        }
+
+        Ok(())
+    }
+
+    pub fn transform_value(&self, record: &DataRecord) -> f64 {
+        let normalized = record.value / self.threshold;
+        normalized * 100.0
+    }
+
+    pub fn process_records(&self, records: Vec<DataRecord>) -> Result<Vec<f64>, ProcessingError> {
+        let mut results = Vec::with_capacity(records.len());
+
+        for record in records {
+            self.validate_record(&record)?;
+            let transformed = self.transform_value(&record);
+            results.push(transformed);
+        }
+
+        Ok(results)
+    }
+
+    pub fn filter_by_category(&self, records: Vec<DataRecord>, category: &str) -> Vec<DataRecord> {
+        records
+            .into_iter()
+            .filter(|r| r.category == category)
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validation_success() {
+        let processor = DataProcessor::new(
+            100.0,
+            vec!["A".to_string(), "B".to_string(), "C".to_string()],
+        );
+        let record = DataRecord {
+            id: 1,
+            value: 50.0,
+            category: "A".to_string(),
+        };
+
+        assert!(processor.validate_record(&record).is_ok());
+    }
+
+    #[test]
+    fn test_validation_invalid_value() {
+        let processor = DataProcessor::new(
+            100.0,
+            vec!["A".to_string(), "B".to_string(), "C".to_string()],
+        );
+        let record = DataRecord {
+            id: 1,
+            value: 150.0,
+            category: "A".to_string(),
+        };
+
+        assert!(processor.validate_record(&record).is_err());
+    }
+
+    #[test]
+    fn test_transform_value() {
+        let processor = DataProcessor::new(200.0, vec![]);
+        let record = DataRecord {
+            id: 1,
+            value: 50.0,
+            category: "test".to_string(),
+        };
+
+        let result = processor.transform_value(&record);
+        assert_eq!(result, 25.0);
+    }
+
+    #[test]
+    fn test_filter_by_category() {
+        let processor = DataProcessor::new(100.0, vec![]);
+        let records = vec![
+            DataRecord {
+                id: 1,
+                value: 10.0,
+                category: "X".to_string(),
+            },
+            DataRecord {
+                id: 2,
+                value: 20.0,
+                category: "Y".to_string(),
+            },
+            DataRecord {
+                id: 3,
+                value: 30.0,
+                category: "X".to_string(),
+            },
+        ];
+
+        let filtered = processor.filter_by_category(records, "X");
+        assert_eq!(filtered.len(), 2);
+        assert_eq!(filtered[0].id, 1);
+        assert_eq!(filtered[1].id, 3);
+    }
+}

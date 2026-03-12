@@ -92,4 +92,58 @@ pub fn load_config() -> Result<AppConfig, Box<dyn std::error::Error>> {
         .unwrap_or_else(|_| "config.toml".to_string());
     
     AppConfig::from_file(&config_path)
+}use serde::Deserialize;
+use std::fs;
+use std::path::Path;
+
+#[derive(Debug, Deserialize)]
+pub struct AppConfig {
+    pub server_port: u16,
+    pub database_url: String,
+    pub log_level: String,
+    pub cache_size: usize,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        AppConfig {
+            server_port: 8080,
+            database_url: String::from("postgresql://localhost:5432/app_db"),
+            log_level: String::from("info"),
+            cache_size: 100,
+        }
+    }
+}
+
+impl AppConfig {
+    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
+        let content = fs::read_to_string(path)?;
+        let config: AppConfig = toml::from_str(&content)?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    pub fn load_or_default<P: AsRef<Path>>(path: P) -> Self {
+        match Self::from_file(path) {
+            Ok(config) => config,
+            Err(e) => {
+                eprintln!("Failed to load config: {}. Using defaults.", e);
+                Self::default()
+            }
+        }
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if self.server_port == 0 {
+            return Err(String::from("Server port cannot be zero"));
+        }
+        if self.cache_size > 10000 {
+            return Err(String::from("Cache size exceeds maximum limit"));
+        }
+        let valid_log_levels = ["error", "warn", "info", "debug", "trace"];
+        if !valid_log_levels.contains(&self.log_level.as_str()) {
+            return Err(format!("Invalid log level: {}", self.log_level));
+        }
+        Ok(())
+    }
 }

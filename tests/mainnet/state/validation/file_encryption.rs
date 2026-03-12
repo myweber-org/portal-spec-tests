@@ -883,4 +883,76 @@ pub fn decrypt_file(input_path: &str, output_path: &str) -> io::Result<()> {
     output_file.write_all(&plaintext)?;
 
     Ok(())
+}use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce,
+};
+use chacha20poly1305::{ChaCha20Poly1305, Key as ChaChaKey, Nonce as ChaChaNonce};
+use std::error::Error;
+
+pub enum CipherType {
+    Aes256Gcm,
+    ChaCha20Poly1305,
+}
+
+pub struct FileEncryptor {
+    cipher_type: CipherType,
+}
+
+impl FileEncryptor {
+    pub fn new(cipher_type: CipherType) -> Self {
+        Self { cipher_type }
+    }
+
+    pub fn encrypt(&self, data: &[u8], key: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+        match self.cipher_type {
+            CipherType::Aes256Gcm => self.encrypt_aes(data, key),
+            CipherType::ChaCha20Poly1305 => self.encrypt_chacha(data, key),
+        }
+    }
+
+    pub fn decrypt(&self, ciphertext: &[u8], key: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+        match self.cipher_type {
+            CipherType::Aes256Gcm => self.decrypt_aes(ciphertext, key),
+            CipherType::ChaCha20Poly1305 => self.decrypt_chacha(ciphertext, key),
+        }
+    }
+
+    fn encrypt_aes(&self, data: &[u8], key: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+        let nonce = Nonce::generate(&mut OsRng);
+        let ciphertext = cipher.encrypt(&nonce, data)?;
+        let mut result = nonce.to_vec();
+        result.extend(ciphertext);
+        Ok(result)
+    }
+
+    fn decrypt_aes(&self, ciphertext: &[u8], key: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+        let nonce = Nonce::from_slice(&ciphertext[..12]);
+        let data = cipher.decrypt(nonce, &ciphertext[12..])?;
+        Ok(data)
+    }
+
+    fn encrypt_chacha(&self, data: &[u8], key: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+        let cipher = ChaCha20Poly1305::new(ChaChaKey::from_slice(key));
+        let nonce = ChaCha20Poly1305::generate_nonce(&mut OsRng);
+        let ciphertext = cipher.encrypt(&nonce, data)?;
+        let mut result = nonce.to_vec();
+        result.extend(ciphertext);
+        Ok(result)
+    }
+
+    fn decrypt_chacha(&self, ciphertext: &[u8], key: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+        let cipher = ChaCha20Poly1305::new(ChaChaKey::from_slice(key));
+        let nonce = ChaChaNonce::from_slice(&ciphertext[..12]);
+        let data = cipher.decrypt(nonce, &ciphertext[12..])?;
+        Ok(data)
+    }
+}
+
+pub fn generate_random_key() -> Vec<u8> {
+    let mut key = vec![0u8; 32];
+    OsRng.fill_bytes(&mut key);
+    key
 }

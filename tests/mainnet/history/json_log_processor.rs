@@ -1,142 +1,60 @@
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use serde_json::Value;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
-#[derive(Debug, Deserialize, Serialize)]
-struct LogEntry {
-    timestamp: String,
-    level: String,
-    service: String,
-    message: String,
-    metadata: HashMap<String, String>,
+#[derive(Debug)]
+pub struct LogEntry {
+    pub timestamp: String,
+    pub level: String,
+    pub message: String,
+    pub metadata: Value,
 }
 
-struct LogProcessor {
-    entries: Vec<LogEntry>,
-    stats: HashMap<String, usize>,
-}
+pub fn parse_json_log_file<P: AsRef<Path>>(path: P) -> Result<Vec<LogEntry>, String> {
+    let file = File::open(path).map_err(|e| format!("Failed to open file: {}", e))?;
+    let reader = BufReader::new(file);
+    let mut entries = Vec::new();
 
-impl LogProcessor {
-    fn new() -> Self {
-        LogProcessor {
-            entries: Vec::new(),
-            stats: HashMap::new(),
-        }
-    }
-
-    fn load_from_file<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn std::error::Error>> {
-        let file = File::open(path)?;
-        let reader = BufReader::new(file);
-
-        for line in reader.lines() {
-            let line = line?;
-            if line.trim().is_empty() {
-                continue;
-            }
-
-            match serde_json::from_str::<LogEntry>(&line) {
-                Ok(entry) => {
-                    self.entries.push(entry);
-                }
-                Err(e) => eprintln!("Failed to parse line: {}", e),
-            }
+    for (line_num, line) in reader.lines().enumerate() {
+        let line_content = line.map_err(|e| format!("Line {} read error: {}", line_num + 1, e))?;
+        
+        if line_content.trim().is_empty() {
+            continue;
         }
 
-        self.update_stats();
-        Ok(())
-    }
+        let json_value: Value = serde_json::from_str(&line_content)
+            .map_err(|e| format!("Line {} JSON parse error: {}", line_num + 1, e))?;
 
-    fn update_stats(&mut self) {
-        self.stats.clear();
-        for entry in &self.entries {
-            *self.stats.entry(entry.level.clone()).or_insert(0) += 1;
-            *self.stats.entry(entry.service.clone()).or_insert(0) += 1;
-        }
-    }
-
-    fn filter_by_level(&self, level: &str) -> Vec<&LogEntry> {
-        self.entries
-            .iter()
-            .filter(|entry| entry.level.eq_ignore_ascii_case(level))
-            .collect()
-    }
-
-    fn filter_by_service(&self, service: &str) -> Vec<&LogEntry> {
-        self.entries
-            .iter()
-            .filter(|entry| entry.service.eq_ignore_ascii_case(service))
-            .collect()
-    }
-
-    fn get_summary(&self) -> HashMap<String, usize> {
-        self.stats.clone()
-    }
-
-    fn export_filtered<P: AsRef<Path>>(
-        &self,
-        filter: &str,
-        value: &str,
-        output_path: P,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let filtered = match filter.to_lowercase().as_str() {
-            "level" => self.filter_by_level(value),
-            "service" => self.filter_by_service(value),
-            _ => return Err("Invalid filter type".into()),
+        let entry = LogEntry {
+            timestamp: json_value["timestamp"]
+                .as_str()
+                .unwrap_or("unknown")
+                .to_string(),
+            level: json_value["level"]
+                .as_str()
+                .unwrap_or("INFO")
+                .to_string(),
+            message: json_value["message"]
+                .as_str()
+                .unwrap_or("")
+                .to_string(),
+            metadata: json_value["metadata"].clone(),
         };
 
-        let output_file = File::create(output_path)?;
-        let mut writer = std::io::BufWriter::new(output_file);
-
-        for entry in filtered {
-            let json = serde_json::to_string(entry)?;
-            writeln!(writer, "{}", json)?;
-        }
-
-        Ok(())
+        entries.push(entry);
     }
+
+    Ok(entries)
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut processor = LogProcessor::new();
-    
-    processor.load_from_file("logs.jsonl")?;
-    
-    println!("Total entries: {}", processor.entries.len());
-    println!("Statistics: {:?}", processor.get_summary());
-    
-    let error_logs = processor.filter_by_level("ERROR");
-    println!("Error logs count: {}", error_logs.len());
-    
-    processor.export_filtered("level", "ERROR", "error_logs.jsonl")?;
-    
-    Ok(())
+pub fn filter_logs_by_level(entries: &[LogEntry], level: &str) -> Vec<&LogEntry> {
+    entries
+        .iter()
+        .filter(|entry| entry.level.to_uppercase() == level.to_uppercase())
+        .collect()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
-
-    #[test]
-    fn test_log_processing() {
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(
-            temp_file,
-            r#"{{"timestamp":"2024-01-15T10:30:00Z","level":"INFO","service":"api","message":"Request processed","metadata":{{"method":"GET","path":"/health"}}}}"#
-        ).unwrap();
-        writeln!(
-            temp_file,
-            r#"{{"timestamp":"2024-01-15T10:31:00Z","level":"ERROR","service":"database","message":"Connection failed","metadata":{{"retry_count":"3"}}}}"#
-        ).unwrap();
-
-        let mut processor = LogProcessor::new();
-        processor.load_from_file(temp_file.path()).unwrap();
-
-        assert_eq!(processor.entries.len(), 2);
-        assert_eq!(processor.filter_by_level("ERROR").len(), 1);
-        assert_eq!(processor.filter_by_service("api").len(), 1);
-    }
+pub fn extract_timestamps(entries: &[LogEntry]) -> Vec<String> {
+    entries.iter().map(|entry| entry.timestamp.clone()).collect()
 }

@@ -90,4 +90,38 @@ async fn handle_connection(stream: tokio::net::TcpStream) -> Result<(), Box<dyn 
     }
 
     Ok(())
+}use tokio::net::TcpListener;
+use tokio_tungstenite::accept_async;
+use futures_util::{SinkExt, StreamExt};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let listener = TcpListener::bind("127.0.0.1:8080").await?;
+    println!("WebSocket server listening on ws://127.0.0.1:8080");
+
+    while let Ok((stream, _)) = listener.accept().await {
+        tokio::spawn(async move {
+            if let Ok(ws_stream) = accept_async(stream).await {
+                let (mut write, mut read) = ws_stream.split();
+                while let Some(msg) = read.next().await {
+                    match msg {
+                        Ok(message) => {
+                            if message.is_text() || message.is_binary() {
+                                let response = format!("Echo: {}", message);
+                                if let Err(e) = write.send(response.into()).await {
+                                    eprintln!("Failed to send message: {}", e);
+                                    break;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Error reading message: {}", e);
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+    }
+    Ok(())
 }

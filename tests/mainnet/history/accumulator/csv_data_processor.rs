@@ -431,4 +431,128 @@ fn main() {
         eprintln!("Error: {}", e);
         std::process::exit(1);
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+
+#[derive(Debug)]
+pub struct Record {
+    id: u32,
+    category: String,
+    value: f64,
+    active: bool,
+}
+
+pub fn load_csv(file_path: &str) -> Result<Vec<Record>, Box<dyn Error>> {
+    let file = File::open(file_path)?;
+    let reader = BufReader::new(file);
+    let mut records = Vec::new();
+    
+    for (index, line) in reader.lines().enumerate() {
+        if index == 0 { continue; }
+        
+        let line = line?;
+        let parts: Vec<&str> = line.split(',').collect();
+        
+        if parts.len() == 4 {
+            let id = parts[0].parse()?;
+            let category = parts[1].to_string();
+            let value = parts[2].parse()?;
+            let active = parts[3].parse()?;
+            
+            records.push(Record {
+                id,
+                category,
+                value,
+                active,
+            });
+        }
+    }
+    
+    Ok(records)
+}
+
+pub fn filter_by_category(records: &[Record], category: &str) -> Vec<&Record> {
+    records.iter()
+        .filter(|r| r.category == category)
+        .collect()
+}
+
+pub fn calculate_average(records: &[Record]) -> Option<f64> {
+    if records.is_empty() {
+        return None;
+    }
+    
+    let sum: f64 = records.iter()
+        .map(|r| r.value)
+        .sum();
+    
+    Some(sum / records.len() as f64)
+}
+
+pub fn aggregate_by_category(records: &[Record]) -> Vec<(String, f64)> {
+    use std::collections::HashMap;
+    
+    let mut aggregates = HashMap::new();
+    
+    for record in records {
+        let entry = aggregates.entry(record.category.clone())
+            .or_insert((0.0, 0));
+        
+        entry.0 += record.value;
+        entry.1 += 1;
+    }
+    
+    aggregates.into_iter()
+        .map(|(category, (total, count))| (category, total / count as f64))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+    
+    #[test]
+    fn test_load_csv() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,category,value,active").unwrap();
+        writeln!(temp_file, "1,electronics,299.99,true").unwrap();
+        writeln!(temp_file, "2,books,19.99,true").unwrap();
+        writeln!(temp_file, "3,electronics,599.99,false").unwrap();
+        
+        let records = load_csv(temp_file.path().to_str().unwrap()).unwrap();
+        assert_eq!(records.len(), 3);
+        assert_eq!(records[0].category, "electronics");
+        assert_eq!(records[1].value, 19.99);
+    }
+    
+    #[test]
+    fn test_filter_by_category() {
+        let records = vec![
+            Record { id: 1, category: "A".to_string(), value: 10.0, active: true },
+            Record { id: 2, category: "B".to_string(), value: 20.0, active: true },
+            Record { id: 3, category: "A".to_string(), value: 30.0, active: false },
+        ];
+        
+        let filtered = filter_by_category(&records, "A");
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered.iter().all(|r| r.category == "A"));
+    }
+    
+    #[test]
+    fn test_calculate_average() {
+        let records = vec![
+            Record { id: 1, category: "test".to_string(), value: 10.0, active: true },
+            Record { id: 2, category: "test".to_string(), value: 20.0, active: true },
+            Record { id: 3, category: "test".to_string(), value: 30.0, active: true },
+        ];
+        
+        let avg = calculate_average(&records).unwrap();
+        assert_eq!(avg, 20.0);
+        
+        let empty: Vec<Record> = vec![];
+        assert!(calculate_average(&empty).is_none());
+    }
 }

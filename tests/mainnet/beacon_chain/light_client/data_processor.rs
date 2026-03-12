@@ -746,3 +746,121 @@ mod tests {
         assert_eq!(processor.get_top_categories(2).len(), 2);
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug, PartialEq)]
+pub struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
+}
+
+pub struct DataProcessor {
+    records: Vec<Record>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_csv(&mut self, file_path: &str) -> Result<usize, Box<dyn Error>> {
+        let path = Path::new(file_path);
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        
+        let mut count = 0;
+        for (line_num, line) in reader.lines().enumerate() {
+            let line = line?;
+            
+            if line_num == 0 {
+                continue;
+            }
+            
+            let fields: Vec<&str> = line.split(',').collect();
+            if fields.len() != 4 {
+                return Err(format!("Invalid number of fields at line {}", line_num + 1).into());
+            }
+            
+            let id = fields[0].parse::<u32>()?;
+            let name = fields[1].to_string();
+            let value = fields[2].parse::<f64>()?;
+            let active = fields[3].parse::<bool>()?;
+            
+            self.records.push(Record {
+                id,
+                name,
+                value,
+                active,
+            });
+            
+            count += 1;
+        }
+        
+        Ok(count)
+    }
+
+    pub fn filter_active(&self) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|record| record.active)
+            .collect()
+    }
+
+    pub fn calculate_average(&self) -> Option<f64> {
+        if self.records.is_empty() {
+            return None;
+        }
+        
+        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        Some(sum / self.records.len() as f64)
+    }
+
+    pub fn find_by_id(&self, target_id: u32) -> Option<&Record> {
+        self.records.iter().find(|record| record.id == target_id)
+    }
+
+    pub fn record_count(&self) -> usize {
+        self.records.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_data_processor() {
+        let mut processor = DataProcessor::new();
+        assert_eq!(processor.record_count(), 0);
+        
+        let csv_data = "id,name,value,active\n1,Test1,10.5,true\n2,Test2,20.0,false\n3,Test3,15.75,true\n";
+        
+        let mut temp_file = NamedTempFile::new().unwrap();
+        write!(temp_file, "{}", csv_data).unwrap();
+        
+        let result = processor.load_from_csv(temp_file.path().to_str().unwrap());
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 3);
+        assert_eq!(processor.record_count(), 3);
+        
+        let active_records = processor.filter_active();
+        assert_eq!(active_records.len(), 2);
+        
+        let average = processor.calculate_average();
+        assert!(average.is_some());
+        assert!((average.unwrap() - 15.416666666666666).abs() < 0.0001);
+        
+        let found = processor.find_by_id(2);
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().name, "Test2");
+    }
+}

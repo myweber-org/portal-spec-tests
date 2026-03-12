@@ -264,3 +264,29 @@ async fn main() -> Result<(), Box<dyn Error>> {
     
     Ok(())
 }
+use reqwest;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct WeatherData {
+    main: Main,
+    name: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Main {
+    temp: f64,
+    humidity: u8,
+}
+
+pub async fn get_weather(api_key: &str, city: &str) -> Result<WeatherData, reqwest::Error> {
+    let url = format!(
+        "https://api.openweathermap.org/data/2.5/weather?q={}&appid={}&units=metric",
+        city, api_key
+    );
+    
+    let response = reqwest::get(&url).await?;
+    let weather_data: WeatherData = response.json().await?;
+    
+    Ok(weather_data)
+}

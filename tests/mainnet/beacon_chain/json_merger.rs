@@ -152,3 +152,96 @@ mod tests {
         assert!(result.is_err());
     }
 }
+use serde_json::{Value, Map};
+use std::fs;
+use std::path::Path;
+
+pub fn merge_json_files<P: AsRef<Path>>(paths: &[P]) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut merged = Map::new();
+
+    for path in paths {
+        let content = fs::read_to_string(path)?;
+        let json: Value = serde_json::from_str(&content)?;
+
+        if let Value::Object(obj) = json {
+            for (key, value) in obj {
+                merge_value(&mut merged, key, value);
+            }
+        }
+    }
+
+    Ok(Value::Object(merged))
+}
+
+fn merge_value(map: &mut Map<String, Value>, key: String, new_value: Value) {
+    match map.get(&key) {
+        Some(existing) => {
+            match (existing, new_value) {
+                (Value::Object(old_obj), Value::Object(new_obj)) => {
+                    let mut merged_obj = old_obj.clone();
+                    for (k, v) in new_obj {
+                        merge_value(&mut merged_obj, k, v);
+                    }
+                    map.insert(key, Value::Object(merged_obj));
+                }
+                (Value::Array(old_arr), Value::Array(new_arr)) => {
+                    let mut merged_arr = old_arr.clone();
+                    merged_arr.extend(new_arr);
+                    map.insert(key, Value::Array(merged_arr));
+                }
+                (_, new) => {
+                    map.insert(key, new);
+                }
+            }
+        }
+        None => {
+            map.insert(key, new_value);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_basic_merge() {
+        let file1 = NamedTempFile::new().unwrap();
+        let file2 = NamedTempFile::new().unwrap();
+
+        fs::write(&file1, r#"{"name": "Alice", "age": 30}"#).unwrap();
+        fs::write(&file2, r#"{"city": "Paris", "active": true}"#).unwrap();
+
+        let result = merge_json_files(&[file1.path(), file2.path()]).unwrap();
+        let expected = json!({
+            "name": "Alice",
+            "age": 30,
+            "city": "Paris",
+            "active": true
+        });
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_nested_merge() {
+        let file1 = NamedTempFile::new().unwrap();
+        let file2 = NamedTempFile::new().unwrap();
+
+        fs::write(&file1, r#"{"user": {"name": "Bob"}, "tags": ["rust"]}"#).unwrap();
+        fs::write(&file2, r#"{"user": {"age": 25}, "tags": ["json"]}"#).unwrap();
+
+        let result = merge_json_files(&[file1.path(), file2.path()]).unwrap();
+        let expected = json!({
+            "user": {
+                "name": "Bob",
+                "age": 25
+            },
+            "tags": ["rust", "json"]
+        });
+
+        assert_eq!(result, expected);
+    }
+}

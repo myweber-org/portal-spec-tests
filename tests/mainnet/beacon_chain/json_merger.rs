@@ -245,3 +245,86 @@ mod tests {
         assert_eq!(result, expected);
     }
 }
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::collections::HashMap;
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufReader, BufWriter};
+use std::path::Path;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Config {
+    input_files: Vec<String>,
+    output_file: String,
+    deduplication_key: String,
+}
+
+fn load_json_file<P: AsRef<Path>>(path: P) -> Result<Vec<Value>, Box<dyn Error>> {
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+    let data: Vec<Value> = serde_json::from_reader(reader)?;
+    Ok(data)
+}
+
+fn merge_and_deduplicate(
+    files: Vec<Vec<Value>>,
+    dedup_key: &str,
+) -> Result<Vec<Value>, Box<dyn Error>> {
+    let mut seen = HashMap::new();
+    let mut merged = Vec::new();
+
+    for file_data in files {
+        for item in file_data {
+            if let Some(key_value) = item.get(dedup_key) {
+                if let Some(key_str) = key_value.as_str() {
+                    if !seen.contains_key(key_str) {
+                        seen.insert(key_str.to_string(), true);
+                        merged.push(item);
+                    }
+                } else if let Some(key_num) = key_value.as_f64() {
+                    let key = key_num.to_string();
+                    if !seen.contains_key(&key) {
+                        seen.insert(key, true);
+                        merged.push(item);
+                    }
+                }
+            } else {
+                merged.push(item);
+            }
+        }
+    }
+
+    Ok(merged)
+}
+
+fn save_json_file<P: AsRef<Path>>(path: P, data: &[Value]) -> Result<(), Box<dyn Error>> {
+    let file = File::create(path)?;
+    let writer = BufWriter::new(file);
+    serde_json::to_writer_pretty(writer, data)?;
+    Ok(())
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let config = Config {
+        input_files: vec![
+            "data1.json".to_string(),
+            "data2.json".to_string(),
+            "data3.json".to_string(),
+        ],
+        output_file: "merged_output.json".to_string(),
+        deduplication_key: "id".to_string(),
+    };
+
+    let mut all_data = Vec::new();
+    for file_path in &config.input_files {
+        let data = load_json_file(file_path)?;
+        all_data.push(data);
+    }
+
+    let merged_data = merge_and_deduplicate(all_data, &config.deduplication_key)?;
+    save_json_file(&config.output_file, &merged_data)?;
+
+    println!("Successfully merged {} files into {}", config.input_files.len(), config.output_file);
+    Ok(())
+}

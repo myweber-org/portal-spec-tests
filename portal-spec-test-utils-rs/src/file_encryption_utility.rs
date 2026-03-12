@@ -503,4 +503,116 @@ pub fn interactive_decrypt() -> Result<(), String> {
     println!("Decryption successful!");
 
     Ok(())
+}use std::fs;
+use std::io::{self, Read, Write};
+use std::path::Path;
+
+const DEFAULT_KEY: u8 = 0x55;
+
+pub fn encrypt_file(input_path: &str, output_path: &str, key: Option<u8>) -> io::Result<()> {
+    let encryption_key = key.unwrap_or(DEFAULT_KEY);
+    
+    let mut input_file = fs::File::open(input_path)?;
+    let mut buffer = Vec::new();
+    input_file.read_to_end(&mut buffer)?;
+    
+    let encrypted_data: Vec<u8> = buffer
+        .iter()
+        .map(|byte| byte ^ encryption_key)
+        .collect();
+    
+    let mut output_file = fs::File::create(output_path)?;
+    output_file.write_all(&encrypted_data)?;
+    
+    Ok(())
+}
+
+pub fn decrypt_file(input_path: &str, output_path: &str, key: Option<u8>) -> io::Result<()> {
+    encrypt_file(input_path, output_path, key)
+}
+
+pub fn process_directory(dir_path: &str, operation: &str, key: Option<u8>) -> io::Result<()> {
+    let path = Path::new(dir_path);
+    
+    if !path.exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("Directory {} does not exist", dir_path)
+        ));
+    }
+    
+    for entry in fs::read_dir(path)? {
+        let entry = entry?;
+        let file_path = entry.path();
+        
+        if file_path.is_file() {
+            let input_str = file_path.to_str().unwrap();
+            let output_str = format!("{}.{}", input_str, operation);
+            
+            match operation {
+                "encrypt" => encrypt_file(input_str, &output_str, key)?,
+                "decrypt" => decrypt_file(input_str, &output_str, key)?,
+                _ => return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "Operation must be 'encrypt' or 'decrypt'"
+                ))
+            }
+            
+            println!("Processed: {}", file_path.display());
+        }
+    }
+    
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::NamedTempFile;
+    
+    #[test]
+    fn test_encrypt_decrypt_cycle() {
+        let original_content = b"Hello, World! This is a test message.";
+        
+        let input_file = NamedTempFile::new().unwrap();
+        let encrypted_file = NamedTempFile::new().unwrap();
+        let decrypted_file = NamedTempFile::new().unwrap();
+        
+        fs::write(input_file.path(), original_content).unwrap();
+        
+        encrypt_file(
+            input_file.path().to_str().unwrap(),
+            encrypted_file.path().to_str().unwrap(),
+            Some(0x42)
+        ).unwrap();
+        
+        decrypt_file(
+            encrypted_file.path().to_str().unwrap(),
+            decrypted_file.path().to_str().unwrap(),
+            Some(0x42)
+        ).unwrap();
+        
+        let decrypted_content = fs::read(decrypted_file.path()).unwrap();
+        assert_eq!(original_content.to_vec(), decrypted_content);
+    }
+    
+    #[test]
+    fn test_default_key() {
+        let content = b"Test data";
+        
+        let input_file = NamedTempFile::new().unwrap();
+        let encrypted_file = NamedTempFile::new().unwrap();
+        
+        fs::write(input_file.path(), content).unwrap();
+        
+        encrypt_file(
+            input_file.path().to_str().unwrap(),
+            encrypted_file.path().to_str().unwrap(),
+            None
+        ).unwrap();
+        
+        let encrypted_content = fs::read(encrypted_file.path()).unwrap();
+        assert_ne!(content.to_vec(), encrypted_content);
+    }
 }

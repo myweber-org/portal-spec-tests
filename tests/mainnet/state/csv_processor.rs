@@ -1372,3 +1372,91 @@ mod tests {
         assert!(filtered.iter().any(|r| r[0] == "Charlie"));
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader, Write};
+use std::path::Path;
+
+pub struct CsvProcessor {
+    delimiter: char,
+    has_header: bool,
+}
+
+impl CsvProcessor {
+    pub fn new(delimiter: char, has_header: bool) -> Self {
+        CsvProcessor {
+            delimiter,
+            has_header,
+        }
+    }
+
+    pub fn validate_and_clean<P: AsRef<Path>>(
+        &self,
+        input_path: P,
+        output_path: P,
+    ) -> Result<usize, Box<dyn Error>> {
+        let input_file = File::open(input_path)?;
+        let reader = BufReader::new(input_file);
+        let mut output_file = File::create(output_path)?;
+
+        let mut valid_rows = 0;
+        let mut lines_iter = reader.lines().enumerate();
+
+        if self.has_header {
+            if let Some((_, header_result)) = lines_iter.next() {
+                let header = header_result?;
+                writeln!(output_file, "{}", header)?;
+            }
+        }
+
+        for (line_number, line_result) in lines_iter {
+            let line = line_result?;
+            let fields: Vec<&str> = line.split(self.delimiter).collect();
+
+            if self.is_row_valid(&fields) {
+                writeln!(output_file, "{}", line)?;
+                valid_rows += 1;
+            } else {
+                eprintln!("Warning: Skipping invalid row at line {}", line_number + 1);
+            }
+        }
+
+        Ok(valid_rows)
+    }
+
+    fn is_row_valid(&self, fields: &[&str]) -> bool {
+        !fields.is_empty()
+            && fields.iter().all(|field| !field.trim().is_empty())
+            && fields.len() == fields.iter().filter(|f| !f.contains('\n')).count()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Read;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_csv_validation() {
+        let input_content = "id,name,value\n1,test,100\n2,,200\n3,data\n";
+        let mut input_file = NamedTempFile::new().unwrap();
+        write!(input_file, "{}", input_content).unwrap();
+
+        let output_file = NamedTempFile::new().unwrap();
+        let processor = CsvProcessor::new(',', true);
+
+        let valid_count = processor
+            .validate_and_clean(input_file.path(), output_file.path())
+            .unwrap();
+
+        let mut output_content = String::new();
+        File::open(output_file.path())
+            .unwrap()
+            .read_to_string(&mut output_content)
+            .unwrap();
+
+        assert_eq!(valid_count, 1);
+        assert_eq!(output_content, "id,name,value\n1,test,100\n");
+    }
+}

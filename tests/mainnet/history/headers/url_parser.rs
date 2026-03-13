@@ -59,4 +59,90 @@ mod tests {
         assert_eq!(UrlParser::extract_domain(url2), Some("subdomain.example.com".to_string()));
         assert_eq!(UrlParser::extract_domain(url3), Some("example.com".to_string()));
     }
+}use std::collections::HashMap;
+
+#[derive(Debug, PartialEq)]
+pub struct ParsedUrl {
+    pub scheme: String,
+    pub host: String,
+    pub path: String,
+    pub query_params: HashMap<String, String>,
+}
+
+impl ParsedUrl {
+    pub fn parse(url: &str) -> Result<Self, String> {
+        let parts: Vec<&str> = url.split("://").collect();
+        if parts.len() != 2 {
+            return Err("Invalid URL format".to_string());
+        }
+
+        let scheme = parts[0].to_string();
+        let rest = parts[1];
+
+        let host_end = rest.find('/').unwrap_or(rest.len());
+        let host = rest[..host_end].to_string();
+        let path_and_query = &rest[host_end..];
+
+        let path_parts: Vec<&str> = path_and_query.split('?').collect();
+        let path = path_parts[0].to_string();
+        let mut query_params = HashMap::new();
+
+        if path_parts.len() > 1 {
+            for pair in path_parts[1].split('&') {
+                let kv: Vec<&str> = pair.split('=').collect();
+                if kv.len() == 2 {
+                    query_params.insert(kv[0].to_string(), kv[1].to_string());
+                }
+            }
+        }
+
+        Ok(ParsedUrl {
+            scheme,
+            host,
+            path,
+            query_params,
+        })
+    }
+
+    pub fn get_query_param(&self, key: &str) -> Option<&String> {
+        self.query_params.get(key)
+    }
+
+    pub fn has_query_params(&self) -> bool {
+        !self.query_params.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_simple_url() {
+        let url = "https://example.com/path";
+        let parsed = ParsedUrl::parse(url).unwrap();
+        assert_eq!(parsed.scheme, "https");
+        assert_eq!(parsed.host, "example.com");
+        assert_eq!(parsed.path, "/path");
+        assert!(!parsed.has_query_params());
+    }
+
+    #[test]
+    fn test_parse_url_with_query() {
+        let url = "https://api.service.com/data?page=2&limit=50";
+        let parsed = ParsedUrl::parse(url).unwrap();
+        assert_eq!(parsed.scheme, "https");
+        assert_eq!(parsed.host, "api.service.com");
+        assert_eq!(parsed.path, "/data");
+        assert_eq!(parsed.get_query_param("page"), Some(&"2".to_string()));
+        assert_eq!(parsed.get_query_param("limit"), Some(&"50".to_string()));
+        assert_eq!(parsed.get_query_param("missing"), None);
+    }
+
+    #[test]
+    fn test_invalid_url() {
+        let url = "not-a-valid-url";
+        let result = ParsedUrl::parse(url);
+        assert!(result.is_err());
+    }
 }

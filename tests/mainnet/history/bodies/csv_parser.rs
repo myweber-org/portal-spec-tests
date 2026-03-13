@@ -353,4 +353,148 @@ mod tests {
         assert_eq!(result[0], vec!["Alice", "30", "New York"]);
         assert_eq!(result[1], vec!["Bob", "25", "London"]);
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug, PartialEq)]
+pub struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
+}
+
+#[derive(Debug)]
+pub enum ParseError {
+    IoError(std::io::Error),
+    InvalidColumnCount(usize, usize),
+    InvalidId(String),
+    InvalidValue(String),
+    InvalidActiveFlag(String),
+}
+
+impl From<std::io::Error> for ParseError {
+    fn from(err: std::io::Error) -> Self {
+        ParseError::IoError(err)
+    }
+}
+
+pub fn parse_csv_file<P: AsRef<Path>>(path: P) -> Result<Vec<Record>, ParseError> {
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+    let mut records = Vec::new();
+    
+    for (line_num, line) in reader.lines().enumerate() {
+        let line = line?;
+        if line.trim().is_empty() || line.starts_with('#') {
+            continue;
+        }
+        
+        let record = parse_line(&line, line_num + 1)?;
+        records.push(record);
+    }
+    
+    Ok(records)
+}
+
+fn parse_line(line: &str, line_num: usize) -> Result<Record, ParseError> {
+    let columns: Vec<&str> = line.split(',').map(|s| s.trim()).collect();
+    
+    if columns.len() != 4 {
+        return Err(ParseError::InvalidColumnCount(columns.len(), line_num));
+    }
+    
+    let id = columns[0]
+        .parse::<u32>()
+        .map_err(|_| ParseError::InvalidId(columns[0].to_string()))?;
+    
+    let name = columns[1].to_string();
+    
+    let value = columns[2]
+        .parse::<f64>()
+        .map_err(|_| ParseError::InvalidValue(columns[2].to_string()))?;
+    
+    let active = match columns[3].to_lowercase().as_str() {
+        "true" | "yes" | "1" => true,
+        "false" | "no" | "0" => false,
+        _ => return Err(ParseError::InvalidActiveFlag(columns[3].to_string())),
+    };
+    
+    Ok(Record {
+        id,
+        name,
+        value,
+        active,
+    })
+}
+
+pub fn validate_records(records: &[Record]) -> Vec<(usize, &'static str)> {
+    let mut errors = Vec::new();
+    
+    for (idx, record) in records.iter().enumerate() {
+        if record.id == 0 {
+            errors.push((idx, "ID cannot be zero"));
+        }
+        
+        if record.name.is_empty() {
+            errors.push((idx, "Name cannot be empty"));
+        }
+        
+        if record.value < 0.0 {
+            errors.push((idx, "Value cannot be negative"));
+        }
+        
+        if record.value > 10000.0 {
+            errors.push((idx, "Value exceeds maximum limit"));
+        }
+    }
+    
+    errors
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+    
+    #[test]
+    fn test_parse_valid_csv() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "1,Item A,42.5,true").unwrap();
+        writeln!(temp_file, "2,Item B,100.0,false").unwrap();
+        writeln!(temp_file, "# Comment line").unwrap();
+        writeln!(temp_file, "").unwrap();
+        writeln!(temp_file, "3,Item C,0.0,yes").unwrap();
+        
+        let records = parse_csv_file(temp_file.path()).unwrap();
+        assert_eq!(records.len(), 3);
+        assert_eq!(records[0].id, 1);
+        assert_eq!(records[0].name, "Item A");
+        assert_eq!(records[0].value, 42.5);
+        assert_eq!(records[0].active, true);
+    }
+    
+    #[test]
+    fn test_parse_invalid_id() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "abc,Item,10.0,true").unwrap();
+        
+        let result = parse_csv_file(temp_file.path());
+        assert!(matches!(result, Err(ParseError::InvalidId(_))));
+    }
+    
+    #[test]
+    fn test_validate_records() {
+        let records = vec![
+            Record { id: 0, name: "".to_string(), value: -5.0, active: true },
+            Record { id: 1, name: "Valid".to_string(), value: 50.0, active: false },
+            Record { id: 2, name: "TooBig".to_string(), value: 20000.0, active: true },
+        ];
+        
+        let errors = validate_records(&records);
+        assert_eq!(errors.len(), 4);
+    }
 }

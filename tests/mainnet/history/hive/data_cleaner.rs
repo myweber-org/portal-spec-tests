@@ -353,4 +353,40 @@ mod tests {
         let cleaner = DataCleaner::new();
         assert_eq!(cleaner.normalize_text("  HELLO World  "), "hello world");
     }
+}use csv::{ReaderBuilder, WriterBuilder};
+use std::error::Error;
+use std::io;
+
+pub fn clean_csv_data<R: io::Read, W: io::Write>(
+    input: R,
+    output: W,
+    delimiter: u8,
+) -> Result<(), Box<dyn Error>> {
+    let mut reader = ReaderBuilder::new()
+        .delimiter(delimiter)
+        .has_headers(true)
+        .from_reader(input);
+
+    let mut writer = WriterBuilder::new()
+        .delimiter(delimiter)
+        .from_writer(output);
+
+    if let Some(headers) = reader.headers().ok() {
+        writer.write_record(headers)?;
+    }
+
+    for result in reader.records() {
+        let record = result?;
+        let cleaned_fields: Vec<String> = record
+            .iter()
+            .map(|field| field.trim().to_string())
+            .collect();
+
+        if cleaned_fields.iter().any(|field| !field.is_empty()) {
+            writer.write_record(&cleaned_fields)?;
+        }
+    }
+
+    writer.flush()?;
+    Ok(())
 }

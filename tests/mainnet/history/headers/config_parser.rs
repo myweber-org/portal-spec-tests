@@ -1029,4 +1029,114 @@ impl AppConfig {
         let protocol = if self.server.enable_ssl { "https" } else { "http" };
         format!("{}://{}:{}", protocol, self.server.address, self.server.port)
     }
+}use std::collections::HashMap;
+use std::env;
+use std::fs;
+
+pub struct ConfigParser {
+    values: HashMap<String, String>,
+}
+
+impl ConfigParser {
+    pub fn new() -> Self {
+        ConfigParser {
+            values: HashMap::new(),
+        }
+    }
+
+    pub fn load_from_file(&mut self, path: &str) -> Result<(), String> {
+        let content = fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read config file: {}", e))?;
+
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+
+            if let Some((key, value)) = trimmed.split_once('=') {
+                let key = key.trim().to_string();
+                let value = self.resolve_value(value.trim());
+                self.values.insert(key, value);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn resolve_value(&self, raw_value: &str) -> String {
+        if raw_value.starts_with('$') {
+            let var_name = &raw_value[1..];
+            env::var(var_name).unwrap_or_else(|_| raw_value.to_string())
+        } else {
+            raw_value.to_string()
+        }
+    }
+
+    pub fn get(&self, key: &str) -> Option<&String> {
+        self.values.get(key)
+    }
+
+    pub fn get_or_default(&self, key: &str, default: &str) -> String {
+        self.values.get(key).cloned().unwrap_or(default.to_string())
+    }
+
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.values.contains_key(key)
+    }
+
+    pub fn keys(&self) -> impl Iterator<Item = &String> {
+        self.values.keys()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_basic_parsing() {
+        let mut config = ConfigParser::new();
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "DATABASE_URL=postgres://localhost").unwrap();
+        writeln!(temp_file, "PORT=8080").unwrap();
+        writeln!(temp_file, "# This is a comment").unwrap();
+        writeln!(temp_file, "").unwrap();
+        writeln!(temp_file, "DEBUG=true").unwrap();
+
+        config.load_from_file(temp_file.path().to_str().unwrap()).unwrap();
+
+        assert_eq!(config.get("DATABASE_URL").unwrap(), "postgres://localhost");
+        assert_eq!(config.get("PORT").unwrap(), "8080");
+        assert_eq!(config.get("DEBUG").unwrap(), "true");
+        assert!(config.get("MISSING").is_none());
+    }
+
+    #[test]
+    fn test_env_substitution() {
+        env::set_var("API_SECRET", "super-secret-key");
+        
+        let mut config = ConfigParser::new();
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "SECRET=$API_SECRET").unwrap();
+        writeln!(temp_file, "NORMAL=regular_value").unwrap();
+
+        config.load_from_file(temp_file.path().to_str().unwrap()).unwrap();
+
+        assert_eq!(config.get("SECRET").unwrap(), "super-secret-key");
+        assert_eq!(config.get("NORMAL").unwrap(), "regular_value");
+    }
+
+    #[test]
+    fn test_missing_env_var() {
+        let mut config = ConfigParser::new();
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "MISSING=$NONEXISTENT_VAR").unwrap();
+
+        config.load_from_file(temp_file.path().to_str().unwrap()).unwrap();
+
+        assert_eq!(config.get("MISSING").unwrap(), "$NONEXISTENT_VAR");
+    }
 }

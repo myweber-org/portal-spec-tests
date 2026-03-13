@@ -75,4 +75,63 @@ mod tests {
         assert_eq!(normalize_string("  mixed   CASE  "), "mixed   case");
     }
 }
-```
+```use std::collections::HashSet;
+use std::hash::Hash;
+
+pub fn deduplicate<T: Eq + Hash + Clone>(items: Vec<T>) -> Vec<T> {
+    let mut seen = HashSet::new();
+    items
+        .into_iter()
+        .filter(|item| seen.insert(item.clone()))
+        .collect()
+}
+
+pub fn normalize_strings(strings: Vec<String>) -> Vec<String> {
+    strings
+        .into_iter()
+        .map(|s| s.trim().to_lowercase())
+        .collect()
+}
+
+pub fn remove_outliers(values: &[f64], threshold: f64) -> Vec<f64> {
+    if values.is_empty() {
+        return Vec::new();
+    }
+    
+    let mean: f64 = values.iter().sum::<f64>() / values.len() as f64;
+    let variance: f64 = values.iter()
+        .map(|&x| (x - mean).powi(2))
+        .sum::<f64>() / values.len() as f64;
+    let std_dev = variance.sqrt();
+    
+    values.iter()
+        .filter(|&&x| (x - mean).abs() <= threshold * std_dev)
+        .copied()
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_deduplicate() {
+        let input = vec![1, 2, 2, 3, 3, 3];
+        let result = deduplicate(input);
+        assert_eq!(result, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn test_normalize_strings() {
+        let input = vec!["  HELLO  ".to_string(), "World".to_string()];
+        let result = normalize_strings(input);
+        assert_eq!(result, vec!["hello".to_string(), "world".to_string()]);
+    }
+
+    #[test]
+    fn test_remove_outliers() {
+        let values = vec![1.0, 2.0, 3.0, 100.0];
+        let result = remove_outliers(&values, 2.0);
+        assert!(result.len() < values.len());
+    }
+}

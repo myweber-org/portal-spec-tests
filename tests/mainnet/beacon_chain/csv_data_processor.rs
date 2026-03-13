@@ -532,4 +532,146 @@ fn process_data_sample() -> Result<(), Box<dyn Error>> {
     processor.save_filtered_results("top_items.csv", top_items)?;
     
     Ok(())
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader, Write};
+use std::path::Path;
+
+#[derive(Debug, Clone)]
+pub struct Record {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub category: String,
+}
+
+impl Record {
+    pub fn new(id: u32, name: String, value: f64, category: String) -> Self {
+        Record {
+            id,
+            name,
+            value,
+            category,
+        }
+    }
+
+    pub fn is_valid(&self) -> bool {
+        !self.name.is_empty() && self.value >= 0.0 && !self.category.is_empty()
+    }
+
+    pub fn transform_value(&mut self, multiplier: f64) {
+        self.value *= multiplier;
+    }
+}
+
+pub fn read_csv_file(file_path: &Path) -> Result<Vec<Record>, Box<dyn Error>> {
+    let file = File::open(file_path)?;
+    let reader = BufReader::new(file);
+    let mut records = Vec::new();
+
+    for (index, line) in reader.lines().enumerate() {
+        let line = line?;
+        if index == 0 {
+            continue;
+        }
+
+        let parts: Vec<&str> = line.split(',').collect();
+        if parts.len() != 4 {
+            continue;
+        }
+
+        let id = parts[0].parse::<u32>().unwrap_or(0);
+        let name = parts[1].to_string();
+        let value = parts[2].parse::<f64>().unwrap_or(0.0);
+        let category = parts[3].to_string();
+
+        let record = Record::new(id, name, value, category);
+        if record.is_valid() {
+            records.push(record);
+        }
+    }
+
+    Ok(records)
+}
+
+pub fn write_csv_file(file_path: &Path, records: &[Record]) -> Result<(), Box<dyn Error>> {
+    let mut file = File::create(file_path)?;
+    writeln!(file, "id,name,value,category")?;
+
+    for record in records {
+        writeln!(
+            file,
+            "{},{},{},{}",
+            record.id, record.name, record.value, record.category
+        )?;
+    }
+
+    Ok(())
+}
+
+pub fn filter_records(records: &[Record], category_filter: &str) -> Vec<Record> {
+    records
+        .iter()
+        .filter(|r| r.category == category_filter)
+        .cloned()
+        .collect()
+}
+
+pub fn calculate_total_value(records: &[Record]) -> f64 {
+    records.iter().map(|r| r.value).sum()
+}
+
+pub fn process_data(input_path: &Path, output_path: &Path, category: &str) -> Result<(), Box<dyn Error>> {
+    let records = read_csv_file(input_path)?;
+    let filtered = filter_records(&records, category);
+    
+    if filtered.is_empty() {
+        return Err("No records found for specified category".into());
+    }
+
+    let mut processed_records = filtered.clone();
+    for record in &mut processed_records {
+        record.transform_value(1.1);
+    }
+
+    write_csv_file(output_path, &processed_records)?;
+    
+    let total = calculate_total_value(&processed_records);
+    println!("Processed {} records with total value: {:.2}", processed_records.len(), total);
+    
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn test_record_validation() {
+        let valid_record = Record::new(1, "Test".to_string(), 10.0, "A".to_string());
+        assert!(valid_record.is_valid());
+
+        let invalid_record = Record::new(2, "".to_string(), -5.0, "B".to_string());
+        assert!(!invalid_record.is_valid());
+    }
+
+    #[test]
+    fn test_value_transformation() {
+        let mut record = Record::new(1, "Test".to_string(), 100.0, "C".to_string());
+        record.transform_value(1.5);
+        assert_eq!(record.value, 150.0);
+    }
+
+    #[test]
+    fn test_filter_records() {
+        let records = vec![
+            Record::new(1, "A".to_string(), 10.0, "X".to_string()),
+            Record::new(2, "B".to_string(), 20.0, "Y".to_string()),
+            Record::new(3, "C".to_string(), 30.0, "X".to_string()),
+        ];
+
+        let filtered = filter_records(&records, "X");
+        assert_eq!(filtered.len(), 2);
+    }
 }

@@ -194,4 +194,92 @@ mod tests {
         let result = generator.generate();
         assert!(result.is_err());
     }
+}use rand::Rng;
+use std::io;
+
+fn generate_password(length: usize, use_uppercase: bool, use_numbers: bool, use_symbols: bool) -> String {
+    let mut charset = String::from("abcdefghijklmnopqrstuvwxyz");
+    
+    if use_uppercase {
+        charset.push_str("ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+    }
+    if use_numbers {
+        charset.push_str("0123456789");
+    }
+    if use_symbols {
+        charset.push_str("!@#$%^&*()_+-=[]{}|;:,.<>?");
+    }
+    
+    let charset_bytes: Vec<u8> = charset.bytes().collect();
+    let mut rng = rand::thread_rng();
+    
+    (0..length)
+        .map(|_| {
+            let idx = rng.gen_range(0..charset_bytes.len());
+            charset_bytes[idx] as char
+        })
+        .collect()
+}
+
+fn main() {
+    println!("Password Generator");
+    println!("==================");
+    
+    let length: usize = loop {
+        println!("Enter password length (8-64):");
+        let mut input = String::new();
+        io::stdin().read_line(&mut input).unwrap();
+        
+        match input.trim().parse() {
+            Ok(num) if num >= 8 && num <= 64 => break num,
+            _ => println!("Please enter a number between 8 and 64"),
+        }
+    };
+    
+    println!("Include uppercase letters? (y/n):");
+    let use_uppercase = read_yes_no();
+    
+    println!("Include numbers? (y/n):");
+    let use_numbers = read_yes_no();
+    
+    println!("Include symbols? (y/n):");
+    let use_symbols = read_yes_no();
+    
+    let password = generate_password(length, use_uppercase, use_numbers, use_symbols);
+    println!("\nGenerated Password: {}", password);
+    println!("Password Strength: {}", evaluate_strength(&password));
+}
+
+fn read_yes_no() -> bool {
+    loop {
+        let mut input = String::new();
+        io::stdin().read_line(&mut input).unwrap();
+        
+        match input.trim().to_lowercase().as_str() {
+            "y" | "yes" => return true,
+            "n" | "no" => return false,
+            _ => println!("Please enter 'y' or 'n'"),
+        }
+    }
+}
+
+fn evaluate_strength(password: &str) -> String {
+    let length_score = password.len() >= 12;
+    let has_uppercase = password.chars().any(|c| c.is_uppercase());
+    let has_lowercase = password.chars().any(|c| c.is_lowercase());
+    let has_numbers = password.chars().any(|c| c.is_numeric());
+    let has_symbols = password.chars().any(|c| "!@#$%^&*()_+-=[]{}|;:,.<>?".contains(c));
+    
+    let score = [length_score, has_uppercase, has_lowercase, has_numbers, has_symbols]
+        .iter()
+        .filter(|&&x| x)
+        .count();
+    
+    match score {
+        5 => "Very Strong".to_string(),
+        4 => "Strong".to_string(),
+        3 => "Moderate".to_string(),
+        2 => "Weak".to_string(),
+        _ => "Very Weak".to_string(),
+    }
 }

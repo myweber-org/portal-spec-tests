@@ -228,4 +228,102 @@ mod tests {
         assert_eq!(result[0], vec!["a", "b", "c"]);
         assert_eq!(result[1], vec!["d", "e", "f"]);
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug)]
+pub struct CsvParser {
+    delimiter: char,
+    has_header: bool,
+}
+
+impl CsvParser {
+    pub fn new(delimiter: char, has_header: bool) -> Self {
+        CsvParser {
+            delimiter,
+            has_header,
+        }
+    }
+
+    pub fn parse_file<P: AsRef<Path>>(&self, path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut records = Vec::new();
+        let mut lines = reader.lines().enumerate();
+
+        if self.has_header {
+            let _ = lines.next();
+        }
+
+        for (line_num, line) in lines {
+            let line = line?;
+            let record: Vec<String> = line
+                .split(self.delimiter)
+                .map(|s| s.trim().to_string())
+                .collect();
+            
+            if record.iter().any(|field| field.is_empty()) {
+                eprintln!("Warning: Empty field detected at line {}", line_num + 1);
+            }
+            
+            records.push(record);
+        }
+
+        Ok(records)
+    }
+
+    pub fn count_records<P: AsRef<Path>>(&self, path: P) -> Result<usize, Box<dyn Error>> {
+        let records = self.parse_file(path)?;
+        Ok(records.len())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_parse_csv_with_header() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,city").unwrap();
+        writeln!(temp_file, "John,30,New York").unwrap();
+        writeln!(temp_file, "Alice,25,London").unwrap();
+
+        let parser = CsvParser::new(',', true);
+        let records = parser.parse_file(temp_file.path()).unwrap();
+        
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0], vec!["John", "30", "New York"]);
+    }
+
+    #[test]
+    fn test_parse_csv_without_header() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "John;30;New York").unwrap();
+        writeln!(temp_file, "Alice;25;London").unwrap();
+
+        let parser = CsvParser::new(';', false);
+        let records = parser.parse_file(temp_file.path()).unwrap();
+        
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[1], vec!["Alice", "25", "London"]);
+    }
+
+    #[test]
+    fn test_count_records() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,city").unwrap();
+        writeln!(temp_file, "John,30,New York").unwrap();
+        writeln!(temp_file, "Alice,25,London").unwrap();
+        writeln!(temp_file, "Bob,35,Paris").unwrap();
+
+        let parser = CsvParser::new(',', true);
+        let count = parser.count_records(temp_file.path()).unwrap();
+        
+        assert_eq!(count, 3);
+    }
 }

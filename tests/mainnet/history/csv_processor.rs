@@ -406,4 +406,78 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     println!("Processing completed successfully");
     Ok(())
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+
+pub struct CsvProcessor {
+    delimiter: char,
+    has_header: bool,
+}
+
+impl CsvProcessor {
+    pub fn new(delimiter: char, has_header: bool) -> Self {
+        CsvProcessor {
+            delimiter,
+            has_header,
+        }
+    }
+
+    pub fn read_and_transform<R: BufRead>(
+        &self,
+        reader: R,
+        transform_fn: fn(Vec<String>) -> Vec<String>,
+    ) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let mut lines = reader.lines();
+        let mut records = Vec::new();
+
+        if self.has_header {
+            let _header = lines.next();
+        }
+
+        for line_result in lines {
+            let line = line_result?;
+            let fields: Vec<String> = line
+                .split(self.delimiter)
+                .map(|s| s.trim().to_string())
+                .collect();
+
+            let transformed = transform_fn(fields);
+            records.push(transformed);
+        }
+
+        Ok(records)
+    }
+
+    pub fn process_file(
+        &self,
+        file_path: &str,
+        transform_fn: fn(Vec<String>) -> Vec<String>,
+    ) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        self.read_and_transform(reader, transform_fn)
+    }
+}
+
+fn uppercase_fields(fields: Vec<String>) -> Vec<String> {
+    fields.into_iter().map(|f| f.to_uppercase()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_csv_processing() {
+        let csv_data = "name,age,city\njohn,25,new york\njane,30,london";
+        let processor = CsvProcessor::new(',', true);
+        let reader = std::io::Cursor::new(csv_data);
+        
+        let result = processor.read_and_transform(reader, uppercase_fields).unwrap();
+        
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], vec!["JOHN", "25", "NEW YORK"]);
+        assert_eq!(result[1], vec!["JANE", "30", "LONDON"]);
+    }
 }

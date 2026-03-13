@@ -319,4 +319,69 @@ fn main() {
     let metrics = perform_health_check(target);
     println!();
     metrics.display();
+}use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
+use std::time::Duration;
+
+struct Host {
+    address: IpAddr,
+    port: u16,
+}
+
+impl Host {
+    fn new(address: IpAddr, port: u16) -> Self {
+        Host { address, port }
+    }
+
+    fn check(&self, timeout_secs: u64) -> bool {
+        let socket_addr = SocketAddr::new(self.address, self.port);
+        match TcpStream::connect_timeout(&socket_addr, Duration::from_secs(timeout_secs)) {
+            Ok(_) => true,
+            Err(_) => false,
+        }
+    }
+}
+
+struct NetworkHealthChecker {
+    hosts: Vec<Host>,
+    timeout_secs: u64,
+}
+
+impl NetworkHealthChecker {
+    fn new(timeout_secs: u64) -> Self {
+        NetworkHealthChecker {
+            hosts: Vec::new(),
+            timeout_secs,
+        }
+    }
+
+    fn add_host(&mut self, address: IpAddr, port: u16) {
+        self.hosts.push(Host::new(address, port));
+    }
+
+    fn run_check(&self) -> Vec<(IpAddr, u16, bool)> {
+        self.hosts
+            .iter()
+            .map(|host| {
+                let status = host.check(self.timeout_secs);
+                (host.address, host.port, status)
+            })
+            .collect()
+    }
+}
+
+fn main() {
+    let mut checker = NetworkHealthChecker::new(5);
+    checker.add_host(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)), 53);
+    checker.add_host(IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)), 80);
+    checker.add_host(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)), 443);
+
+    let results = checker.run_check();
+    for (addr, port, status) in results {
+        println!(
+            "Host {}:{} is {}",
+            addr,
+            port,
+            if status { "reachable" } else { "unreachable" }
+        );
+    }
 }

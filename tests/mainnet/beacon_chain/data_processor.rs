@@ -1442,3 +1442,133 @@ mod tests {
         assert_eq!(avg, 200.0);
     }
 }
+use std::collections::HashMap;
+
+pub struct DataProcessor {
+    cache: HashMap<String, Vec<f64>>,
+    validation_rules: Vec<ValidationRule>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ValidationRule {
+    pub field_name: String,
+    pub min_value: f64,
+    pub max_value: f64,
+    pub required: bool,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            cache: HashMap::new(),
+            validation_rules: Vec::new(),
+        }
+    }
+
+    pub fn add_validation_rule(&mut self, rule: ValidationRule) {
+        self.validation_rules.push(rule);
+    }
+
+    pub fn process_dataset(&mut self, dataset_name: &str, data: &[f64]) -> Result<Vec<f64>, String> {
+        if data.is_empty() {
+            return Err("Dataset cannot be empty".to_string());
+        }
+
+        for rule in &self.validation_rules {
+            if rule.required && data.iter().any(|&x| x < rule.min_value || x > rule.max_value) {
+                return Err(format!(
+                    "Validation failed for field '{}': values must be between {} and {}",
+                    rule.field_name, rule.min_value, rule.max_value
+                ));
+            }
+        }
+
+        let processed_data: Vec<f64> = data
+            .iter()
+            .map(|&x| x * 2.0)
+            .filter(|&x| x > 0.0)
+            .collect();
+
+        if processed_data.is_empty() {
+            return Err("All values filtered out during processing".to_string());
+        }
+
+        self.cache.insert(dataset_name.to_string(), processed_data.clone());
+
+        Ok(processed_data)
+    }
+
+    pub fn get_cached_data(&self, dataset_name: &str) -> Option<&Vec<f64>> {
+        self.cache.get(dataset_name)
+    }
+
+    pub fn calculate_statistics(&self, dataset_name: &str) -> Option<Statistics> {
+        self.cache.get(dataset_name).map(|data| {
+            let count = data.len();
+            let sum: f64 = data.iter().sum();
+            let mean = sum / count as f64;
+            let variance: f64 = data.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / count as f64;
+            let std_dev = variance.sqrt();
+
+            Statistics {
+                count,
+                sum,
+                mean,
+                variance,
+                std_dev,
+            }
+        })
+    }
+
+    pub fn clear_cache(&mut self) {
+        self.cache.clear();
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Statistics {
+    pub count: usize,
+    pub sum: f64,
+    pub mean: f64,
+    pub variance: f64,
+    pub std_dev: f64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_data_processing() {
+        let mut processor = DataProcessor::new();
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+
+        let result = processor.process_dataset("test_data", &data);
+        assert!(result.is_ok());
+
+        let processed = result.unwrap();
+        assert_eq!(processed.len(), 5);
+        assert_eq!(processed[0], 2.0);
+        assert_eq!(processed[4], 10.0);
+    }
+
+    #[test]
+    fn test_empty_dataset() {
+        let mut processor = DataProcessor::new();
+        let result = processor.process_dataset("empty", &[]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_statistics_calculation() {
+        let mut processor = DataProcessor::new();
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+
+        processor.process_dataset("stats_test", &data).unwrap();
+        let stats = processor.calculate_statistics("stats_test").unwrap();
+
+        assert_eq!(stats.count, 5);
+        assert_eq!(stats.sum, 30.0);
+        assert_eq!(stats.mean, 6.0);
+    }
+}

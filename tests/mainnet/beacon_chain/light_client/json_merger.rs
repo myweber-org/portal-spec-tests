@@ -182,4 +182,69 @@ mod tests {
         assert_eq!(result["config"]["timeout"], 30);
         assert_eq!(result["config"]["retries"], 3);
     }
+}use serde_json::{Value, json};
+use std::fs;
+use std::path::Path;
+use std::io;
+
+pub fn merge_json_files<P: AsRef<Path>>(paths: &[P]) -> io::Result<Value> {
+    let mut merged_array = Vec::new();
+
+    for path in paths {
+        let content = fs::read_to_string(path)?;
+        let parsed: Value = serde_json::from_str(&content)?;
+        
+        if let Value::Array(arr) = parsed {
+            merged_array.extend(arr);
+        } else {
+            merged_array.push(parsed);
+        }
+    }
+
+    Ok(json!(merged_array))
+}
+
+pub fn write_merged_json<P: AsRef<Path>>(paths: &[P], output_path: P) -> io::Result<()> {
+    let merged = merge_json_files(paths)?;
+    let json_string = serde_json::to_string_pretty(&merged)?;
+    fs::write(output_path, json_string)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_merge_json_objects() {
+        let file1 = NamedTempFile::new().unwrap();
+        let file2 = NamedTempFile::new().unwrap();
+        
+        fs::write(&file1, r#"{"id": 1, "name": "test1"}"#).unwrap();
+        fs::write(&file2, r#"{"id": 2, "name": "test2"}"#).unwrap();
+        
+        let result = merge_json_files(&[file1.path(), file2.path()]).unwrap();
+        
+        assert!(result.is_array());
+        let arr = result.as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0]["id"], 1);
+        assert_eq!(arr[1]["name"], "test2");
+    }
+
+    #[test]
+    fn test_merge_json_arrays() {
+        let file1 = NamedTempFile::new().unwrap();
+        let file2 = NamedTempFile::new().unwrap();
+        
+        fs::write(&file1, r#"[{"a": 1}, {"b": 2}]"#).unwrap();
+        fs::write(&file2, r#"[{"c": 3}, {"d": 4}]"#).unwrap();
+        
+        let result = merge_json_files(&[file1.path(), file2.path()]).unwrap();
+        let arr = result.as_array().unwrap();
+        
+        assert_eq!(arr.len(), 4);
+        assert_eq!(arr[0]["a"], 1);
+        assert_eq!(arr[3]["d"], 4);
+    }
 }

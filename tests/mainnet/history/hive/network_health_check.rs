@@ -1,85 +1,120 @@
-use std::net::{TcpStream, IpAddr};
-use std::time::Duration;
-use std::thread;
 
-pub struct NetworkChecker {
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::time::{Duration, Instant};
+use rand::Rng;
+
+pub struct NetworkProbe {
+    target: SocketAddr,
     timeout: Duration,
+    packet_size: usize,
 }
 
-impl NetworkChecker {
-    pub fn new(timeout_secs: u64) -> Self {
-        NetworkChecker {
-            timeout: Duration::from_secs(timeout_secs),
+impl NetworkProbe {
+    pub fn new(ip: Ipv4Addr, port: u16) -> Self {
+        NetworkProbe {
+            target: SocketAddr::new(IpAddr::V4(ip), port),
+            timeout: Duration::from_secs(2),
+            packet_size: 64,
         }
     }
 
-    pub fn ping_host(&self, host: IpAddr) -> bool {
-        let port = 80;
-        match TcpStream::connect_timeout(&(host, port).into(), self.timeout) {
-            Ok(_) => true,
-            Err(_) => false,
-        }
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
     }
 
-    pub fn check_port(&self, host: IpAddr, port: u16) -> bool {
-        match TcpStream::connect_timeout(&(host, port).into(), self.timeout) {
-            Ok(_) => true,
-            Err(_) => false,
-        }
-    }
-
-    pub fn scan_ports(&self, host: IpAddr, start_port: u16, end_port: u16) -> Vec<u16> {
-        let mut open_ports = Vec::new();
-        let mut handles = vec![];
-
-        for port in start_port..=end_port {
-            let checker = self.clone();
-            let host_clone = host;
-            let handle = thread::spawn(move || {
-                if checker.check_port(host_clone, port) {
-                    Some(port)
-                } else {
-                    None
-                }
-            });
-            handles.push(handle);
-        }
-
-        for handle in handles {
-            if let Ok(Some(port)) = handle.join() {
-                open_ports.push(port);
+    pub fn measure_latency(&self, samples: usize) -> Option<Duration> {
+        let mut latencies = Vec::with_capacity(samples);
+        
+        for _ in 0..samples {
+            if let Some(latency) = self.single_ping() {
+                latencies.push(latency);
             }
         }
 
-        open_ports.sort();
-        open_ports
+        if latencies.is_empty() {
+            return None;
+        }
+
+        latencies.sort();
+        let median_index = latencies.len() / 2;
+        Some(latencies[median_index])
+    }
+
+    pub fn calculate_packet_loss(&self, attempts: usize) -> f64 {
+        let mut successful = 0;
+        
+        for _ in 0..attempts {
+            if self.single_ping().is_some() {
+                successful += 1;
+            }
+        }
+
+        let loss_percentage = ((attempts - successful) as f64 / attempts as f64) * 100.0;
+        loss_percentage
+    }
+
+    fn single_ping(&self) -> Option<Duration> {
+        let start = Instant::now();
+        
+        let mut rng = rand::thread_rng();
+        let payload: Vec<u8> = (0..self.packet_size)
+            .map(|_| rng.gen())
+            .collect();
+
+        let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+        socket.set_read_timeout(Some(self.timeout)).ok()?;
+        
+        socket.send_to(&payload, self.target).ok()?;
+        
+        let mut buffer = vec![0u8; self.packet_size];
+        socket.recv_from(&mut buffer).ok()?;
+        
+        Some(start.elapsed())
     }
 }
 
-impl Clone for NetworkChecker {
-    fn clone(&self) -> Self {
-        NetworkChecker {
-            timeout: self.timeout,
+pub fn check_network_quality(target_ip: Ipv4Addr) -> String {
+    let probe = NetworkProbe::new(target_ip, 53);
+    
+    let latency = probe.measure_latency(5);
+    let packet_loss = probe.calculate_packet_loss(10);
+    
+    match latency {
+        Some(lat) => {
+            if lat < Duration::from_millis(50) && packet_loss < 1.0 {
+                "Network quality: Excellent".to_string()
+            } else if lat < Duration::from_millis(100) && packet_loss < 5.0 {
+                "Network quality: Good".to_string()
+            } else if lat < Duration::from_millis(200) && packet_loss < 10.0 {
+                "Network quality: Fair".to_string()
+            } else {
+                "Network quality: Poor".to_string()
+            }
         }
+        None => "Target unreachable".to_string(),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::Ipv4Addr;
-
+    
     #[test]
-    fn test_ping_localhost() {
-        let checker = NetworkChecker::new(2);
-        let localhost = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
-        assert!(checker.ping_host(localhost));
+    fn test_localhost_probe() {
+        let localhost = Ipv4Addr::new(127, 0, 0, 1);
+        let probe = NetworkProbe::new(localhost, 8080);
+        
+        let result = probe.single_ping();
+        assert!(result.is_none());
     }
-
+    
     #[test]
-    fn test_check_invalid_port() {
-        let checker = NetworkChecker::new(1);
-        let localhost = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
-        assert!(!checker.check_port(localhost, 9999));
+    fn test_packet_loss_calculation() {
+        let google_dns = Ipv4Addr::new(8, 8, 8, 8);
+        let probe = NetworkProbe::new(google_dns, 53);
+        
+        let loss = probe.calculate_packet_loss(3);
+        assert!(loss >= 0.0 && loss <= 100.0);
     }
 }

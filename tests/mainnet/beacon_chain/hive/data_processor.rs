@@ -201,3 +201,130 @@ mod tests {
         assert_eq!(totals.get("A"), Some(&125.0));
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+pub struct DataRecord {
+    id: u32,
+    value: f64,
+    category: String,
+    valid: bool,
+}
+
+impl DataRecord {
+    pub fn new(id: u32, value: f64, category: &str) -> Self {
+        let valid = value >= 0.0 && value <= 1000.0;
+        DataRecord {
+            id,
+            value,
+            category: category.to_string(),
+            valid,
+        }
+    }
+
+    pub fn is_valid(&self) -> bool {
+        self.valid
+    }
+
+    pub fn summary(&self) -> String {
+        format!("ID: {}, Value: {:.2}, Category: {}", self.id, self.value, self.category)
+    }
+}
+
+pub fn process_csv_file(file_path: &Path) -> Result<Vec<DataRecord>, Box<dyn Error>> {
+    let file = File::open(file_path)?;
+    let reader = BufReader::new(file);
+    let mut records = Vec::new();
+
+    for (line_num, line) in reader.lines().enumerate() {
+        let line = line?;
+        
+        if line_num == 0 {
+            continue;
+        }
+
+        let parts: Vec<&str> = line.split(',').collect();
+        if parts.len() != 3 {
+            continue;
+        }
+
+        let id = match parts[0].parse::<u32>() {
+            Ok(val) => val,
+            Err(_) => continue,
+        };
+
+        let value = match parts[1].parse::<f64>() {
+            Ok(val) => val,
+            Err(_) => continue,
+        };
+
+        let record = DataRecord::new(id, value, parts[2]);
+        records.push(record);
+    }
+
+    Ok(records)
+}
+
+pub fn filter_valid_records(records: &[DataRecord]) -> Vec<&DataRecord> {
+    records.iter().filter(|r| r.is_valid()).collect()
+}
+
+pub fn calculate_average(records: &[&DataRecord]) -> Option<f64> {
+    if records.is_empty() {
+        return None;
+    }
+
+    let sum: f64 = records.iter().map(|r| r.value).sum();
+    Some(sum / records.len() as f64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_data_record_creation() {
+        let record = DataRecord::new(1, 42.5, "A");
+        assert_eq!(record.id, 1);
+        assert_eq!(record.value, 42.5);
+        assert_eq!(record.category, "A");
+        assert!(record.is_valid());
+    }
+
+    #[test]
+    fn test_invalid_record() {
+        let record = DataRecord::new(2, -10.0, "B");
+        assert!(!record.is_valid());
+    }
+
+    #[test]
+    fn test_process_csv() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,value,category").unwrap();
+        writeln!(temp_file, "1,100.5,TypeA").unwrap();
+        writeln!(temp_file, "2,200.3,TypeB").unwrap();
+        writeln!(temp_file, "3,invalid,TypeC").unwrap();
+
+        let records = process_csv_file(temp_file.path()).unwrap();
+        assert_eq!(records.len(), 2);
+    }
+
+    #[test]
+    fn test_filter_and_average() {
+        let records = vec![
+            DataRecord::new(1, 100.0, "A"),
+            DataRecord::new(2, 200.0, "B"),
+            DataRecord::new(3, -50.0, "C"),
+        ];
+
+        let valid_records = filter_valid_records(&records);
+        assert_eq!(valid_records.len(), 2);
+
+        let avg = calculate_average(&valid_records);
+        assert_eq!(avg, Some(150.0));
+    }
+}

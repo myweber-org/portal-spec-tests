@@ -192,3 +192,121 @@ mod tests {
         assert!(result.is_err());
     }
 }
+use std::collections::HashMap;
+use std::str::FromStr;
+
+#[derive(Debug, PartialEq)]
+pub struct ParsedUrl {
+    pub protocol: String,
+    pub domain: String,
+    pub path: String,
+    pub query_params: HashMap<String, String>,
+    pub fragment: Option<String>,
+}
+
+impl ParsedUrl {
+    pub fn new(url: &str) -> Result<Self, String> {
+        let mut protocol = String::new();
+        let mut rest = url;
+        
+        if let Some(proto_end) = url.find("://") {
+            protocol = url[..proto_end].to_string();
+            rest = &url[proto_end + 3..];
+        }
+        
+        let mut domain_end = rest.find('/').unwrap_or(rest.len());
+        let fragment_pos = rest.find('#');
+        
+        if let Some(frag_pos) = fragment_pos {
+            if frag_pos < domain_end {
+                domain_end = frag_pos;
+            }
+        }
+        
+        let domain = rest[..domain_end].to_string();
+        let remaining = &rest[domain_end..];
+        
+        let (path_with_query, fragment) = if let Some(frag_pos) = remaining.find('#') {
+            (&remaining[..frag_pos], Some(remaining[frag_pos + 1..].to_string()))
+        } else {
+            (remaining, None)
+        };
+        
+        let (path, query_str) = if let Some(query_pos) = path_with_query.find('?') {
+            (&path_with_query[..query_pos], Some(&path_with_query[query_pos + 1..]))
+        } else {
+            (path_with_query, None)
+        };
+        
+        let mut query_params = HashMap::new();
+        if let Some(query) = query_str {
+            for pair in query.split('&') {
+                let mut parts = pair.splitn(2, '=');
+                if let Some(key) = parts.next() {
+                    let value = parts.next().unwrap_or("").to_string();
+                    query_params.insert(key.to_string(), value);
+                }
+            }
+        }
+        
+        Ok(ParsedUrl {
+            protocol,
+            domain,
+            path: path.to_string(),
+            query_params,
+            fragment,
+        })
+    }
+    
+    pub fn get_query_param(&self, key: &str) -> Option<&String> {
+        self.query_params.get(key)
+    }
+    
+    pub fn has_fragment(&self) -> bool {
+        self.fragment.is_some()
+    }
+    
+    pub fn is_secure(&self) -> bool {
+        self.protocol == "https"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_parse_full_url() {
+        let url = "https://example.com/path/to/resource?param1=value1&param2=value2#section";
+        let parsed = ParsedUrl::new(url).unwrap();
+        
+        assert_eq!(parsed.protocol, "https");
+        assert_eq!(parsed.domain, "example.com");
+        assert_eq!(parsed.path, "/path/to/resource");
+        assert_eq!(parsed.get_query_param("param1"), Some(&"value1".to_string()));
+        assert_eq!(parsed.get_query_param("param2"), Some(&"value2".to_string()));
+        assert_eq!(parsed.fragment, Some("section".to_string()));
+        assert!(parsed.is_secure());
+    }
+    
+    #[test]
+    fn test_parse_url_without_protocol() {
+        let url = "example.com/page";
+        let parsed = ParsedUrl::new(url).unwrap();
+        
+        assert_eq!(parsed.protocol, "");
+        assert_eq!(parsed.domain, "example.com");
+        assert_eq!(parsed.path, "/page");
+        assert!(parsed.query_params.is_empty());
+        assert!(!parsed.has_fragment());
+    }
+    
+    #[test]
+    fn test_parse_url_with_empty_query_value() {
+        let url = "http://test.com/search?q=&sort=desc";
+        let parsed = ParsedUrl::new(url).unwrap();
+        
+        assert_eq!(parsed.get_query_param("q"), Some(&"".to_string()));
+        assert_eq!(parsed.get_query_param("sort"), Some(&"desc".to_string()));
+    }
+}

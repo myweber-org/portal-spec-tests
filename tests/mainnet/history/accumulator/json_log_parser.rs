@@ -160,3 +160,165 @@ mod tests {
         assert!(!filter.compare_levels(&LogLevel::INFO, &LogLevel::WARN));
     }
 }
+use serde_json::Value;
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug)]
+pub struct LogEntry {
+    pub timestamp: String,
+    pub level: String,
+    pub message: String,
+    pub fields: HashMap<String, Value>,
+}
+
+pub struct LogParser {
+    min_level: String,
+    filter_fields: HashMap<String, String>,
+}
+
+impl LogParser {
+    pub fn new(min_level: &str) -> Self {
+        LogParser {
+            min_level: min_level.to_lowercase(),
+            filter_fields: HashMap::new(),
+        }
+    }
+
+    pub fn add_filter(&mut self, key: &str, value: &str) {
+        self.filter_fields.insert(key.to_string(), value.to_string());
+    }
+
+    pub fn parse_file(&self, path: &Path) -> Result<Vec<LogEntry>, Box<dyn std::error::Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut entries = Vec::new();
+
+        for line in reader.lines() {
+            let line = line?;
+            if let Ok(entry) = self.parse_line(&line) {
+                entries.push(entry);
+            }
+        }
+
+        Ok(entries)
+    }
+
+    fn parse_line(&self, line: &str) -> Result<LogEntry, Box<dyn std::error::Error>> {
+        let json: Value = serde_json::from_str(line)?;
+        
+        let timestamp = json["timestamp"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+            
+        let level = json["level"]
+            .as_str()
+            .unwrap_or("info")
+            .to_lowercase();
+
+        if !self.is_level_allowed(&level) {
+            return Err("Log level filtered out".into());
+        }
+
+        let message = json["message"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+
+        if !self.passes_field_filters(&json) {
+            return Err("Log entry filtered by field filters".into());
+        }
+
+        let mut fields = HashMap::new();
+        if let Some(obj) = json.as_object() {
+            for (key, value) in obj {
+                if key != "timestamp" && key != "level" && key != "message" {
+                    fields.insert(key.clone(), value.clone());
+                }
+            }
+        }
+
+        Ok(LogEntry {
+            timestamp,
+            level,
+            message,
+            fields,
+        })
+    }
+
+    fn is_level_allowed(&self, level: &str) -> bool {
+        let level_order = vec!["trace", "debug", "info", "warn", "error", "fatal"];
+        
+        let min_index = level_order.iter()
+            .position(|&l| l == self.min_level)
+            .unwrap_or(0);
+            
+        let entry_index = level_order.iter()
+            .position(|&l| l == level)
+            .unwrap_or(0);
+
+        entry_index >= min_index
+    }
+
+    fn passes_field_filters(&self, json: &Value) -> bool {
+        for (key, expected_value) in &self.filter_fields {
+            if let Some(actual_value) = json.get(key) {
+                if let Some(str_value) = actual_value.as_str() {
+                    if str_value != expected_value {
+                        return false;
+                    }
+                } else {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+        }
+        true
+    }
+
+    pub fn generate_summary(&self, entries: &[LogEntry]) -> HashMap<String, usize> {
+        let mut summary = HashMap::new();
+        
+        for entry in entries {
+            *summary.entry(entry.level.clone()).or_insert(0) += 1;
+            
+            for key in entry.fields.keys() {
+                *summary.entry(format!("field:{}", key)).or_insert(0) += 1;
+            }
+        }
+
+        summary
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_parser_with_filters() {
+        let log_data = r#"{"timestamp":"2024-01-15T10:30:00Z","level":"INFO","message":"User login","user_id":"123","service":"auth"}
+{"timestamp":"2024-01-15T10:31:00Z","level":"ERROR","message":"Database connection failed","service":"db"}
+{"timestamp":"2024-01-15T10:32:00Z","level":"WARN","message":"High memory usage","service":"monitor"}"#;
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+        write!(temp_file, "{}", log_data).unwrap();
+
+        let mut parser = LogParser::new("warn");
+        parser.add_filter("service", "monitor");
+
+        let entries = parser.parse_file(temp_file.path()).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].level, "warn");
+        assert_eq!(entries[0].message, "High memory usage");
+
+        let summary = parser.generate_summary(&entries);
+        assert_eq!(summary.get("warn"), Some(&1));
+    }
+}

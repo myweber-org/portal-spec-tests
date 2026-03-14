@@ -156,4 +156,89 @@ mod tests {
         assert!(parser.parse_line(info_log).is_err());
         assert!(parser.parse_line(warn_log).is_ok());
     }
+}use serde_json::Value;
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum LogParseError {
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("JSON parsing error: {0}")]
+    Json(#[from] serde_json::Error),
+    #[error("Invalid log format at line {0}")]
+    InvalidFormat(usize),
+}
+
+pub struct LogParser {
+    field_filters: HashMap<String, String>,
+    level_filter: Option<String>,
+}
+
+impl LogParser {
+    pub fn new() -> Self {
+        LogParser {
+            field_filters: HashMap::new(),
+            level_filter: None,
+        }
+    }
+
+    pub fn add_field_filter(&mut self, key: &str, value: &str) {
+        self.field_filters.insert(key.to_string(), value.to_string());
+    }
+
+    pub fn set_level_filter(&mut self, level: &str) {
+        self.level_filter = Some(level.to_string());
+    }
+
+    pub fn parse_file(&self, path: &str) -> Result<Vec<Value>, LogParseError> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut results = Vec::new();
+
+        for (line_num, line) in reader.lines().enumerate() {
+            let line = line?;
+            let json_value: Value = serde_json::from_str(&line)
+                .map_err(|e| LogParseError::Json(e))?;
+
+            if self.matches_filters(&json_value) {
+                results.push(json_value);
+            }
+        }
+
+        Ok(results)
+    }
+
+    fn matches_filters(&self, log_entry: &Value) -> bool {
+        if let Some(level) = &self.level_filter {
+            if let Some(log_level) = log_entry.get("level").and_then(|v| v.as_str()) {
+                if log_level != level {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+        }
+
+        for (key, expected_value) in &self.field_filters {
+            if let Some(actual_value) = log_entry.get(key).and_then(|v| v.as_str()) {
+                if actual_value != expected_value {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+        }
+
+        true
+    }
+}
+
+pub fn extract_timestamps(logs: &[Value]) -> Vec<String> {
+    logs.iter()
+        .filter_map(|log| log.get("timestamp").and_then(|v| v.as_str()))
+        .map(|s| s.to_string())
+        .collect()
 }
